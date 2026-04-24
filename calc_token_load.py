@@ -4,26 +4,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
-
-
-def _import_yaml():
-    try:
-        import yaml  # type: ignore
-    except ModuleNotFoundError as exc:
-        python = Path(sys.executable).name
-        raise SystemExit(
-            "Не найден пакет 'pyyaml'. Установите его в текущее окружение:\n"
-            f"  {python} -m pip install pyyaml"
-        ) from exc
-    return yaml
+try:
+    import yaml
+except ModuleNotFoundError as exc:
+    raise SystemExit("Требуется пакет pyyaml: pip install pyyaml") from exc
 
 
 YEARS = [2026, 2027, 2028, 2029, 2030]
 
 
 def load_assumptions(path: Path) -> dict:
-    yaml = _import_yaml()
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
