@@ -109,3 +109,17 @@ Token_load_model:
   Contact_Center.ai:
     metric: tokens_per_interaction
     formula: interactions_per_day * automation_rate * tokens_per_interaction * calendar_days_per_year
+gpu_calculation:
+  annual_tokens_per_gpu: 12000000000   # сколько токенов в год обрабатывает 1 GPU
+  reserve_capacity_rate: 0.15          # резерв мощности (N+ запас)
+
+capex:
+  gpu_unit_cost_usd: 28000             # стоимость 1 GPU
+  infra_cost_per_gpu_usd: 7000         # сеть/сервер/стойка на 1 GPU
+  platform_capex_usd:
+    2026: 2000000
+    2027: 1200000
+    2028: 800000
+    2029: 500000
+    2030: 500000
+  useful_life_years: 4                 # срок амортизации для straight-line
