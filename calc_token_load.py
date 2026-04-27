@@ -67,6 +67,10 @@ def safe_add(*vals: float | None) -> float:
         return float("nan")
     return sum(float(v) for v in vals)
 
+def safe_add(*vals: float | None) -> float:
+    if any(is_nan(v) for v in vals):
+        return float("nan")
+    return sum(float(v) for v in vals)
 
 def year_value(value: Any, year: int, default: float | None = None) -> float | None:
     if isinstance(value, dict):
@@ -184,6 +188,10 @@ def resolve_years(ass: dict[str, Any]) -> list[int]:
         raise ValueError("Не найдено пересечение годов 2026–2030 в assumptions.yaml")
     return sorted(years)
 
+def resolve_years(ass: dict[str, Any]) -> list[int]:
+    usage = ass["usage_assumptions"]
+    token_model = ass["token_load_model"]
+    compute = ass["compute_model"]
 
 def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     years = ass.get("years") or TARGET_YEARS
@@ -321,7 +329,10 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         required_gpu_raw = tokens_per_second / (weighted_tp * float(utilization)) * peak_factor
         required_gpu = int(math.ceil(required_gpu_raw))
 
-        required_gpu_increment = required_gpu if year == years[0] else max(required_gpu - prev_required_gpu, 0)
+        if year == years[0]:
+            required_gpu_increment = required_gpu
+        else:
+            required_gpu_increment = max(required_gpu - prev_required_gpu, 0)
 
         # CAPEX
         if gpu_unit_cost is None or infra_multiplier is None:
