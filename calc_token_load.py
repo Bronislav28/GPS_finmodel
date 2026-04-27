@@ -39,6 +39,10 @@ def to_year_map(src: dict[Any, Any] | None) -> dict[int, Any]:
         return {}
     return {int(k): v for k, v in src.items()}
 
+def to_year_map(src: dict[Any, Any] | None) -> dict[int, Any]:
+    if not isinstance(src, dict):
+        return {}
+    return {int(k): v for k, v in src.items()}
 
 def as_float(value: Any) -> float | None:
     if value is None:
@@ -67,10 +71,13 @@ def safe_add(*vals: float | None) -> float:
         return float("nan")
     return sum(float(v) for v in vals)
 
-def safe_add(*vals: float | None) -> float:
+def safe_mul(*vals: float | None) -> float:
     if any(is_nan(v) for v in vals):
         return float("nan")
-    return sum(float(v) for v in vals)
+    out = 1.0
+    for v in vals:
+        out *= float(v)
+    return out
 
 def year_value(value: Any, year: int, default: float | None = None) -> float | None:
     if isinstance(value, dict):
@@ -247,19 +254,28 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     operating_hours_per_day = driver_value(drivers, "operating_hours_per_day")
     if operating_hours_per_day is None:
         operating_hours_per_day = 24.0
+    electricity_price_cfg = drivers.get("electricity_price", {}) if isinstance(drivers.get("electricity_price"), dict) else {}
     base_price_per_kwh = warn_if_missing(
-        year_value(datacenter.get("base_price_per_kwh"), years[0]),
-        "datacenter.base_price_per_kwh",
+        year_value(electricity_price_cfg.get("base_price_per_kwh"), years[0]),
+        "opex.datacenter.drivers.electricity_price.base_price_per_kwh",
     )
-    annual_growth_cfg = datacenter.get("annual_growth")
+    annual_growth_cfg = electricity_price_cfg.get("annual_growth")
+    annual_growth_map: dict[int, float] = {}
     if isinstance(annual_growth_cfg, dict) and "value" in annual_growth_cfg:
-        annual_growth_val = as_float(annual_growth_cfg.get("value"))
-        annual_growth_map = {y: annual_growth_val for y in years} if annual_growth_val is not None else {}
-    else:
-        try:
-            annual_growth_map = to_year_map(annual_growth_cfg)
-        except (TypeError, ValueError):
-            annual_growth_map = {}
+        growth_val = as_float(annual_growth_cfg.get("value"))
+        if growth_val is not None:
+            annual_growth_map = {y: growth_val for y in years}
+    elif isinstance(annual_growth_cfg, dict):
+        for y_key, y_val in annual_growth_cfg.items():
+            try:
+                y_int = int(y_key)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(y_val, dict) and "value" in y_val:
+                growth = as_float(y_val.get("value"))
+            else:
+                growth = as_float(y_val)
+            annual_growth_map[y_int] = 0.0 if growth is None else float(growth)
     maintenance_pct = warn_if_missing(
         driver_value(drivers, "maintenance_percent_of_capex"),
         "datacenter.drivers.maintenance_percent_of_capex.value",
