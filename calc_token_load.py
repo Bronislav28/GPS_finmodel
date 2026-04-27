@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import sys
 from pathlib import Path
@@ -39,10 +40,6 @@ def to_year_map(src: dict[Any, Any] | None) -> dict[int, Any]:
         return {}
     return {int(k): v for k, v in src.items()}
 
-def to_year_map(src: dict[Any, Any] | None) -> dict[int, Any]:
-    if not isinstance(src, dict):
-        return {}
-    return {int(k): v for k, v in src.items()}
 
 def as_float(value: Any) -> float | None:
     if value is None:
@@ -200,6 +197,8 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
     ("Total OPEX", ["total_datacenter_opex", "annual_team_opex", "total_opex"]),
     ("Summary", ["workplace_token_share", "contact_center_token_share", "required_gpu", "total_capex", "total_opex"]),
 ]
+SCENARIO_ORDER = ["conservative", "base", "aggressive"]
+SCENARIO_MULTIPLIERS = {"conservative": 0.85, "base": 1.0, "aggressive": 1.2}
 
 
 def to_wide_rows(rows: list[dict[str, Any]], metrics: list[str], years: list[int]) -> list[dict[str, Any]]:
@@ -231,6 +230,60 @@ def build_report_blocks(rows: list[dict[str, Any]], years: list[int]) -> list[di
     if extra:
         blocks.append({"title": "Additional Metrics", "rows": to_wide_rows(rows, extra, years)})
     return blocks
+
+
+def build_revenue_scenario_blocks(rows: list[dict[str, Any]], years: list[int]) -> dict[str, list[dict[str, Any]]]:
+    """Build scenario-dependent report blocks for Revenue / Unit Economics / P&L."""
+    by_year = {int(r["year"]): r for r in rows}
+    payload: dict[str, list[dict[str, Any]]] = {}
+
+    for scenario in SCENARIO_ORDER:
+        mult = SCENARIO_MULTIPLIERS[scenario]
+        scenario_rows: list[dict[str, Any]] = []
+        for y in years:
+            r = by_year[y]
+            tokens = as_float(r.get("total_annual_tokens")) or 0.0
+            total_opex = as_float(r.get("total_opex"))
+            # Revenue base is derived deterministically from token volume.
+            base_revenue = tokens * 0.002
+            revenue = base_revenue * mult
+            cogs = revenue * 0.35
+            gross_profit = revenue - cogs
+            gross_margin = gross_profit / revenue if revenue else float("nan")
+            revenue_per_1m_tokens = revenue / (tokens / 1_000_000) if tokens else float("nan")
+            ebitda = float("nan") if total_opex is None or math.isnan(total_opex) else revenue - total_opex
+            scenario_rows.append(
+                {
+                    "year": y,
+                    "revenue": revenue,
+                    "cogs": cogs,
+                    "gross_profit": gross_profit,
+                    "gross_margin": gross_margin,
+                    "revenue_per_1m_tokens": revenue_per_1m_tokens,
+                    "annual_team_opex": r.get("annual_team_opex"),
+                    "total_datacenter_opex": r.get("total_datacenter_opex"),
+                    "total_opex": total_opex,
+                    "ebitda": ebitda,
+                    "ebitda_margin": ebitda / revenue if revenue and not math.isnan(ebitda) else float("nan"),
+                }
+            )
+
+        payload[scenario] = [
+            {"title": "Revenue", "rows": to_wide_rows(scenario_rows, ["revenue", "cogs", "gross_profit", "gross_margin"], years)},
+            {
+                "title": "Unit Economics",
+                "rows": to_wide_rows(scenario_rows, ["revenue_per_1m_tokens", "gross_margin", "ebitda_margin"], years),
+            },
+            {
+                "title": "P&L / Summary",
+                "rows": to_wide_rows(
+                    scenario_rows,
+                    ["revenue", "total_datacenter_opex", "annual_team_opex", "total_opex", "ebitda"],
+                    years,
+                ),
+            },
+        ]
+    return payload
 
 
 def harmonic_weighted_throughput(model_share: dict[str, float], throughput: dict[str, float]) -> float:
@@ -587,22 +640,31 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 def write_csv(rows: list[dict[str, Any]], output: Path) -> None:
     years = [int(r["year"]) for r in rows]
     blocks = build_report_blocks(rows, years)
+    scenario_blocks = build_revenue_scenario_blocks(rows, years)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as fh:
-        fieldnames = ["Block", "Metric"] + [str(y) for y in years]
+        fieldnames = ["scenario", "table", "metric"] + [str(y) for y in years]
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
-        for block in blocks:
-            for wide_row in block["rows"]:
-                out = {"Block": block["title"], "Metric": wide_row["Metric"]}
-                for y in years:
-                    out[str(y)] = wide_row[str(y)]
-                writer.writerow(out)
+        for scenario in SCENARIO_ORDER:
+            for block in blocks:
+                for wide_row in block["rows"]:
+                    out = {"scenario": scenario, "table": block["title"], "metric": wide_row["Metric"]}
+                    for y in years:
+                        out[str(y)] = wide_row[str(y)]
+                    writer.writerow(out)
+            for block in scenario_blocks[scenario]:
+                for wide_row in block["rows"]:
+                    out = {"scenario": scenario, "table": block["title"], "metric": wide_row["Metric"]}
+                    for y in years:
+                        out[str(y)] = wide_row[str(y)]
+                    writer.writerow(out)
 
 
 def build_html(rows: list[dict[str, Any]]) -> str:
     years = [int(r["year"]) for r in rows]
     blocks = build_report_blocks(rows, years)
+    scenario_blocks = build_revenue_scenario_blocks(rows, years)
 
     def format_cell(metric: str, value: Any) -> str:
         val = as_float(value)
@@ -626,6 +688,9 @@ def build_html(rows: list[dict[str, Any]]) -> str:
         )
         block_tables.append(table_html)
 
+    scenario_json = json.dumps(scenario_blocks, ensure_ascii=False)
+    years_json = json.dumps(years)
+
     return f"""<!doctype html>
 <html lang=\"ru\"><head><meta charset=\"utf-8\"><title>GPS Finmodel</title>
 <style>
@@ -644,7 +709,45 @@ thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;p
 <li>Team OPEX: monthly_fte × (gross + bonus + social) × 12</li>
 <li>Total OPEX = total_datacenter_opex + annual_team_opex</li>
 </ul></div>
+<div class=\"note\">
+  <label for=\"scenarioSelect\"><b>Revenue scenario:</b></label>
+  <select id=\"scenarioSelect\">
+    <option value=\"conservative\">conservative</option>
+    <option value=\"base\" selected>base</option>
+    <option value=\"aggressive\">aggressive</option>
+  </select>
+</div>
+<div id=\"scenarioTables\"></div>
 {''.join(block_tables)}
+<script>
+const SCENARIO_DATA = {scenario_json};
+const YEARS = {years_json};
+const container = document.getElementById('scenarioTables');
+const selector = document.getElementById('scenarioSelect');
+
+function fmt(metric, value) {{
+  if (value === null || Number.isNaN(value)) return 'NaN';
+  if (metric.endsWith('_share') || metric.endsWith('_margin')) return (value * 100).toFixed(2) + '%';
+  if (metric === 'required_gpu' || metric === 'required_gpu_increment') return Math.round(value).toLocaleString();
+  return Number(value).toLocaleString(undefined, {{maximumFractionDigits: 2, minimumFractionDigits: 2}});
+}}
+
+function renderScenarioTables(scenario) {{
+  const blocks = SCENARIO_DATA[scenario] || [];
+  const html = blocks.map(block => {{
+    const header = YEARS.map(y => `<th>${{y}}</th>`).join('');
+    const body = block.rows.map(r => {{
+      const cells = YEARS.map(y => `<td>${{fmt(r.Metric, r[String(y)])}}</td>`).join('');
+      return `<tr><td>${{r.Metric}}</td>${{cells}}</tr>`;
+    }}).join('');
+    return `<h2>${{block.title}}</h2><table><thead><tr><th>Metric</th>${{header}}</tr></thead><tbody>${{body}}</tbody></table>`;
+  }}).join('');
+  container.innerHTML = html;
+}}
+
+selector.addEventListener('change', (e) => renderScenarioTables(e.target.value));
+renderScenarioTables('base');
+</script>
 </body></html>"""
 
 
