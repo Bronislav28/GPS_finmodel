@@ -71,13 +71,6 @@ def safe_add(*vals: float | None) -> float:
         return float("nan")
     return sum(float(v) for v in vals)
 
-def safe_mul(*vals: float | None) -> float:
-    if any(is_nan(v) for v in vals):
-        return float("nan")
-    out = 1.0
-    for v in vals:
-        out *= float(v)
-    return out
 
 def year_value(value: Any, year: int, default: float | None = None) -> float | None:
     if isinstance(value, dict):
@@ -155,6 +148,89 @@ def fmt_ratio(value: float | None) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "NaN"
     return f"{value * 100:.2f}%"
+
+
+DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
+    (
+        "Token Load",
+        [
+            "active_users",
+            "workplace_daily_tokens",
+            "workplace_annual_tokens",
+            "automated_interactions",
+            "contact_center_daily_tokens",
+            "contact_center_annual_tokens",
+            "total_daily_tokens",
+            "total_annual_tokens",
+        ],
+    ),
+    ("GPU Calculation", ["weighted_throughput", "tokens_per_second", "required_gpu", "required_gpu_increment"]),
+    ("CAPEX", ["gpu_capex", "total_capex", "annual_depreciation"]),
+    (
+        "Datacenter OPEX",
+        [
+            "gpu_beginning_of_year",
+            "gpu_end_of_year",
+            "average_gpu",
+            "it_load_mw",
+            "total_load_mw",
+            "electricity_kwh",
+            "electricity_price_t",
+            "electricity_cost",
+            "maintenance_cost",
+            "network_cost",
+            "land_rent",
+            "datacenter_opex",
+            "other_opex",
+            "total_datacenter_opex",
+        ],
+    ),
+    (
+        "Team OPEX",
+        [
+            "monthly_fte",
+            "monthly_gross",
+            "monthly_bonus",
+            "monthly_social",
+            "monthly_cost_per_fte",
+            "monthly_team_cost",
+            "annual_team_opex",
+        ],
+    ),
+    ("Total OPEX", ["total_datacenter_opex", "annual_team_opex", "total_opex"]),
+    ("Summary", ["workplace_token_share", "contact_center_token_share", "required_gpu", "total_capex", "total_opex"]),
+]
+
+
+def to_wide_rows(rows: list[dict[str, Any]], metrics: list[str], years: list[int]) -> list[dict[str, Any]]:
+    """Universal long->wide transformer: Metric | 2026 | ..."""
+    by_year = {int(r["year"]): r for r in rows}
+    wide: list[dict[str, Any]] = []
+    for metric in metrics:
+        row: dict[str, Any] = {"Metric": metric}
+        for y in years:
+            row[str(y)] = by_year.get(y, {}).get(metric, float("nan"))
+        wide.append(row)
+    return wide
+
+
+def build_report_blocks(rows: list[dict[str, Any]], years: list[int]) -> list[dict[str, Any]]:
+    """Build all report blocks via shared wide-format mechanism."""
+    all_metrics = [k for k in rows[0].keys() if k != "year"]
+    blocks: list[dict[str, Any]] = []
+    used: set[str] = set()
+
+    for title, metrics in DEFAULT_BLOCKS:
+        available = [m for m in metrics if m in all_metrics]
+        if not available:
+            continue
+        used.update(available)
+        blocks.append({"title": title, "rows": to_wide_rows(rows, available, years)})
+
+    extra = sorted(m for m in all_metrics if m not in used)
+    if extra:
+        blocks.append({"title": "Additional Metrics", "rows": to_wide_rows(rows, extra, years)})
+    return blocks
 
 
 def harmonic_weighted_throughput(model_share: dict[str, float], throughput: dict[str, float]) -> float:
@@ -509,60 +585,46 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def write_csv(rows: list[dict[str, Any]], output: Path) -> None:
+    years = [int(r["year"]) for r in rows]
+    blocks = build_report_blocks(rows, years)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        fieldnames = ["Block", "Metric"] + [str(y) for y in years]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        for block in blocks:
+            for wide_row in block["rows"]:
+                out = {"Block": block["title"], "Metric": wide_row["Metric"]}
+                for y in years:
+                    out[str(y)] = wide_row[str(y)]
+                writer.writerow(out)
 
 
 def build_html(rows: list[dict[str, Any]]) -> str:
-    token_rows = "\n".join(
-        f"<tr><td>{r['year']}</td><td>{fmt_num(r['active_users'],0)}</td><td>{fmt_num(r['workplace_daily_tokens'],0)}</td>"
-        f"<td>{fmt_num(r['workplace_annual_tokens'],0)}</td><td>{fmt_num(r['automated_interactions'],0)}</td>"
-        f"<td>{fmt_num(r['contact_center_daily_tokens'],0)}</td><td>{fmt_num(r['contact_center_annual_tokens'],0)}</td>"
-        f"<td>{fmt_num(r['total_daily_tokens'],0)}</td><td>{fmt_num(r['total_annual_tokens'],0)}</td></tr>"
-        for r in rows
-    )
+    years = [int(r["year"]) for r in rows]
+    blocks = build_report_blocks(rows, years)
 
-    gpu_rows = "\n".join(
-        f"<tr><td>{r['year']}</td><td>{fmt_num(r['weighted_throughput'],2)}</td><td>{fmt_num(r['tokens_per_second'],2)}</td>"
-        f"<td>{fmt_num(r['required_gpu'],0)}</td><td>{fmt_num(r['required_gpu_increment'],0)}</td></tr>"
-        for r in rows
-    )
+    def format_cell(metric: str, value: Any) -> str:
+        val = as_float(value)
+        if metric.endswith("_share"):
+            return fmt_ratio(val)
+        if metric in {"required_gpu", "required_gpu_increment"}:
+            return fmt_num(val, 0)
+        return fmt_num(val, 2)
 
-    capex_rows = "\n".join(
-        f"<tr><td>{r['year']}</td><td>{fmt_num(r['gpu_capex'],2)}</td><td>{fmt_num(r['total_capex'],2)}</td>"
-        f"<td>{fmt_num(r['annual_depreciation'],2)}</td></tr>"
-        for r in rows
-    )
-
-    dc_rows = "\n".join(
-        f"<tr><td>{r['year']}</td><td>{fmt_num(r['average_gpu'],2)}</td><td>{fmt_num(r['it_load_mw'],4)}</td>"
-        f"<td>{fmt_num(r['total_load_mw'],4)}</td><td>{fmt_num(r['electricity_kwh'],0)}</td><td>{fmt_num(r['electricity_price_t'],4)}</td>"
-        f"<td>{fmt_num(r['electricity_cost'],2)}</td><td>{fmt_num(r['maintenance_cost'],2)}</td><td>{fmt_num(r['network_cost'],2)}</td>"
-        f"<td>{fmt_num(r['land_rent'],2)}</td><td>{fmt_num(r['total_datacenter_opex'],2)}</td></tr>"
-        for r in rows
-    )
-
-    team_rows = "\n".join(
-        f"<tr><td>{r['year']}</td><td>{fmt_num(r['monthly_fte'],2)}</td><td>{fmt_num(r['monthly_gross'],2)}</td>"
-        f"<td>{fmt_num(r['monthly_bonus'],2)}</td><td>{fmt_num(r['monthly_social'],2)}</td><td>{fmt_num(r['monthly_cost_per_fte'],2)}</td>"
-        f"<td>{fmt_num(r['monthly_team_cost'],2)}</td><td>{fmt_num(r['annual_team_opex'],2)}</td></tr>"
-        for r in rows
-    )
-
-    opex_rows = "\n".join(
-        f"<tr><td>{r['year']}</td><td>{fmt_num(r['total_datacenter_opex'],2)}</td><td>{fmt_num(r['annual_team_opex'],2)}</td>"
-        f"<td>{fmt_num(r['total_opex'],2)}</td></tr>"
-        for r in rows
-    )
-
-    summary_rows = "\n".join(
-        f"<tr><td>{r['year']}</td><td>{fmt_ratio(r['workplace_token_share'])}</td><td>{fmt_ratio(r['contact_center_token_share'])}</td>"
-        f"<td>{fmt_num(r['required_gpu'],0)}</td><td>{fmt_num(r['total_capex'],2)}</td><td>{fmt_num(r['total_opex'],2)}</td></tr>"
-        for r in rows
-    )
+    block_tables = []
+    for block in blocks:
+        body_rows = []
+        for w_row in block["rows"]:
+            cells = "".join(f"<td>{format_cell(w_row['Metric'], w_row[str(y)])}</td>" for y in years)
+            body_rows.append(f"<tr><td>{w_row['Metric']}</td>{cells}</tr>")
+        header_years = "".join(f"<th>{y}</th>" for y in years)
+        table_html = (
+            f"<h2>{block['title']}</h2>"
+            f"<table><thead><tr><th>Metric</th>{header_years}</tr></thead>"
+            f"<tbody>{''.join(body_rows)}</tbody></table>"
+        )
+        block_tables.append(table_html)
 
     return f"""<!doctype html>
 <html lang=\"ru\"><head><meta charset=\"utf-8\"><title>GPS Finmodel</title>
@@ -582,14 +644,7 @@ thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;p
 <li>Team OPEX: monthly_fte × (gross + bonus + social) × 12</li>
 <li>Total OPEX = total_datacenter_opex + annual_team_opex</li>
 </ul></div>
-
-<h2>Token Load</h2><table><thead><tr><th>Year</th><th>Active users</th><th>WP daily</th><th>WP annual</th><th>CC auto interactions</th><th>CC daily</th><th>CC annual</th><th>Total daily</th><th>Total annual</th></tr></thead><tbody>{token_rows}</tbody></table>
-<h2>GPU Calculation</h2><table><thead><tr><th>Year</th><th>Weighted throughput</th><th>Tokens/s</th><th>Required GPU</th><th>GPU increment</th></tr></thead><tbody>{gpu_rows}</tbody></table>
-<h2>CAPEX</h2><table><thead><tr><th>Year</th><th>GPU CAPEX</th><th>Total CAPEX</th><th>Annual depreciation</th></tr></thead><tbody>{capex_rows}</tbody></table>
-<h2>Datacenter OPEX</h2><table><thead><tr><th>Year</th><th>Average GPU</th><th>IT load MW</th><th>Total load MW</th><th>Electricity kWh</th><th>Electricity price</th><th>Electricity cost</th><th>Maintenance</th><th>Network</th><th>Land rent</th><th>Total datacenter OPEX</th></tr></thead><tbody>{dc_rows}</tbody></table>
-<h2>Team OPEX</h2><table><thead><tr><th>Year</th><th>Monthly FTE</th><th>Monthly gross</th><th>Monthly bonus</th><th>Monthly social</th><th>Monthly cost/FTE</th><th>Monthly team cost</th><th>Annual team OPEX</th></tr></thead><tbody>{team_rows}</tbody></table>
-<h2>Total OPEX</h2><table><thead><tr><th>Year</th><th>Total datacenter OPEX</th><th>Annual team OPEX</th><th>Total OPEX</th></tr></thead><tbody>{opex_rows}</tbody></table>
-<h2>Summary</h2><table><thead><tr><th>Year</th><th>WP token share</th><th>CC token share</th><th>Required GPU</th><th>Total CAPEX</th><th>Total OPEX</th></tr></thead><tbody>{summary_rows}</tbody></table>
+{''.join(block_tables)}
 </body></html>"""
 
 
