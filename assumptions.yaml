@@ -223,7 +223,7 @@ datacenter: # opex
         2029: 0.06
         2030: 0.04
       calculation_logic:
-        price_2026: base_price_per_kWh
+        price_2026: base_price_per_kwh
         price_t: price_previous_year * (1 + annual_growth_t)
     maintenance_percent_of_capex:
       value: 0.05
@@ -237,7 +237,7 @@ datacenter: # opex
     average_gpu: (gpu_beginning_of_year + gpu_end_of_year) / 2
     it_load_mw: average_gpu * gpu_power_kw / 1000
     total_load_mw: it_load_mw * pue
-    electricity_kwh: total_load_mw * 1000 * operating_hours_per_day * calendar_days_per_years
+    electricity_kwh: total_load_mw * 1000 * operating_hours_per_day * calendar_days_per_year
     electricity_cost: electricity_kwh * electricity_price_t
     maintenance_cost: capex.total_capex * maintenance_percent_of_capex
     network_cost: total_load_mw * network_cost_per_mw_per_year
