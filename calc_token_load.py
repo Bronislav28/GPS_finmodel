@@ -129,6 +129,13 @@ def warn_if_missing(value: float | None, field_name: str) -> float | None:
     return value
 
 
+def driver_value(drivers: dict[str, Any], field_name: str) -> float | None:
+    raw = drivers.get(field_name)
+    if isinstance(raw, dict) and "value" in raw:
+        return as_float(raw.get("value"))
+    return as_float(raw)
+
+
 def fmt_num(value: float | int | None, digits: int = 2) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "NaN"
@@ -199,6 +206,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     opex_root = ass.get("opex", {}) if isinstance(ass.get("opex"), dict) else {}
     datacenter = ass.get("datacenter", opex_root.get("datacenter", {}))
     team = ass.get("team", opex_root.get("team", {}))
+    drivers = datacenter.get("drivers", {}) if isinstance(datacenter.get("drivers"), dict) else {}
 
     wp_usage = usage["Workplace.ai"]
     cc_usage = usage["Contact_Center.ai"]
@@ -212,10 +220,12 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     throughput = {name: float(v) for name, v in compute.get("throughput_per_gpu", {}).items()}
 
     working_days = year_value(token_model["time_assumptions"].get("working_days_per_year"), years[0])
-    calendar_days = warn_if_missing(
-        year_value(token_model["time_assumptions"].get("calendar_days_per_year"), years[0]),
+    calendar_days = driver_value(drivers, "calendar_days_per_year")
+    if calendar_days is None:
+        calendar_days = warn_if_missing(
+            year_value(token_model["time_assumptions"].get("calendar_days_per_year"), years[0]),
         "token_load_model.time_assumptions.calendar_days_per_year",
-    )
+        )
     if working_days is None:
         raise ValueError("Отсутствует token_load_model.time_assumptions.working_days_per_year")
     if calendar_days is None:
@@ -232,9 +242,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     useful_life = max(useful_life, 1)
 
     # Datacenter OPEX assumptions
-    gpu_power_kw = warn_if_missing(year_value(datacenter.get("gpu_power_kw"), years[0]), "datacenter.gpu_power_kw")
-    pue = warn_if_missing(year_value(datacenter.get("pue"), years[0]), "datacenter.pue")
-    operating_hours_per_day = year_value(datacenter.get("operating_hours_per_day", 24), years[0], 24.0)
+    gpu_power_kw = warn_if_missing(driver_value(drivers, "gpu_power_kw"), "datacenter.drivers.gpu_power_kw.value")
+    pue = warn_if_missing(driver_value(drivers, "pue"), "datacenter.drivers.pue.value")
+    operating_hours_per_day = driver_value(drivers, "operating_hours_per_day")
+    if operating_hours_per_day is None:
+        operating_hours_per_day = 24.0
     base_price_per_kwh = warn_if_missing(
         year_value(datacenter.get("base_price_per_kwh"), years[0]),
         "datacenter.base_price_per_kwh",
@@ -249,20 +261,20 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             annual_growth_map = {}
     maintenance_pct = warn_if_missing(
-        year_value(datacenter.get("maintenance_percent_of_capex"), years[0]),
-        "datacenter.maintenance_percent_of_capex",
+        driver_value(drivers, "maintenance_percent_of_capex"),
+        "datacenter.drivers.maintenance_percent_of_capex.value",
     )
     network_cost_per_mw = warn_if_missing(
-        year_value(datacenter.get("network_cost_per_mw_per_year"), years[0]),
-        "datacenter.network_cost_per_mw_per_year",
+        driver_value(drivers, "network_cost_per_mw_per_year"),
+        "datacenter.drivers.network_cost_per_mw_per_year.value",
     )
     land_rent_per_mw = warn_if_missing(
-        year_value(datacenter.get("land_rent_per_mw_per_year"), years[0]),
-        "datacenter.land_rent_per_mw_per_year",
+        driver_value(drivers, "land_rent_per_mw_per_year"),
+        "datacenter.drivers.land_rent_per_mw_per_year.value",
     )
     other_opex_percent = warn_if_missing(
-        year_value(datacenter.get("other_opex_percent"), years[0]),
-        "datacenter.other_opex_percent",
+        driver_value(drivers, "other_opex_percent"),
+        "datacenter.drivers.other_opex_percent.value",
     )
 
     # Team assumptions
