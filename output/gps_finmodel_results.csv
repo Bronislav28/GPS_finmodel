@@ -1,0 +1,169 @@
+scenario,table,metric,2026,2027,2028,2029,2030
+conservative,Token Load,active_users,4050.0,6750.0,10800.0,20250.0,24300.0
+conservative,Token Load,workplace_daily_tokens,101250000.0,445500000.0,1285200000.0,3685500000.0,5516100000.0
+conservative,Token Load,workplace_annual_tokens,25008750000.0,110038500000.0,317444400000.0,910318500000.0,1362476700000.0
+conservative,Token Load,automated_interactions,1843.5,5530.5,11061.0,16591.5,22122.0
+conservative,Token Load,contact_center_daily_tokens,46824900.0,140474700.0,280949400.0,421424100.0,561898800.0
+conservative,Token Load,contact_center_annual_tokens,17091088500.0,51273265500.0,102546531000.0,153819796500.0,205093062000.0
+conservative,Token Load,total_daily_tokens,148074900.0,585974700.0,1566149400.0,4106924100.0,6077998800.0
+conservative,Token Load,total_annual_tokens,42099838500.0,161311765500.0,419990931000.0,1064138296500.0,1567569762000.0
+conservative,GPU Calculation,weighted_throughput,322.2918531781558,284.0191870739712,254.323499491353,288.69286287089017,343.22324765464117
+conservative,GPU Calculation,tokens_per_second,3945.478941745389,15117.686825236167,39360.373650472335,99728.0604757085,146908.24730094467
+conservative,GPU Calculation,required_gpu,35,134,344,691,779
+conservative,GPU Calculation,required_gpu_increment,35,99,210,347,88
+conservative,CAPEX,gpu_capex,105000000.0,297000000.0,630000000.0,1041000000.0,264000000.0
+conservative,CAPEX,total_capex,157500000.0,445500000.0,945000000.0,1561500000.0,396000000.0
+conservative,CAPEX,annual_depreciation,31500000.0,120600000.0,309600000.0,621900000.0,701100000.0
+conservative,Datacenter OPEX,gpu_beginning_of_year,0.0,35.0,134.0,344.0,691.0
+conservative,Datacenter OPEX,gpu_end_of_year,35.0,134.0,344.0,691.0,779.0
+conservative,Datacenter OPEX,average_gpu,17.5,84.5,239.0,517.5,735.0
+conservative,Datacenter OPEX,it_load_mw,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,total_load_mw,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,electricity_kwh,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,electricity_price_t,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,electricity_cost,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,maintenance_cost,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,network_cost,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,land_rent,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,datacenter_opex,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,other_opex,nan,nan,nan,nan,nan
+conservative,Datacenter OPEX,total_datacenter_opex,nan,nan,nan,nan,nan
+conservative,Team OPEX,monthly_fte,0.0,0.0,0.0,0.0,0.0
+conservative,Team OPEX,monthly_gross,0.0,0.0,0.0,0.0,0.0
+conservative,Team OPEX,monthly_bonus,0.0,0.0,0.0,0.0,0.0
+conservative,Team OPEX,monthly_social,0.0,0.0,0.0,0.0,0.0
+conservative,Team OPEX,monthly_cost_per_fte,0.0,0.0,0.0,0.0,0.0
+conservative,Team OPEX,monthly_team_cost,0.0,0.0,0.0,0.0,0.0
+conservative,Team OPEX,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+conservative,Total OPEX,total_datacenter_opex,nan,nan,nan,nan,nan
+conservative,Total OPEX,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+conservative,Total OPEX,total_opex,nan,nan,nan,nan,nan
+conservative,Summary,workplace_token_share,0.5940343452861464,0.6821480110823038,0.7558363206656955,0.8554513102235674,0.8691649539486332
+conservative,Summary,contact_center_token_share,0.4059656547138536,0.31785198891769617,0.2441636793343045,0.14454868977643265,0.13083504605136673
+conservative,Summary,required_gpu,35,134,344,691,779
+conservative,Summary,total_capex,157500000.0,445500000.0,945000000.0,1561500000.0,396000000.0
+conservative,Summary,total_opex,nan,nan,nan,nan,nan
+conservative,Revenue,revenue,71569725.45,274230001.34999996,713984582.6999999,1809035104.05,2664868595.4
+conservative,Revenue,cogs,25049403.9075,95980500.47249998,249894603.94499996,633162286.4174999,932704008.39
+conservative,Revenue,gross_profit,46520321.542500004,178249500.8775,464089978.755,1175872817.6325002,1732164587.0100002
+conservative,Revenue,gross_margin,0.65,0.65,0.65,0.6500000000000001,0.65
+conservative,Unit Economics,revenue_per_1m_tokens,1700.0000000000002,1699.9999999999998,1700.0,1700.0,1700.0
+conservative,Unit Economics,gross_margin,0.65,0.65,0.65,0.6500000000000001,0.65
+conservative,Unit Economics,ebitda_margin,nan,nan,nan,nan,nan
+conservative,P&L / Summary,revenue,71569725.45,274230001.34999996,713984582.6999999,1809035104.05,2664868595.4
+conservative,P&L / Summary,total_datacenter_opex,nan,nan,nan,nan,nan
+conservative,P&L / Summary,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+conservative,P&L / Summary,total_opex,nan,nan,nan,nan,nan
+conservative,P&L / Summary,ebitda,nan,nan,nan,nan,nan
+base,Token Load,active_users,4050.0,6750.0,10800.0,20250.0,24300.0
+base,Token Load,workplace_daily_tokens,101250000.0,445500000.0,1285200000.0,3685500000.0,5516100000.0
+base,Token Load,workplace_annual_tokens,25008750000.0,110038500000.0,317444400000.0,910318500000.0,1362476700000.0
+base,Token Load,automated_interactions,1843.5,5530.5,11061.0,16591.5,22122.0
+base,Token Load,contact_center_daily_tokens,46824900.0,140474700.0,280949400.0,421424100.0,561898800.0
+base,Token Load,contact_center_annual_tokens,17091088500.0,51273265500.0,102546531000.0,153819796500.0,205093062000.0
+base,Token Load,total_daily_tokens,148074900.0,585974700.0,1566149400.0,4106924100.0,6077998800.0
+base,Token Load,total_annual_tokens,42099838500.0,161311765500.0,419990931000.0,1064138296500.0,1567569762000.0
+base,GPU Calculation,weighted_throughput,322.2918531781558,284.0191870739712,254.323499491353,288.69286287089017,343.22324765464117
+base,GPU Calculation,tokens_per_second,3945.478941745389,15117.686825236167,39360.373650472335,99728.0604757085,146908.24730094467
+base,GPU Calculation,required_gpu,35,134,344,691,779
+base,GPU Calculation,required_gpu_increment,35,99,210,347,88
+base,CAPEX,gpu_capex,105000000.0,297000000.0,630000000.0,1041000000.0,264000000.0
+base,CAPEX,total_capex,157500000.0,445500000.0,945000000.0,1561500000.0,396000000.0
+base,CAPEX,annual_depreciation,31500000.0,120600000.0,309600000.0,621900000.0,701100000.0
+base,Datacenter OPEX,gpu_beginning_of_year,0.0,35.0,134.0,344.0,691.0
+base,Datacenter OPEX,gpu_end_of_year,35.0,134.0,344.0,691.0,779.0
+base,Datacenter OPEX,average_gpu,17.5,84.5,239.0,517.5,735.0
+base,Datacenter OPEX,it_load_mw,nan,nan,nan,nan,nan
+base,Datacenter OPEX,total_load_mw,nan,nan,nan,nan,nan
+base,Datacenter OPEX,electricity_kwh,nan,nan,nan,nan,nan
+base,Datacenter OPEX,electricity_price_t,nan,nan,nan,nan,nan
+base,Datacenter OPEX,electricity_cost,nan,nan,nan,nan,nan
+base,Datacenter OPEX,maintenance_cost,nan,nan,nan,nan,nan
+base,Datacenter OPEX,network_cost,nan,nan,nan,nan,nan
+base,Datacenter OPEX,land_rent,nan,nan,nan,nan,nan
+base,Datacenter OPEX,datacenter_opex,nan,nan,nan,nan,nan
+base,Datacenter OPEX,other_opex,nan,nan,nan,nan,nan
+base,Datacenter OPEX,total_datacenter_opex,nan,nan,nan,nan,nan
+base,Team OPEX,monthly_fte,0.0,0.0,0.0,0.0,0.0
+base,Team OPEX,monthly_gross,0.0,0.0,0.0,0.0,0.0
+base,Team OPEX,monthly_bonus,0.0,0.0,0.0,0.0,0.0
+base,Team OPEX,monthly_social,0.0,0.0,0.0,0.0,0.0
+base,Team OPEX,monthly_cost_per_fte,0.0,0.0,0.0,0.0,0.0
+base,Team OPEX,monthly_team_cost,0.0,0.0,0.0,0.0,0.0
+base,Team OPEX,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+base,Total OPEX,total_datacenter_opex,nan,nan,nan,nan,nan
+base,Total OPEX,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+base,Total OPEX,total_opex,nan,nan,nan,nan,nan
+base,Summary,workplace_token_share,0.5940343452861464,0.6821480110823038,0.7558363206656955,0.8554513102235674,0.8691649539486332
+base,Summary,contact_center_token_share,0.4059656547138536,0.31785198891769617,0.2441636793343045,0.14454868977643265,0.13083504605136673
+base,Summary,required_gpu,35,134,344,691,779
+base,Summary,total_capex,157500000.0,445500000.0,945000000.0,1561500000.0,396000000.0
+base,Summary,total_opex,nan,nan,nan,nan,nan
+base,Revenue,revenue,84199677.0,322623531.0,839981862.0,2128276593.0,3135139524.0
+base,Revenue,cogs,29469886.95,112918235.85,293993651.7,744896807.55,1097298833.3999999
+base,Revenue,gross_profit,54729790.05,209705295.15,545988210.3,1383379785.45,2037840690.6000001
+base,Revenue,gross_margin,0.6499999999999999,0.65,0.6499999999999999,0.65,0.65
+base,Unit Economics,revenue_per_1m_tokens,2000.0,2000.0,2000.0,2000.0000000000002,1999.9999999999998
+base,Unit Economics,gross_margin,0.6499999999999999,0.65,0.6499999999999999,0.65,0.65
+base,Unit Economics,ebitda_margin,nan,nan,nan,nan,nan
+base,P&L / Summary,revenue,84199677.0,322623531.0,839981862.0,2128276593.0,3135139524.0
+base,P&L / Summary,total_datacenter_opex,nan,nan,nan,nan,nan
+base,P&L / Summary,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+base,P&L / Summary,total_opex,nan,nan,nan,nan,nan
+base,P&L / Summary,ebitda,nan,nan,nan,nan,nan
+aggressive,Token Load,active_users,4050.0,6750.0,10800.0,20250.0,24300.0
+aggressive,Token Load,workplace_daily_tokens,101250000.0,445500000.0,1285200000.0,3685500000.0,5516100000.0
+aggressive,Token Load,workplace_annual_tokens,25008750000.0,110038500000.0,317444400000.0,910318500000.0,1362476700000.0
+aggressive,Token Load,automated_interactions,1843.5,5530.5,11061.0,16591.5,22122.0
+aggressive,Token Load,contact_center_daily_tokens,46824900.0,140474700.0,280949400.0,421424100.0,561898800.0
+aggressive,Token Load,contact_center_annual_tokens,17091088500.0,51273265500.0,102546531000.0,153819796500.0,205093062000.0
+aggressive,Token Load,total_daily_tokens,148074900.0,585974700.0,1566149400.0,4106924100.0,6077998800.0
+aggressive,Token Load,total_annual_tokens,42099838500.0,161311765500.0,419990931000.0,1064138296500.0,1567569762000.0
+aggressive,GPU Calculation,weighted_throughput,322.2918531781558,284.0191870739712,254.323499491353,288.69286287089017,343.22324765464117
+aggressive,GPU Calculation,tokens_per_second,3945.478941745389,15117.686825236167,39360.373650472335,99728.0604757085,146908.24730094467
+aggressive,GPU Calculation,required_gpu,35,134,344,691,779
+aggressive,GPU Calculation,required_gpu_increment,35,99,210,347,88
+aggressive,CAPEX,gpu_capex,105000000.0,297000000.0,630000000.0,1041000000.0,264000000.0
+aggressive,CAPEX,total_capex,157500000.0,445500000.0,945000000.0,1561500000.0,396000000.0
+aggressive,CAPEX,annual_depreciation,31500000.0,120600000.0,309600000.0,621900000.0,701100000.0
+aggressive,Datacenter OPEX,gpu_beginning_of_year,0.0,35.0,134.0,344.0,691.0
+aggressive,Datacenter OPEX,gpu_end_of_year,35.0,134.0,344.0,691.0,779.0
+aggressive,Datacenter OPEX,average_gpu,17.5,84.5,239.0,517.5,735.0
+aggressive,Datacenter OPEX,it_load_mw,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,total_load_mw,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,electricity_kwh,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,electricity_price_t,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,electricity_cost,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,maintenance_cost,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,network_cost,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,land_rent,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,datacenter_opex,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,other_opex,nan,nan,nan,nan,nan
+aggressive,Datacenter OPEX,total_datacenter_opex,nan,nan,nan,nan,nan
+aggressive,Team OPEX,monthly_fte,0.0,0.0,0.0,0.0,0.0
+aggressive,Team OPEX,monthly_gross,0.0,0.0,0.0,0.0,0.0
+aggressive,Team OPEX,monthly_bonus,0.0,0.0,0.0,0.0,0.0
+aggressive,Team OPEX,monthly_social,0.0,0.0,0.0,0.0,0.0
+aggressive,Team OPEX,monthly_cost_per_fte,0.0,0.0,0.0,0.0,0.0
+aggressive,Team OPEX,monthly_team_cost,0.0,0.0,0.0,0.0,0.0
+aggressive,Team OPEX,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+aggressive,Total OPEX,total_datacenter_opex,nan,nan,nan,nan,nan
+aggressive,Total OPEX,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+aggressive,Total OPEX,total_opex,nan,nan,nan,nan,nan
+aggressive,Summary,workplace_token_share,0.5940343452861464,0.6821480110823038,0.7558363206656955,0.8554513102235674,0.8691649539486332
+aggressive,Summary,contact_center_token_share,0.4059656547138536,0.31785198891769617,0.2441636793343045,0.14454868977643265,0.13083504605136673
+aggressive,Summary,required_gpu,35,134,344,691,779
+aggressive,Summary,total_capex,157500000.0,445500000.0,945000000.0,1561500000.0,396000000.0
+aggressive,Summary,total_opex,nan,nan,nan,nan,nan
+aggressive,Revenue,revenue,101039612.39999999,387148237.2,1007978234.4,2553931911.6,3762167428.7999997
+aggressive,Revenue,cogs,35363864.339999996,135501883.01999998,352792382.03999996,893876169.06,1316758600.08
+aggressive,Revenue,gross_profit,65675748.059999995,251646354.18,655185852.36,1660055742.54,2445408828.72
+aggressive,Revenue,gross_margin,0.65,0.65,0.65,0.65,0.65
+aggressive,Unit Economics,revenue_per_1m_tokens,2400.0,2400.0,2400.0,2400.0,2399.9999999999995
+aggressive,Unit Economics,gross_margin,0.65,0.65,0.65,0.65,0.65
+aggressive,Unit Economics,ebitda_margin,nan,nan,nan,nan,nan
+aggressive,P&L / Summary,revenue,101039612.39999999,387148237.2,1007978234.4,2553931911.6,3762167428.7999997
+aggressive,P&L / Summary,total_datacenter_opex,nan,nan,nan,nan,nan
+aggressive,P&L / Summary,annual_team_opex,0.0,0.0,0.0,0.0,0.0
+aggressive,P&L / Summary,total_opex,nan,nan,nan,nan,nan
+aggressive,P&L / Summary,ebitda,nan,nan,nan,nan,nan
