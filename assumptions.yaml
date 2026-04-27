@@ -1,5 +1,11 @@
-# Продуктовый портфель и модель реализации
-products:
+years:
+  - 2026
+  - 2027
+  - 2028
+  - 2029
+  - 2030
+
+products: # продуктовый портфель и модель реализации
   - name: Workplace.ai
     type: internal_ai_employee
     users: all_bank_employees
