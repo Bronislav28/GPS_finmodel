@@ -70,7 +70,12 @@ def safe_add(*vals: float | None) -> float:
 
 def year_value(value: Any, year: int, default: float | None = None) -> float | None:
     if isinstance(value, dict):
-        ym = to_year_map(value)
+        if "value" in value:
+            return as_float(value.get("value"))
+        try:
+            ym = to_year_map(value)
+        except (TypeError, ValueError):
+            return default
         return as_float(ym.get(year, default))
     if value is None:
         return default
