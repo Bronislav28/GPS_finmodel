@@ -67,6 +67,10 @@ def safe_add(*vals: float | None) -> float:
         return float("nan")
     return sum(float(v) for v in vals)
 
+def safe_add(*vals: float | None) -> float:
+    if any(is_nan(v) for v in vals):
+        return float("nan")
+    return sum(float(v) for v in vals)
 
 def year_value(value: Any, year: int, default: float | None = None) -> float | None:
     if isinstance(value, dict):
@@ -117,6 +121,12 @@ def monthly_multipliers(hiring_plan_monthly: Any, year: int) -> list[float]:
     if len(values) >= 12:
         return values[:12]
     return values + [values[-1]] * (12 - len(values))
+
+
+def warn_if_missing(value: float | None, field_name: str) -> float | None:
+    if value is None:
+        print(f"WARNING: отсутствует значение поля '{field_name}'", file=sys.stderr)
+    return value
 
 
 def fmt_num(value: float | int | None, digits: int = 2) -> str:
@@ -201,8 +211,18 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     util_by_year = to_year_map(compute.get("infra", {}).get("utilization"))
     throughput = {name: float(v) for name, v in compute.get("throughput_per_gpu", {}).items()}
 
-    working_days = float(token_model["time_assumptions"]["working_days_per_year"])
-    calendar_days = float(token_model["time_assumptions"]["calendar_days_per_year"])
+    working_days = year_value(token_model["time_assumptions"].get("working_days_per_year"), years[0])
+    calendar_days = warn_if_missing(
+        year_value(token_model["time_assumptions"].get("calendar_days_per_year"), years[0]),
+        "token_load_model.time_assumptions.calendar_days_per_year",
+    )
+    if working_days is None:
+        raise ValueError("Отсутствует token_load_model.time_assumptions.working_days_per_year")
+    if calendar_days is None:
+        raise ValueError("Отсутствует token_load_model.time_assumptions.calendar_days_per_year")
+
+    working_days = float(working_days)
+    calendar_days = float(calendar_days)
     working_hours = float(compute["infra"]["working_hours_per_day"])
     peak_factor = float(compute["infra"].get("peak_factor", 1.0))
 
@@ -212,15 +232,38 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     useful_life = max(useful_life, 1)
 
     # Datacenter OPEX assumptions
-    gpu_power_kw = as_float(datacenter.get("gpu_power_kw"))
-    pue = as_float(datacenter.get("pue"))
-    operating_hours_per_day = as_float(datacenter.get("operating_hours_per_day", 24))
-    base_price_per_kwh = as_float(datacenter.get("base_price_per_kwh"))
-    annual_growth_map = to_year_map(datacenter.get("annual_growth"))
-    maintenance_pct = as_float(datacenter.get("maintenance_percent_of_capex"))
-    network_cost_per_mw = as_float(datacenter.get("network_cost_per_mw_per_year"))
-    land_rent_per_mw = as_float(datacenter.get("land_rent_per_mw_per_year"))
-    other_opex_percent = as_float(datacenter.get("other_opex_percent"))
+    gpu_power_kw = warn_if_missing(year_value(datacenter.get("gpu_power_kw"), years[0]), "datacenter.gpu_power_kw")
+    pue = warn_if_missing(year_value(datacenter.get("pue"), years[0]), "datacenter.pue")
+    operating_hours_per_day = year_value(datacenter.get("operating_hours_per_day", 24), years[0], 24.0)
+    base_price_per_kwh = warn_if_missing(
+        year_value(datacenter.get("base_price_per_kwh"), years[0]),
+        "datacenter.base_price_per_kwh",
+    )
+    annual_growth_cfg = datacenter.get("annual_growth")
+    if isinstance(annual_growth_cfg, dict) and "value" in annual_growth_cfg:
+        annual_growth_val = as_float(annual_growth_cfg.get("value"))
+        annual_growth_map = {y: annual_growth_val for y in years} if annual_growth_val is not None else {}
+    else:
+        try:
+            annual_growth_map = to_year_map(annual_growth_cfg)
+        except (TypeError, ValueError):
+            annual_growth_map = {}
+    maintenance_pct = warn_if_missing(
+        year_value(datacenter.get("maintenance_percent_of_capex"), years[0]),
+        "datacenter.maintenance_percent_of_capex",
+    )
+    network_cost_per_mw = warn_if_missing(
+        year_value(datacenter.get("network_cost_per_mw_per_year"), years[0]),
+        "datacenter.network_cost_per_mw_per_year",
+    )
+    land_rent_per_mw = warn_if_missing(
+        year_value(datacenter.get("land_rent_per_mw_per_year"), years[0]),
+        "datacenter.land_rent_per_mw_per_year",
+    )
+    other_opex_percent = warn_if_missing(
+        year_value(datacenter.get("other_opex_percent"), years[0]),
+        "datacenter.other_opex_percent",
+    )
 
     # Team assumptions
     target_fte_cfg = team.get("core_team_target_fte")
