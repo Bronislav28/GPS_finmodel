@@ -135,7 +135,8 @@ def resolve_years(ass: dict[str, Any]) -> list[int]:
     compute = ass["compute_model"]
 
 def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
-    years = resolve_years(ass)
+    years = ass.get("years") or TARGET_YEARS
+    years = [int(y) for y in years]
 
     usage = ass["usage_assumptions"]
     token_model = ass["token_load_model"]
