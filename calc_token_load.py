@@ -77,6 +77,43 @@ def year_value(value: Any, year: int, default: float | None = None) -> float | N
     return as_float(value)
 
 
+def flatten_role_values(struct: Any, prefix: tuple[str, ...] = ()) -> dict[tuple[str, ...], float]:
+    """Flatten nested team->role numeric trees into {(path...): value}."""
+    out: dict[tuple[str, ...], float] = {}
+    if isinstance(struct, dict):
+        for key, value in struct.items():
+            out.update(flatten_role_values(value, prefix + (str(key),)))
+    else:
+        value = as_float(struct)
+        if value is not None:
+            out[prefix] = value
+    return out
+
+
+def monthly_multipliers(hiring_plan_monthly: Any, year: int) -> list[float]:
+    """Resolve 12 monthly hiring multipliers for a given year."""
+    source = hiring_plan_monthly
+    if isinstance(hiring_plan_monthly, dict):
+        year_map = to_year_map(hiring_plan_monthly)
+        source = year_map.get(year, hiring_plan_monthly)
+
+    values: list[float] = []
+    if isinstance(source, (list, tuple)):
+        values = [float(v) for v in source if as_float(v) is not None]
+    elif isinstance(source, dict):
+        values = [float(v) for v in source.values() if as_float(v) is not None]
+    else:
+        scalar = as_float(source)
+        if scalar is not None:
+            values = [scalar]
+
+    if not values:
+        return [1.0] * 12
+    if len(values) >= 12:
+        return values[:12]
+    return values + [values[-1]] * (12 - len(values))
+
+
 def fmt_num(value: float | int | None, digits: int = 2) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "NaN"
@@ -182,7 +219,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
     # Team assumptions
     target_fte_cfg = team.get("core_team_target_fte")
-    gross_salary_base = as_float(team.get("salary_gross_monthly_rub"))
+    salary_cfg = team.get("salary_gross_monthly_rub")
     hiring_plan_cfg = team.get("hiring_plan_monthly")
     payroll = team.get("payroll_assumptions", {}) if isinstance(team.get("payroll_assumptions"), dict) else {}
     salary_growth_map = to_year_map(payroll.get("salary_growth"))
@@ -197,7 +234,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     prev_required_gpu = 0
     total_capex_history: list[float] = []
     prev_electricity_price: float | None = None
-    prev_salary_gross: float | None = gross_salary_base
+    salary_growth_factor = 1.0
+    warned_missing_salary: set[tuple[str, ...]] = set()
 
     for year in years:
         # Token Load
@@ -279,29 +317,68 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         total_datacenter_opex = safe_add(datacenter_opex, other_opex)
 
         # Team OPEX
-        target_fte = year_value(target_fte_cfg, year)
-        hiring_multiplier = year_value(hiring_plan_cfg, year)
-        monthly_fte = safe_mul(target_fte, hiring_multiplier)
-
-        if gross_salary_base is None:
-            monthly_gross = float("nan")
-        elif year == years[0]:
-            monthly_gross = gross_salary_base
-        else:
-            salary_growth_t = as_float(salary_growth_map.get(year, 0.0))
-            if prev_salary_gross is None or is_nan(prev_salary_gross) or salary_growth_t is None:
-                monthly_gross = float("nan")
-            else:
-                monthly_gross = prev_salary_gross * (1 + salary_growth_t)
-        prev_salary_gross = monthly_gross
-
+        role_target_fte = flatten_role_values(target_fte_cfg)
+        role_salary_base = flatten_role_values(salary_cfg)
+        multipliers = monthly_multipliers(hiring_plan_cfg, year)
         bonus_percent = year_value(bonus_cfg, year)
         social_percent = year_value(social_cfg, year)
-        monthly_bonus = safe_mul(monthly_gross, bonus_percent)
-        monthly_social = safe_mul(safe_add(monthly_gross, monthly_bonus), social_percent)
-        monthly_cost_per_fte = safe_add(monthly_gross, monthly_bonus, monthly_social)
-        monthly_team_cost = safe_mul(monthly_fte, monthly_cost_per_fte)
-        annual_team_opex = safe_mul(monthly_team_cost, 12)
+
+        if year != years[0]:
+            salary_growth_t = as_float(salary_growth_map.get(year, 0.0))
+            salary_growth_factor *= 1.0 if salary_growth_t is None else 1.0 + salary_growth_t
+
+        total_fte_months = 0.0
+        total_gross_cost_year = 0.0
+        total_bonus_cost_year = 0.0
+        total_social_cost_year = 0.0
+        annual_team_opex = 0.0
+
+        for mult in multipliers:
+            monthly_total_fte = 0.0
+            monthly_total_cost = 0.0
+            monthly_gross_cost = 0.0
+            monthly_bonus_cost = 0.0
+            monthly_social_cost = 0.0
+
+            for role_path, target_fte_role in role_target_fte.items():
+                salary_base_role = role_salary_base.get(role_path, 0.0)
+                if role_path not in role_salary_base and role_path not in warned_missing_salary:
+                    warned_missing_salary.add(role_path)
+                    print(
+                        f"WARNING: salary_gross_monthly_rub отсутствует для роли {'/'.join(role_path)}; используется 0.",
+                        file=sys.stderr,
+                    )
+
+                monthly_fte_role = target_fte_role * float(mult)
+                role_monthly_gross = salary_base_role * salary_growth_factor
+                role_monthly_bonus = role_monthly_gross * float(bonus_percent or 0.0)
+                role_monthly_social = (role_monthly_gross + role_monthly_bonus) * float(social_percent or 0.0)
+                role_monthly_cost = role_monthly_gross + role_monthly_bonus + role_monthly_social
+
+                monthly_total_fte += monthly_fte_role
+                monthly_total_cost += monthly_fte_role * role_monthly_cost
+                monthly_gross_cost += monthly_fte_role * role_monthly_gross
+                monthly_bonus_cost += monthly_fte_role * role_monthly_bonus
+                monthly_social_cost += monthly_fte_role * role_monthly_social
+
+            total_fte_months += monthly_total_fte
+            total_gross_cost_year += monthly_gross_cost
+            total_bonus_cost_year += monthly_bonus_cost
+            total_social_cost_year += monthly_social_cost
+            annual_team_opex += monthly_total_cost
+
+        monthly_fte = total_fte_months / 12.0
+        monthly_team_cost = annual_team_opex / 12.0
+        if total_fte_months > 0:
+            monthly_gross = total_gross_cost_year / total_fte_months
+            monthly_bonus = total_bonus_cost_year / total_fte_months
+            monthly_social = total_social_cost_year / total_fte_months
+            monthly_cost_per_fte = monthly_gross + monthly_bonus + monthly_social
+        else:
+            monthly_gross = 0.0
+            monthly_bonus = 0.0
+            monthly_social = 0.0
+            monthly_cost_per_fte = 0.0
 
         total_opex = safe_add(total_datacenter_opex, annual_team_opex)
 
