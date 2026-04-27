@@ -1,4 +1,5 @@
 # GPS_finmodel
+Financial model, automated with Python
 
 Python-модель ДЗО по ИИ, которая читает `assumptions.yaml` и считает цепочку:
 
@@ -28,6 +29,8 @@ Python-модель ДЗО по ИИ, которая читает `assumptions.y
 ## Запуск
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt
 python calc_token_load.py
 ```
