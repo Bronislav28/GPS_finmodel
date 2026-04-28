@@ -612,6 +612,70 @@ Python-модель должна рассчитывать OPEX
 
 ---
 
+# SG&A calculation
+
+Модель должна рассчитывать SG&A по годам 2026–2030.
+
+SG&A — это постоянные административные расходы GPS, не относящиеся к:
+- delivery OPEX
+- datacenter OPEX
+- GPU rental
+- core AI/platform team
+
+## Inflation
+
+SG&A индексируется по рублёвой инфляции:
+
+- inflation_index_2026 = 1.0
+- inflation_index_t = inflation_index_previous_year × (1 + rub_inflation_t)
+
+## Fixed SG&A
+
+Расчёт производится на основе блока:
+
+- sga.monthly_cost_base_2026
+
+Формула:
+
+- monthly_cost_t = monthly_cost_base_2026 × inflation_index_t
+- annual_fixed_sga = сумма monthly_cost_t × 12
+
+## Office rent
+
+Аренда офиса рассчитывается исходя из численности сотрудников GPS:
+
+- total_fte = core_team_fte + sga_team_fte
+- required_office_area_sqm = total_fte × sqm_per_fte
+- rent_rub_per_sqm_per_month_t =
+  rent_rub_per_sqm_per_month_base_2026 × inflation_index_t
+- monthly_office_rent =
+  required_office_area_sqm × rent_rub_per_sqm_per_month_t
+- annual_office_rent =
+  monthly_office_rent × 12
+
+## Total SG&A
+
+Формула:
+
+- total_sga = annual_fixed_sga + annual_office_rent
+
+## HTML / CSV output
+
+Добавить таблицу:
+
+### SG&A
+
+- annual_fixed_sga
+- required_office_area_sqm
+- annual_office_rent
+- total_sga
+
+Все таблицы должны оставаться в wide format:
+
+Metric | 2026 | 2027 | 2028 | 2029 | 2030
+
+---
+
 # Revenue
 
 Revenue считается через

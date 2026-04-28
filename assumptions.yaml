@@ -21,6 +21,22 @@ fx_assumptions:
       fx_2026: base_value
       fx_t: fx_previous_year * (1 + annual_growth_t)
 
+inflation_assumptions:
+  description: >
+    Рублевая инфляция для индексации SG&A, офисных расходов
+    и прочих рублевых затрат.
+  rub_inflation:
+    base_year: 2026
+    annual_growth:
+      2026: 0.00
+      2027: 0.07
+      2028: 0.06
+      2029: 0.05
+      2030: 0.05
+    calculation_logic:
+      index_2026: 1.0
+      index_t: "index_previous_year * (1 + annual_growth_t)"
+
 products: # продуктовый портфель и модель реализации
   - name: Workplace.ai
     type: internal_ai_employee
@@ -576,6 +592,53 @@ opex:
         devops_per_100_gpu: 0.5
       product_team:
         implementation_per_product: 2
+
+sga:
+  currency: RUB
+  description: >
+    Постоянные административные расходы GPS, не относящиеся к delivery OPEX,
+    ЦОДу, GPU rental и core AI/platform team.
+  inflation_driver: inflation_assumptions.rub_inflation
+  monthly_cost_base_2026:
+    corporate_management:
+      ceo_gm: 1200000
+      cfo_finance_controller: 700000
+      coo_operations: 700000
+      legal_support: 500000
+      compliance_regulatory_support: 500000
+    hr:
+      hrbp: 350000
+      recruiter: 300000
+      learning_and_development: 250000
+    finance_and_accounting:
+      accounting: 300000
+      fpna: 400000
+    admin:
+      office_management: 250000
+      procurement_support: 250000
+    shared_corporate_services:
+      audit: 250000
+  office_rent:
+    description: >
+      Аренда офиса GPS рассчитывается исходя из численности сотрудников,
+      норматива площади на 1 FTE и ставки аренды за 1 м2 в месяц.
+    drivers:
+      sqm_per_fte:
+        value: 4
+      rent_rub_per_sqm_per_month_base_2026:
+        value: 3500
+      inflation_driver: inflation_assumptions.rub_inflation
+    calculation_logic:
+      total_fte: core_team_fte + sga_team_fte
+      required_office_area_sqm: total_fte * sqm_per_fte
+      rent_rub_per_sqm_per_month_t: rent_rub_per_sqm_per_month_base_2026 * inflation_index_t
+      monthly_office_rent: required_office_area_sqm * rent_rub_per_sqm_per_month_t
+      annual_office_rent: monthly_office_rent * 12
+  calculation_logic:
+    monthly_cost_t: monthly_cost_base_2026 * inflation_index_t
+    annual_fixed_sga: sum(monthly_cost_t) * 12
+    annual_office_rent: office_rent.annual_office_rent
+    total_sga: annual_fixed_sga + annual_office_rent
 
 revenue:
   currency: RUB
