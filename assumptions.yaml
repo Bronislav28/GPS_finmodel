@@ -5,6 +5,22 @@ years:
   - 2029
   - 2030
 
+fx_assumptions:
+  description: >
+    Базовые валютные assumptions модели.
+    Используются для пересчета USD-бенчмарков в RUB.
+  usd_rub:
+    base_year: 2026
+    base_value: 80
+    annual_growth:
+      2027: 0.07
+      2028: 0.07
+      2029: 0.07
+      2030: 0.07
+    calculation_logic:
+      fx_2026: base_value
+      fx_t: fx_previous_year * (1 + annual_growth_t)
+
 products: # продуктовый портфель и модель реализации
   - name: Workplace.ai
     type: internal_ai_employee
@@ -193,182 +209,295 @@ capex:
       инженерной инфраструктуры ЦОД и резерва
     value: 1.5
   capex_formula:
-    gpu_capex: required_gpu_increment * gpu.unit_cost
-    total_capex: gpu_capex * infra_multiplier.value
+    gpu_capex: owned_gpu_increment * gpu.unit_cost
+    gpu_infra_capex: gpu_capex * infra_multiplier.value
+    datacenter_construction_capex: total_component_rub * construction_flag
+    total_capex: gpu_infra_capex + datacenter_construction_capex
   depreciation:
     method: straight_line
     useful_life_years: 5
+    depreciable_base: gpu_infra_capex + datacenter_construction_capex
 
-datacenter: # opex
-  description: >
-    OPEX ЦОДа рассчитывается от нагрузки GPU через установленную мощность (МВт), 
-    затем через PUE переводится в полную мощность объекта.
-  drivers:
-    gpu_power_kw:
-      value: 2.5 # ИТ-мощность на 1 GPU, кВт
-    pue: # коэффициент эффективности ЦОДа
-      value: 1.25
-    operating_hours_per_day:
-      value: 24
-    calendar_days_per_year:
-      value: 365
-    electricity_price:
-      currency: RUB
-      unit: kWh
-      base_year: 2026
-      base_price_per_kwh: 5
-      annual_growth:
-        2027: 0.1
-        2028: 0.08
-        2029: 0.06
-        2030: 0.04
-      calculation_logic:
-        price_2026: base_price_per_kwh
-        price_t: price_previous_year * (1 + annual_growth_t)
-    maintenance_percent_of_capex:
-      value: 0.05
-    network_cost_per_mw_per_year:
-      value: 400
-    land_rent_per_mw_per_year:
-      value: 3000000
-    other_opex_percent:
-      value: 0.05
-  calculation_logic:
-    average_gpu: (gpu_beginning_of_year + gpu_end_of_year) / 2
-    it_load_mw: average_gpu * gpu_power_kw / 1000
-    total_load_mw: it_load_mw * pue
-    electricity_kwh: total_load_mw * 1000 * operating_hours_per_day * calendar_days_per_year
-    electricity_cost: electricity_kwh * electricity_price_t
-    maintenance_cost: capex.total_capex * maintenance_percent_of_capex
-    network_cost: total_load_mw * network_cost_per_mw_per_year
-    land_rent: total_load_mw * land_rent_per_mw_per_year
-    other_opex: base_opex * other_opex_percent
-
-team:
-  payroll_assumptions:
+  strategy_scenarios:
     description: >
-      расчет ФОТ: gross salary + bonus + social contribution
-    bonus_percent_of_gross:
-      value: 0.2
-    social_contribution_sfr_percent_of_gross:
-      value: 0.3
-    salary_growth:
-      2026: 0.0
-      2027: 0.12
-      2028: 0.10
-      2029: 0.08
-      2030: 0.06
+      Сценарии инфраструктурной стратегии GPS:
+      1. build_own_dc — строим собственный ЦОД сразу
+      2. rent_gpu_only — арендуем GPU весь горизонт
+      3. hybrid — сначала аренда GPU, затем строительство ЦОДа
+    active_scenario: hybrid
+    scenarios:
+      build_own_dc:
+        description: >
+          Строительство собственного ЦОДа со старта проекта.
+          Запуск на собственной инфраструктуре.
+        construction_start_year: 2026
+        construction_flag:
+          2026: 1
+          2027: 0
+          2028: 0
+          2029: 0
+          2030: 0
+      rent_gpu_only:
+        description: >
+          Полная аренда GPU без строительства собственного ЦОДа.
+          Используется при ограничениях по регулированию,
+          скорости запуска или снижении CAPEX-риска.
+        construction_start_year: null
+        construction_flag:
+          2026: 0
+          2027: 0
+          2028: 0
+          2029: 0
+          2030: 0
+      hybrid:
+        description: >
+          Сначала аренда GPU для проверки жизнеспособности модели,
+          затем строительство собственного ЦОДа.
+        construction_start_year: 2028
+        construction_flag:
+          2026: 0
+          2027: 0
+          2028: 1
+          2029: 0
+          2030: 0
+    allocation_logic:
+      description: >
+        Распределение required_gpu между арендой и собственными GPU
+        зависит от активного сценария.
+      rules:
+        build_own_dc:
+          description: >
+            Собственный ЦОД с самого начала, все GPU покупаются.
+          rented_gpu: 0
+          owned_gpu: required_gpu
+        rent_gpu_only:
+          description: >
+            Собственный ЦОД не строится, все GPU арендуются.
+          rented_gpu: required_gpu
+          owned_gpu: 0
+        hybrid:
+          description: >
+            До года строительства используется аренда, после строительства — собственные GPU.
+          before_construction:
+            rented_gpu: required_gpu
+            owned_gpu: 0
+          from_construction_year:
+            rented_gpu: 0
+            owned_gpu: required_gpu
+
+  owned_gpu_increment_logic:
+    description: >
+      Прирост только собственных GPU, для rented GPU CAPEX не возникает.
+    formula:
+      2026: owned_gpu
+      next_years: max(owned_gpu_current - owned_gpu_previous, 0)
+
+  datacenter_construction: # capex
+    description: >
+      CAPEX строительства собственного ЦОДа рассчитывается
+      от максимальной требуемой GPU-нагрузки GPS за горизонт модели.
+    sizing_logic:
+      description: >
+        Размер ЦОДа определяется по пиковой нагрузке GPU:
+        max(required_gpu) → MW → округление вверх
+      calculation_logic:
+        peak_required_gpu: max(required_gpu)
+        it_load_mw: peak_required_gpu * gpu_power_kw / 1000
+        total_load_mw: it_load_mw * pue
+        target_capacity_mw: ceil(total_load_mw)
+    benchmark_capacity_mw: 3
+    benchmark_components_3mw_usd_mln:
+      power_infrastructure: 3.25
+      ups_n_plus_1: 2.70
+      dgu_n_plus_1: 2.65
+      containers: 6.00
+      other: 8.00
+      total: 22.60
     calculation_logic:
-      annual_gross_salary: monthly_gross_salary * 12
-      annual_bonus: annual_gross_salary * bonus_percent_of_gross
-      annual_social_contribution_sfr: (annual_gross_salary + annual_bonus) * social_contribution_sfr_percent_of_gross
-      annual_fully_loaded_cost_per_fte: annual_gross_salary + annual_bonus + annual_social_contribution_sfr
-      annual_team_cost: fte * annual_fully_loaded_cost_per_fte
-  core_team_target_fte:
-    leadership:
-      head_of_ai: 1
-    genai_team:
-      genai_lead: 1
-      llm_engineer: 6
-      ml_engineer: 4
-      data_engineer: 3
-    platform_team:
-      platform_lead: 1
-      backend_engineer: 4
-      ai_platform_engineer: 5
-      devops_engineer: 3
-      sre_engineer: 2
-    agent_team:
-      agent_lead: 1
-      agent_engineer: 5
-      business_analyst: 3
-      implementation_manager: 3
-    architecture_team:
-      chief_architect: 1
-      solution_architect: 3
-    mlops_team:
-      mlops_lead: 1
-      ml_engineer: 3
-      devops_engineer: 2
-      sre_engineer: 2
-    validation_team:
-      qa_lead: 1
-      qa_engineer: 4
-      analyst: 2
-    data_team:
-      data_lead: 1
-      data_labeling_specialist: 4
-    datacenter_team:
-      datacenter_lead: 1
-      gpu_infrastructure_engineer: 3
-      network_engineer: 2
-      power_cooling_engineer: 2
-      noc_operator: 4
-      sre_engineer: 2
-  salary_gross_monthly_rub:
-    leadership:
-      head_of_ai: 1200000
-    genai_team:
-      genai_lead: 1000000
-      llm_engineer: 650000
-      ml_engineer: 600000
-      data_engineer: 500000
-    platform_team:
-      platform_lead: 900000
-      backend_engineer: 500000
-      ai_platform_engineer: 550000
-      devops_engineer: 550000
-      sre_engineer: 600000
-    agent_team:
-      agent_lead: 800000
-      agent_engineer: 500000
-      business_analyst: 450000
-      implementation_manager: 500000
-    architecture_team:
-      chief_architect: 1100000
-      solution_architect: 700000
-    mlops_team:
-      mlops_lead: 800000
-      ml_engineer: 600000
-      devops_engineer: 550000
-      sre_engineer: 600000
-    validation_team:
-      qa_lead: 450000
-      qa_engineer: 300000
-      analyst: 350000
-    data_team:
-      data_lead: 600000
-      data_labeling_specialist: 220000
-    datacenter_team:
-      datacenter_lead: 600000
-      gpu_infrastructure_engineer: 500000
-      network_engineer: 400000
-      power_cooling_engineer: 350000
-      noc_operator: 220000
-      sre_engineer: 500000
-  hiring_plan_monthly:
-    2026:
-      jan: 0.1
-      feb: 0.2
-      mar: 0.3
-      apr: 0.4
-      may: 0.5
-      jun: 0.6
-      jul: 0.7
-      aug: 0.8
-      sep: 0.9
-      oct: 1.0
-      nov: 1.0
-      dec: 1.0
-  scaling_rules:
-    datacenter_team:
-      sre_per_100_gpu: 1
-      gpu_engineer_per_200_gpu: 1
-      noc_per_300_gpu: 2
-    platform_team:
-      devops_per_100_gpu: 0.5
-    product_team:
-      implementation_per_product: 2
+      component_target_usd: component_3mw_usd * target_capacity_mw / benchmark_capacity_mw
+      component_target_rub: component_target_usd * fx_usd_rub_t
+      datacenter_construction_capex: total_component_rub * construction_flag
+
+opex:
+  gpu_rental: # opex
+    description: >
+      Аренда GPU до момента запуска собственного ЦОДа
+      или на всем горизонте в сценарии rent_gpu_only.
+    rental_price_per_gpu_per_year:
+      currency: RUB
+      value: 1800000
+    calculation_logic:
+      annual_gpu_rental_cost: required_gpu * rental_price_per_gpu_per_year
+  datacenter:
+    description: >
+      OPEX ЦОДа рассчитывается от нагрузки GPU через установленную мощность (МВт), 
+      затем через PUE переводится в полную мощность объекта.
+    drivers:
+      gpu_power_kw:
+        value: 2.5 # ИТ-мощность на 1 GPU, кВт
+      pue: # коэффициент эффективности ЦОДа
+        value: 1.25
+      operating_hours_per_day:
+        value: 24
+      calendar_days_per_year:
+        value: 365
+      electricity_price:
+        currency: RUB
+        unit: kWh
+        base_year: 2026
+        base_price_per_kwh: 5
+        annual_growth:
+          2027: 0.1
+          2028: 0.08
+          2029: 0.06
+          2030: 0.04
+        calculation_logic:
+          price_2026: base_price_per_kwh
+          price_t: price_previous_year * (1 + annual_growth_t)
+      maintenance_percent_of_capex:
+        value: 0.05
+      network_cost_per_mw_per_year:
+        value: 400
+      land_rent_per_mw_per_year:
+        value: 3000000
+      other_opex_percent:
+        value: 0.05
+    calculation_logic:
+      average_gpu: (gpu_beginning_of_year + gpu_end_of_year) / 2
+      it_load_mw: average_gpu * gpu_power_kw / 1000
+      total_load_mw: it_load_mw * pue
+      electricity_kwh: total_load_mw * 1000 * operating_hours_per_day * calendar_days_per_year
+      electricity_cost: electricity_kwh * electricity_price_t
+      maintenance_cost: capex.total_capex * maintenance_percent_of_capex
+      network_cost: total_load_mw * network_cost_per_mw_per_year
+      land_rent: total_load_mw * land_rent_per_mw_per_year
+      other_opex: base_opex * other_opex_percent
+
+  team:
+    payroll_assumptions:
+      description: >
+        расчет ФОТ: gross salary + bonus + social contribution
+      bonus_percent_of_gross:
+        value: 0.2
+      social_contribution_sfr_percent_of_gross:
+        value: 0.3
+      salary_growth:
+        2026: 0.0
+        2027: 0.12
+        2028: 0.10
+        2029: 0.08
+        2030: 0.06
+      calculation_logic:
+        annual_gross_salary: monthly_gross_salary * 12
+        annual_bonus: annual_gross_salary * bonus_percent_of_gross
+        annual_social_contribution_sfr: (annual_gross_salary + annual_bonus) * social_contribution_sfr_percent_of_gross
+        annual_fully_loaded_cost_per_fte: annual_gross_salary + annual_bonus + annual_social_contribution_sfr
+        annual_team_cost: fte * annual_fully_loaded_cost_per_fte
+    core_team_target_fte:
+      leadership:
+        head_of_ai: 1
+      genai_team:
+        genai_lead: 1
+        llm_engineer: 6
+        ml_engineer: 4
+        data_engineer: 3
+      platform_team:
+        platform_lead: 1
+        backend_engineer: 4
+        ai_platform_engineer: 5
+        devops_engineer: 3
+        sre_engineer: 2
+      agent_team:
+        agent_lead: 1
+        agent_engineer: 5
+        business_analyst: 3
+        implementation_manager: 3
+      architecture_team:
+        chief_architect: 1
+        solution_architect: 3
+      mlops_team:
+        mlops_lead: 1
+        ml_engineer: 3
+        devops_engineer: 2
+        sre_engineer: 2
+      validation_team:
+        qa_lead: 1
+        qa_engineer: 4
+        analyst: 2
+      data_team:
+        data_lead: 1
+        data_labeling_specialist: 4
+      datacenter_team:
+        datacenter_lead: 1
+        gpu_infrastructure_engineer: 3
+        network_engineer: 2
+        power_cooling_engineer: 2
+        noc_operator: 4
+        sre_engineer: 2
+    salary_gross_monthly_rub:
+      leadership:
+        head_of_ai: 1200000
+      genai_team:
+        genai_lead: 1000000
+        llm_engineer: 650000
+        ml_engineer: 600000
+        data_engineer: 500000
+      platform_team:
+        platform_lead: 900000
+        backend_engineer: 500000
+        ai_platform_engineer: 550000
+        devops_engineer: 550000
+        sre_engineer: 600000
+      agent_team:
+        agent_lead: 800000
+        agent_engineer: 500000
+        business_analyst: 450000
+        implementation_manager: 500000
+      architecture_team:
+        chief_architect: 1100000
+        solution_architect: 700000
+      mlops_team:
+        mlops_lead: 800000
+        ml_engineer: 600000
+        devops_engineer: 550000
+        sre_engineer: 600000
+      validation_team:
+        qa_lead: 450000
+        qa_engineer: 300000
+        analyst: 350000
+      data_team:
+        data_lead: 600000
+        data_labeling_specialist: 220000
+      datacenter_team:
+        datacenter_lead: 600000
+        gpu_infrastructure_engineer: 500000
+        network_engineer: 400000
+        power_cooling_engineer: 350000
+        noc_operator: 220000
+        sre_engineer: 500000
+    hiring_plan_monthly:
+      2026:
+        jan: 0.1
+        feb: 0.2
+        mar: 0.3
+        apr: 0.4
+        may: 0.5
+        jun: 0.6
+        jul: 0.7
+        aug: 0.8
+        sep: 0.9
+        oct: 1.0
+        nov: 1.0
+        dec: 1.0
+    scaling_rules:
+      datacenter_team:
+        sre_per_100_gpu: 1
+        gpu_engineer_per_200_gpu: 1
+        noc_per_300_gpu: 2
+      platform_team:
+        devops_per_100_gpu: 0.5
+      product_team:
+        implementation_per_product: 2
 
 revenue:
   currency: RUB
