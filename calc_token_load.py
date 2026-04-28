@@ -772,10 +772,18 @@ def write_csv(rows: list[dict[str, Any]], output: Path) -> None:
                     writer.writerow(out)
 
 
-def build_html(rows: list[dict[str, Any]]) -> str:
+def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     years = [int(r["year"]) for r in rows]
     blocks = build_report_blocks(rows, years)
     scenario_blocks = build_revenue_scenario_blocks(rows, years)
+    interactive_titles = {
+        "Infrastructure Scenario",
+        "CAPEX",
+        "Datacenter OPEX",
+        "GPU Rental OPEX",
+        "Total OPEX",
+        "Summary",
+    }
 
     def format_cell(metric: str, value: Any) -> str:
         if isinstance(value, str):
@@ -791,6 +799,8 @@ def build_html(rows: list[dict[str, Any]]) -> str:
 
     block_tables = []
     for block in blocks:
+        if block["title"] in interactive_titles:
+            continue
         body_rows = []
         for w_row in block["rows"]:
             cells = "".join(f"<td>{format_cell(w_row['Metric'], w_row[str(y)])}</td>" for y in years)
@@ -805,6 +815,46 @@ def build_html(rows: list[dict[str, Any]]) -> str:
 
     scenario_json = json.dumps(scenario_blocks, ensure_ascii=False)
     years_json = json.dumps(years)
+    required_gpu_by_year = {str(r["year"]): int(as_float(r.get("required_gpu")) or 0) for r in rows}
+    team_opex_by_year = {str(r["year"]): float(as_float(r.get("annual_team_opex")) or 0.0) for r in rows}
+    token_by_year = {str(r["year"]): float(as_float(r.get("total_annual_tokens")) or 0.0) for r in rows}
+
+    capex_cfg = assumptions.get("capex", {}) if isinstance(assumptions.get("capex"), dict) else {}
+    strategy_cfg = capex_cfg.get("strategy_scenarios", {}) if isinstance(capex_cfg.get("strategy_scenarios"), dict) else {}
+    scenarios_cfg = strategy_cfg.get("scenarios", {}) if isinstance(strategy_cfg.get("scenarios"), dict) else {}
+    datacenter_cfg = assumptions.get("opex", {}).get("datacenter", {}) if isinstance(assumptions.get("opex"), dict) else {}
+    drivers_cfg = datacenter_cfg.get("drivers", {}) if isinstance(datacenter_cfg.get("drivers"), dict) else {}
+    dc_build_cfg = capex_cfg.get("datacenter_construction", {}) if isinstance(capex_cfg.get("datacenter_construction"), dict) else {}
+    fx_cfg = assumptions.get("fx_assumptions", {}).get("usd_rub", {}) if isinstance(assumptions.get("fx_assumptions"), dict) else {}
+    gpu_rental_cfg = assumptions.get("opex", {}).get("gpu_rental", {}) if isinstance(assumptions.get("opex"), dict) else {}
+
+    infra_payload = {
+        "active_scenario": strategy_cfg.get("active_scenario", "build_own_dc"),
+        "hybrid_default_start_year": (scenarios_cfg.get("hybrid", {}) or {}).get("construction_start_year"),
+        "build_default_start_year": 2026,
+        "required_gpu": required_gpu_by_year,
+        "team_opex": team_opex_by_year,
+        "tokens": token_by_year,
+        "unit_cost": as_float(capex_cfg.get("gpu", {}).get("unit_cost")),
+        "infra_multiplier": as_float(capex_cfg.get("infra_multiplier", {}).get("value")),
+        "useful_life_years": int(capex_cfg.get("depreciation", {}).get("useful_life_years", 5)),
+        "gpu_power_kw": as_float((drivers_cfg.get("gpu_power_kw", {}) or {}).get("value")),
+        "pue": as_float((drivers_cfg.get("pue", {}) or {}).get("value")),
+        "operating_hours_per_day": as_float((drivers_cfg.get("operating_hours_per_day", {}) or {}).get("value")) or 24.0,
+        "calendar_days_per_year": as_float((drivers_cfg.get("calendar_days_per_year", {}) or {}).get("value")) or 365.0,
+        "electricity_base_price_per_kwh": as_float((drivers_cfg.get("electricity_price", {}) or {}).get("base_price_per_kwh")),
+        "electricity_annual_growth": to_year_map((drivers_cfg.get("electricity_price", {}) or {}).get("annual_growth")),
+        "maintenance_percent_of_capex": as_float((drivers_cfg.get("maintenance_percent_of_capex", {}) or {}).get("value")),
+        "network_cost_per_mw_per_year": as_float((drivers_cfg.get("network_cost_per_mw_per_year", {}) or {}).get("value")),
+        "land_rent_per_mw_per_year": as_float((drivers_cfg.get("land_rent_per_mw_per_year", {}) or {}).get("value")),
+        "other_opex_percent": as_float((drivers_cfg.get("other_opex_percent", {}) or {}).get("value")),
+        "benchmark_capacity_mw": as_float(dc_build_cfg.get("benchmark_capacity_mw")),
+        "benchmark_components_total_usd_mln": as_float((dc_build_cfg.get("benchmark_components_3mw_usd_mln", {}) or {}).get("total")),
+        "fx_base_value": as_float(fx_cfg.get("base_value")),
+        "fx_annual_growth": to_year_map(fx_cfg.get("annual_growth")),
+        "rental_price_per_gpu_per_year": as_float((gpu_rental_cfg.get("rental_price_per_gpu_per_year", {}) or {}).get("value")),
+    }
+    infra_json = json.dumps(infra_payload, ensure_ascii=False)
 
     return f"""<!doctype html>
 <html lang=\"ru\"><head><meta charset=\"utf-8\"><title>GPS Finmodel</title>
@@ -832,13 +882,28 @@ thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;p
     <option value=\"aggressive\">aggressive</option>
   </select>
 </div>
+<div class=\"note\">
+  <label for=\"infraScenarioSelect\"><b>Infrastructure scenario:</b></label>
+  <select id=\"infraScenarioSelect\">
+    <option value=\"build_own_dc\">build_own_dc</option>
+    <option value=\"rent_gpu_only\">rent_gpu_only</option>
+    <option value=\"hybrid\">hybrid</option>
+  </select>
+  <label for=\"constructionStartYear\" style=\"margin-left:12px;\"><b>construction_start_year:</b></label>
+  <input id=\"constructionStartYear\" type=\"number\" step=\"1\" style=\"width:90px;\" />
+</div>
 <div id=\"scenarioTables\"></div>
+<div id=\"infraTables\"></div>
 {''.join(block_tables)}
 <script>
 const SCENARIO_DATA = {scenario_json};
 const YEARS = {years_json};
+const INFRA_DATA = {infra_json};
 const container = document.getElementById('scenarioTables');
 const selector = document.getElementById('scenarioSelect');
+const infraContainer = document.getElementById('infraTables');
+const infraSelector = document.getElementById('infraScenarioSelect');
+const constructionInput = document.getElementById('constructionStartYear');
 
 function fmt(metric, value) {{
   if (value === null || Number.isNaN(value)) return 'NaN';
@@ -862,13 +927,201 @@ function renderScenarioTables(scenario) {{
 
 selector.addEventListener('change', (e) => renderScenarioTables(e.target.value));
 renderScenarioTables('base');
+
+function toNum(v) {{
+  if (v === null || v === undefined || v === '') return NaN;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+}}
+
+function yrVal(mapObj, year, fallback = 0) {{
+  const v = mapObj[String(year)];
+  const n = toNum(v);
+  return Number.isFinite(n) ? n : fallback;
+}}
+
+function calcInfraRows(selectedScenario, constructionStartYear) {{
+  const required = YEARS.map(y => yrVal(INFRA_DATA.required_gpu, y, 0));
+  const peakRequired = required.length ? Math.max(...required) : 0;
+  const itPeakMw = peakRequired * (INFRA_DATA.gpu_power_kw || 0) / 1000;
+  const totalPeakMw = itPeakMw * (INFRA_DATA.pue || 0);
+  const targetCapacityMw = Math.ceil(totalPeakMw || 0);
+
+  const rows = [];
+  const usefulLife = Math.max(1, Math.round(INFRA_DATA.useful_life_years || 5));
+  const totalCapexHist = [];
+  let prevOwned = 0;
+  let prevFx = null;
+  let prevElPrice = null;
+
+  YEARS.forEach((year, idx) => {{
+    const requiredGpu = yrVal(INFRA_DATA.required_gpu, year, 0);
+    let ownedGpu = 0;
+    let rentedGpu = 0;
+    let constructionFlag = 0;
+    if (selectedScenario === 'build_own_dc') {{
+      ownedGpu = requiredGpu;
+      rentedGpu = 0;
+      constructionFlag = year === 2026 ? 1 : 0;
+    }} else if (selectedScenario === 'rent_gpu_only') {{
+      ownedGpu = 0;
+      rentedGpu = requiredGpu;
+      constructionFlag = 0;
+    }} else {{
+      if (Number.isFinite(constructionStartYear) && year >= constructionStartYear) {{
+        ownedGpu = requiredGpu;
+        rentedGpu = 0;
+      }} else {{
+        ownedGpu = 0;
+        rentedGpu = requiredGpu;
+      }}
+      constructionFlag = (Number.isFinite(constructionStartYear) && year === constructionStartYear) ? 1 : 0;
+    }}
+    const ownedInc = idx === 0 ? ownedGpu : Math.max(ownedGpu - prevOwned, 0);
+
+    let fx = INFRA_DATA.fx_base_value;
+    if (idx > 0) {{
+      const g = yrVal(INFRA_DATA.fx_annual_growth, year, 0);
+      fx = (prevFx ?? INFRA_DATA.fx_base_value ?? 0) * (1 + g);
+    }}
+    prevFx = fx;
+
+    const gpuCapex = (selectedScenario === 'rent_gpu_only') ? 0 : ownedInc * (INFRA_DATA.unit_cost || 0);
+    const gpuInfraCapex = gpuCapex * (INFRA_DATA.infra_multiplier || 0);
+    const componentUsdMln = (INFRA_DATA.benchmark_components_total_usd_mln || 0) * targetCapacityMw / (INFRA_DATA.benchmark_capacity_mw || 1);
+    const dcConstructionCapex = (selectedScenario === 'rent_gpu_only') ? 0 : componentUsdMln * 1000000 * (fx || 0) * constructionFlag;
+    const totalCapex = gpuInfraCapex + dcConstructionCapex;
+    totalCapexHist.push(totalCapex);
+    const depWindow = totalCapexHist.slice(-usefulLife);
+    const depreciation = (selectedScenario === 'rent_gpu_only') ? 0 : depWindow.reduce((a,b)=>a+b,0) / usefulLife;
+
+    const gpuBOY = prevOwned;
+    const gpuEOY = ownedGpu;
+    const avgGpu = (gpuBOY + gpuEOY) / 2;
+    const itLoadMw = avgGpu * (INFRA_DATA.gpu_power_kw || 0) / 1000;
+    const totalLoadMw = itLoadMw * (INFRA_DATA.pue || 0);
+    const electricityKwh = totalLoadMw * 1000 * (INFRA_DATA.operating_hours_per_day || 24) * (INFRA_DATA.calendar_days_per_year || 365);
+
+    let elPrice = INFRA_DATA.electricity_base_price_per_kwh || 0;
+    if (idx > 0) {{
+      const g = yrVal(INFRA_DATA.electricity_annual_growth, year, 0);
+      elPrice = (prevElPrice ?? (INFRA_DATA.electricity_base_price_per_kwh || 0)) * (1 + g);
+    }}
+    prevElPrice = elPrice;
+
+    let totalDcOpex = 0;
+    if (ownedGpu > 0 && selectedScenario !== 'rent_gpu_only') {{
+      const electricityCost = electricityKwh * elPrice;
+      const maintenance = totalCapex * (INFRA_DATA.maintenance_percent_of_capex || 0);
+      const network = totalLoadMw * (INFRA_DATA.network_cost_per_mw_per_year || 0);
+      const land = totalLoadMw * (INFRA_DATA.land_rent_per_mw_per_year || 0);
+      const dcBase = electricityCost + maintenance + network + land;
+      totalDcOpex = dcBase + dcBase * (INFRA_DATA.other_opex_percent || 0);
+    }}
+
+    const gpuRentalOpex = rentedGpu * (INFRA_DATA.rental_price_per_gpu_per_year || 0);
+    const teamOpex = yrVal(INFRA_DATA.team_opex, year, 0);
+    const totalOpex = totalDcOpex + teamOpex + gpuRentalOpex;
+    const revenue = yrVal(INFRA_DATA.tokens, year, 0) * 0.002;
+    const cogs = revenue * 0.35;
+    const grossProfit = revenue - cogs;
+    const grossMargin = revenue ? grossProfit / revenue : NaN;
+
+    rows.push({{
+      year, selectedScenario, constructionStartYear, constructionFlag,
+      requiredGpu, ownedGpu, rentedGpu, ownedInc,
+      gpuCapex, gpuInfraCapex, dcConstructionCapex, totalCapex, depreciation,
+      totalDcOpex, teamOpex, gpuRentalOpex, totalOpex,
+      revenue, cogs, grossProfit, grossMargin
+    }});
+    prevOwned = ownedGpu;
+  }});
+  return rows;
+}}
+
+function metricRow(label, vals, isInt = false, isPct = false) {{
+  const cells = YEARS.map((_, i) => {{
+    const v = vals[i];
+    if (typeof v === 'string') return `<td>${{v}}</td>`;
+    if (isPct) return `<td>${{Number.isFinite(v) ? (v*100).toFixed(2)+'%' : 'NaN'}}</td>`;
+    if (!Number.isFinite(v)) return '<td>NaN</td>';
+    if (isInt) return `<td>${{Math.round(v).toLocaleString()}}</td>`;
+    return `<td>${{Number(v).toLocaleString(undefined, {{maximumFractionDigits:2, minimumFractionDigits:2}})}}</td>`;
+  }}).join('');
+  return `<tr><td>${{label}}</td>${{cells}}</tr>`;
+}}
+
+function infraBlock(title, rowsHtml) {{
+  const header = YEARS.map(y => `<th>${{y}}</th>`).join('');
+  return `<h2>${{title}}</h2><table><thead><tr><th>Metric</th>${{header}}</tr></thead><tbody>${{rowsHtml}}</tbody></table>`;
+}}
+
+function renderInfraTables() {{
+  const scenario = infraSelector.value;
+  const cYear = toNum(constructionInput.value);
+  const rows = calcInfraRows(scenario, cYear);
+  const vals = (k) => rows.map(r => r[k]);
+  let html = '';
+  html += infraBlock('Infrastructure Scenario', [
+    metricRow('active_scenario', vals('selectedScenario')),
+    metricRow('construction_start_year', vals('constructionStartYear'), true),
+    metricRow('construction_flag', vals('constructionFlag'), true),
+    metricRow('required_gpu', vals('requiredGpu'), true),
+    metricRow('owned_gpu', vals('ownedGpu'), true),
+    metricRow('rented_gpu', vals('rentedGpu'), true),
+    metricRow('owned_gpu_increment', vals('ownedInc'), true),
+  ].join(''));
+  html += infraBlock('CAPEX', [
+    metricRow('gpu_capex', vals('gpuCapex')),
+    metricRow('gpu_infra_capex', vals('gpuInfraCapex')),
+    metricRow('datacenter_construction_capex', vals('dcConstructionCapex')),
+    metricRow('total_capex', vals('totalCapex')),
+    metricRow('annual_depreciation', vals('depreciation')),
+  ].join(''));
+  html += infraBlock('Datacenter OPEX', [metricRow('total_datacenter_opex', vals('totalDcOpex'))].join(''));
+  html += infraBlock('GPU Rental OPEX', [metricRow('annual_gpu_rental_cost', vals('gpuRentalOpex'))].join(''));
+  html += infraBlock('Total OPEX', [
+    metricRow('total_datacenter_opex', vals('totalDcOpex')),
+    metricRow('annual_team_opex', vals('teamOpex')),
+    metricRow('annual_gpu_rental_cost', vals('gpuRentalOpex')),
+    metricRow('total_opex', vals('totalOpex')),
+  ].join(''));
+  html += infraBlock('Summary', [
+    metricRow('revenue', vals('revenue')),
+    metricRow('cogs', vals('cogs')),
+    metricRow('gross_profit', vals('grossProfit')),
+    metricRow('gross_margin', vals('grossMargin'), false, true),
+    metricRow('total_opex', vals('totalOpex')),
+  ].join(''));
+  infraContainer.innerHTML = html;
+}}
+
+function setConstructionInputState() {{
+  const scenario = infraSelector.value;
+  if (scenario === 'rent_gpu_only') {{
+    constructionInput.value = '';
+    constructionInput.disabled = true;
+  }} else if (scenario === 'build_own_dc') {{
+    constructionInput.value = INFRA_DATA.build_default_start_year;
+    constructionInput.disabled = false;
+  }} else {{
+    constructionInput.value = INFRA_DATA.hybrid_default_start_year || '';
+    constructionInput.disabled = false;
+  }}
+  renderInfraTables();
+}}
+
+infraSelector.addEventListener('change', setConstructionInputState);
+constructionInput.addEventListener('input', renderInfraTables);
+infraSelector.value = INFRA_DATA.active_scenario || 'build_own_dc';
+setConstructionInputState();
 </script>
 </body></html>"""
 
 
-def write_html(rows: list[dict[str, Any]], output: Path) -> None:
+def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(build_html(rows), encoding="utf-8")
+    output.write_text(build_html(rows, assumptions), encoding="utf-8")
 
 
 def main() -> None:
@@ -879,7 +1132,7 @@ def main() -> None:
 
     rows = calculate(assumptions)
     write_csv(rows, OUT_CSV)
-    write_html(rows, OUT_HTML)
+    write_html(rows, assumptions, OUT_HTML)
 
     print("year | total_annual_tokens | required_gpu | total_capex | total_opex")
     print("-" * 90)
