@@ -174,7 +174,20 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
         ],
     ),
     ("GPU Calculation", ["weighted_throughput", "tokens_per_second", "required_gpu"]),
-    ("CAPEX", ["gpu_capex", "gpu_infra_capex", "datacenter_construction_capex", "total_capex", "annual_depreciation"]),
+    ("CAPEX", ["gpu_capex", "gpu_infra_capex", "datacenter_construction_capex", "total_office_capex", "total_capex", "annual_depreciation"]),
+    (
+        "Office CAPEX",
+        [
+            "office_server_capex",
+            "employee_laptops_capex",
+            "executive_laptops_capex",
+            "mfu_capex",
+            "meeting_rooms_capex",
+            "office_furniture_capex",
+            "total_office_capex",
+            "office_capex_depreciation",
+        ],
+    ),
     (
         "Datacenter OPEX",
         [
@@ -209,7 +222,7 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
     ("GPU Rental OPEX", ["rental_price_per_gpu_per_year", "annual_gpu_rental_cost"]),
     ("Total OPEX", ["total_datacenter_opex", "annual_team_opex", "annual_gpu_rental_cost", "total_opex"]),
     ("Revenue", ["revenue", "cogs", "gross_profit", "gross_margin"]),
-    ("Summary", ["workplace_token_share", "contact_center_token_share", "required_gpu", "total_capex", "total_opex"]),
+    ("Summary", ["workplace_token_share", "contact_center_token_share", "required_gpu", "total_capex", "annual_depreciation", "total_opex"]),
 ]
 SCENARIO_ORDER = ["conservative", "base", "aggressive"]
 SCENARIO_MULTIPLIERS = {"conservative": 0.85, "base": 1.0, "aggressive": 1.2}
@@ -356,6 +369,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     opex_root = ass.get("opex", {}) if isinstance(ass.get("opex"), dict) else {}
     datacenter = ass.get("datacenter", opex_root.get("datacenter", {}))
     team = ass.get("team", opex_root.get("team", {}))
+    sga = ass.get("sga", {})
     drivers = datacenter.get("drivers", {}) if isinstance(datacenter.get("drivers"), dict) else {}
 
     wp_usage = usage["Workplace.ai"]
@@ -390,6 +404,46 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     infra_multiplier = as_float(capex.get("infra_multiplier", {}).get("value"))
     useful_life = int(capex.get("depreciation", {}).get("useful_life_years", capex.get("gpu", {}).get("useful_life_years", 5)))
     useful_life = max(useful_life, 1)
+    office_capex_cfg = capex.get("office_capex", {}) if isinstance(capex.get("office_capex"), dict) else {}
+    office_server_cfg = office_capex_cfg.get("office_server", {}) if isinstance(office_capex_cfg.get("office_server"), dict) else {}
+    employee_laptops_cfg = office_capex_cfg.get("employee_laptops", {}) if isinstance(office_capex_cfg.get("employee_laptops"), dict) else {}
+    executive_laptops_cfg = office_capex_cfg.get("executive_laptops", {}) if isinstance(office_capex_cfg.get("executive_laptops"), dict) else {}
+    mfu_cfg = office_capex_cfg.get("mfu", {}) if isinstance(office_capex_cfg.get("mfu"), dict) else {}
+    meeting_rooms_cfg = office_capex_cfg.get("meeting_rooms", {}) if isinstance(office_capex_cfg.get("meeting_rooms"), dict) else {}
+    office_furniture_cfg = office_capex_cfg.get("office_furniture", {}) if isinstance(office_capex_cfg.get("office_furniture"), dict) else {}
+
+    office_server_qty = warn_if_missing(year_value(office_server_cfg.get("quantity"), years[0]), "capex.office_capex.office_server.quantity.value")
+    office_server_unit_cost = warn_if_missing(year_value(office_server_cfg.get("unit_cost_rub"), years[0]), "capex.office_capex.office_server.unit_cost_rub.value")
+    employee_laptops_unit_cost = warn_if_missing(
+        year_value(employee_laptops_cfg.get("unit_cost_rub"), years[0]),
+        "capex.office_capex.employee_laptops.unit_cost_rub.value",
+    )
+    executive_laptops_qty = warn_if_missing(
+        year_value(executive_laptops_cfg.get("quantity"), years[0]),
+        "capex.office_capex.executive_laptops.quantity.value",
+    )
+    executive_laptops_unit_cost = warn_if_missing(
+        year_value(executive_laptops_cfg.get("unit_cost_rub"), years[0]),
+        "capex.office_capex.executive_laptops.unit_cost_rub.value",
+    )
+    mfu_qty = warn_if_missing(year_value(mfu_cfg.get("quantity"), years[0]), "capex.office_capex.mfu.quantity.value")
+    mfu_unit_cost = warn_if_missing(year_value(mfu_cfg.get("unit_cost_rub"), years[0]), "capex.office_capex.mfu.unit_cost_rub.value")
+    meeting_rooms_total_cost = warn_if_missing(
+        year_value(meeting_rooms_cfg.get("total_cost_rub"), years[0]),
+        "capex.office_capex.meeting_rooms.total_cost_rub.value",
+    )
+    office_furniture_total_cost = warn_if_missing(
+        year_value(office_furniture_cfg.get("total_cost_rub"), years[0]),
+        "capex.office_capex.office_furniture.total_cost_rub.value",
+    )
+    office_lives = {
+        "office_server": max(1, int(year_value(office_server_cfg.get("useful_life_years"), years[0], 5) or 5)),
+        "employee_laptops": max(1, int(year_value(employee_laptops_cfg.get("useful_life_years"), years[0], 3) or 3)),
+        "executive_laptops": max(1, int(year_value(executive_laptops_cfg.get("useful_life_years"), years[0], 3) or 3)),
+        "mfu": max(1, int(year_value(mfu_cfg.get("useful_life_years"), years[0], 5) or 5)),
+        "meeting_rooms": max(1, int(year_value(meeting_rooms_cfg.get("useful_life_years"), years[0], 5) or 5)),
+        "office_furniture": max(1, int(year_value(office_furniture_cfg.get("useful_life_years"), years[0], 7) or 7)),
+    }
 
     # Datacenter OPEX assumptions
     gpu_power_kw = warn_if_missing(driver_value(drivers, "gpu_power_kw"), "datacenter.drivers.gpu_power_kw.value")
@@ -444,6 +498,15 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     salary_growth_map = to_year_map(payroll.get("salary_growth"))
     bonus_cfg = payroll.get("bonus_percent_of_gross")
     social_cfg = payroll.get("social_contribution_sfr_percent_of_gross")
+    sga_target_fte_cfg: Any = None
+    sga_hiring_plan_cfg: Any = None
+    if isinstance(sga, dict):
+        for key in ("target_fte", "core_team_target_fte", "team_target_fte"):
+            if isinstance(sga.get(key), dict):
+                sga_target_fte_cfg = sga.get(key)
+                break
+        if isinstance(sga.get("hiring_plan_monthly"), (dict, list, tuple, int, float)):
+            sga_hiring_plan_cfg = sga.get("hiring_plan_monthly")
 
     seconds_per_year = working_days * working_hours * 3600.0
     if seconds_per_year <= 0:
@@ -531,7 +594,16 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         target_capacity_mw = float(math.ceil(total_peak_mw))
 
     rows: list[dict[str, Any]] = []
-    total_capex_history: list[float] = []
+    gpu_infra_capex_history: list[float] = []
+    datacenter_capex_history: list[float] = []
+    office_capex_history: dict[str, list[float]] = {
+        "office_server": [],
+        "employee_laptops": [],
+        "executive_laptops": [],
+        "mfu": [],
+        "meeting_rooms": [],
+        "office_furniture": [],
+    }
     prev_electricity_price: float | None = None
     prev_fx: float | None = None
     prev_owned_gpu = 0
@@ -581,10 +653,6 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             gpu_capex = owned_gpu_increment * gpu_unit_cost
         gpu_infra_capex = safe_mul(gpu_capex, infra_multiplier)
         total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex)
-
-        total_capex_history.append(total_capex)
-        window = total_capex_history[-useful_life:]
-        annual_depreciation = float("nan") if any(math.isnan(v) for v in window) else sum(window) / useful_life
 
         # Datacenter OPEX (owned infra only)
         gpu_beginning_of_year = float(prev_owned_gpu)
@@ -690,6 +758,78 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             monthly_social = 0.0
             monthly_cost_per_fte = 0.0
 
+        if sga_target_fte_cfg is not None:
+            sga_role_target_fte = flatten_role_values(sga_target_fte_cfg)
+            sga_multipliers = monthly_multipliers(sga_hiring_plan_cfg, year)
+            sga_total_fte_months = 0.0
+            for mult in sga_multipliers:
+                sga_total_fte_months += sum(v * float(mult) for v in sga_role_target_fte.values())
+            sga_monthly_fte = sga_total_fte_months / 12.0
+        else:
+            sga_monthly_fte = 0.0
+
+        total_fte = safe_add(monthly_fte, sga_monthly_fte)
+        is_office_capex_purchase_year = year == years[0]
+        office_server_capex = safe_mul(office_server_qty, office_server_unit_cost) if is_office_capex_purchase_year else 0.0
+        employee_laptops_capex = safe_mul(total_fte, employee_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
+        executive_laptops_capex = safe_mul(executive_laptops_qty, executive_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
+        mfu_capex = safe_mul(mfu_qty, mfu_unit_cost) if is_office_capex_purchase_year else 0.0
+        meeting_rooms_capex = (meeting_rooms_total_cost if meeting_rooms_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
+        office_furniture_capex = (office_furniture_total_cost if office_furniture_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
+        total_office_capex = safe_add(
+            office_server_capex,
+            employee_laptops_capex,
+            executive_laptops_capex,
+            mfu_capex,
+            meeting_rooms_capex,
+            office_furniture_capex,
+        )
+
+        office_capex_history["office_server"].append(office_server_capex)
+        office_capex_history["employee_laptops"].append(employee_laptops_capex)
+        office_capex_history["executive_laptops"].append(executive_laptops_capex)
+        office_capex_history["mfu"].append(mfu_capex)
+        office_capex_history["meeting_rooms"].append(meeting_rooms_capex)
+        office_capex_history["office_furniture"].append(office_furniture_capex)
+
+        office_server_window = office_capex_history["office_server"][-office_lives["office_server"] :]
+        office_server_depreciation = float("nan") if any(math.isnan(v) for v in office_server_window) else sum(office_server_window) / office_lives["office_server"]
+        employee_laptops_window = office_capex_history["employee_laptops"][-office_lives["employee_laptops"] :]
+        employee_laptops_depreciation = (
+            float("nan") if any(math.isnan(v) for v in employee_laptops_window) else sum(employee_laptops_window) / office_lives["employee_laptops"]
+        )
+        executive_laptops_window = office_capex_history["executive_laptops"][-office_lives["executive_laptops"] :]
+        executive_laptops_depreciation = (
+            float("nan") if any(math.isnan(v) for v in executive_laptops_window) else sum(executive_laptops_window) / office_lives["executive_laptops"]
+        )
+        mfu_window = office_capex_history["mfu"][-office_lives["mfu"] :]
+        mfu_depreciation = float("nan") if any(math.isnan(v) for v in mfu_window) else sum(mfu_window) / office_lives["mfu"]
+        meeting_rooms_window = office_capex_history["meeting_rooms"][-office_lives["meeting_rooms"] :]
+        meeting_rooms_depreciation = (
+            float("nan") if any(math.isnan(v) for v in meeting_rooms_window) else sum(meeting_rooms_window) / office_lives["meeting_rooms"]
+        )
+        office_furniture_window = office_capex_history["office_furniture"][-office_lives["office_furniture"] :]
+        office_furniture_depreciation = (
+            float("nan") if any(math.isnan(v) for v in office_furniture_window) else sum(office_furniture_window) / office_lives["office_furniture"]
+        )
+        office_capex_depreciation = safe_add(
+            office_server_depreciation,
+            employee_laptops_depreciation,
+            executive_laptops_depreciation,
+            mfu_depreciation,
+            meeting_rooms_depreciation,
+            office_furniture_depreciation,
+        )
+
+        total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex, total_office_capex)
+        gpu_infra_capex_history.append(gpu_infra_capex)
+        datacenter_capex_history.append(datacenter_construction_capex)
+        gpu_window = gpu_infra_capex_history[-useful_life:]
+        datacenter_window = datacenter_capex_history[-useful_life:]
+        gpu_depreciation = float("nan") if any(math.isnan(v) for v in gpu_window) else sum(gpu_window) / useful_life
+        datacenter_depreciation = float("nan") if any(math.isnan(v) for v in datacenter_window) else sum(datacenter_window) / useful_life
+        total_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation)
+
         total_opex = safe_add(total_datacenter_opex, annual_team_opex, annual_gpu_rental_cost)
         base_revenue = (as_float(base.get("total_annual_tokens")) or 0.0) * 0.002
         cogs = base_revenue * 0.35
@@ -709,9 +849,20 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "gpu_capex": gpu_capex,
                 "gpu_infra_capex": gpu_infra_capex,
                 "datacenter_construction_capex": datacenter_construction_capex,
+                "office_server_capex": office_server_capex,
+                "employee_laptops_capex": employee_laptops_capex,
+                "executive_laptops_capex": executive_laptops_capex,
+                "mfu_capex": mfu_capex,
+                "meeting_rooms_capex": meeting_rooms_capex,
+                "office_furniture_capex": office_furniture_capex,
+                "total_office_capex": total_office_capex,
                 "total_capex": total_capex,
-                "depreciable_base": safe_add(gpu_infra_capex, datacenter_construction_capex),
-                "annual_depreciation": annual_depreciation,
+                "depreciable_base": safe_add(gpu_infra_capex, datacenter_construction_capex, total_office_capex),
+                "gpu_depreciation": gpu_depreciation,
+                "datacenter_depreciation": datacenter_depreciation,
+                "office_capex_depreciation": office_capex_depreciation,
+                "total_depreciation": total_depreciation,
+                "annual_depreciation": total_depreciation,
                 "gpu_beginning_of_year": gpu_beginning_of_year,
                 "gpu_end_of_year": gpu_end_of_year,
                 "average_gpu": average_gpu,
@@ -734,6 +885,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "monthly_social": monthly_social,
                 "monthly_cost_per_fte": monthly_cost_per_fte,
                 "monthly_team_cost": monthly_team_cost,
+                "sga_monthly_fte": sga_monthly_fte,
+                "total_fte": total_fte,
                 "annual_team_opex": annual_team_opex,
                 "total_opex": total_opex,
                 "revenue": base_revenue,
@@ -779,6 +932,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     interactive_titles = {
         "Infrastructure Scenario",
         "CAPEX",
+        "Office CAPEX",
         "Datacenter OPEX",
         "GPU Rental OPEX",
         "Total OPEX",
@@ -818,6 +972,8 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     required_gpu_by_year = {str(r["year"]): int(as_float(r.get("required_gpu")) or 0) for r in rows}
     team_opex_by_year = {str(r["year"]): float(as_float(r.get("annual_team_opex")) or 0.0) for r in rows}
     token_by_year = {str(r["year"]): float(as_float(r.get("total_annual_tokens")) or 0.0) for r in rows}
+    monthly_fte_by_year = {str(r["year"]): float(as_float(r.get("monthly_fte")) or 0.0) for r in rows}
+    sga_fte_by_year = {str(r["year"]): float(as_float(r.get("sga_monthly_fte")) or 0.0) for r in rows}
 
     capex_cfg = assumptions.get("capex", {}) if isinstance(assumptions.get("capex"), dict) else {}
     strategy_cfg = capex_cfg.get("strategy_scenarios", {}) if isinstance(capex_cfg.get("strategy_scenarios"), dict) else {}
@@ -827,6 +983,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     dc_build_cfg = capex_cfg.get("datacenter_construction", {}) if isinstance(capex_cfg.get("datacenter_construction"), dict) else {}
     fx_cfg = assumptions.get("fx_assumptions", {}).get("usd_rub", {}) if isinstance(assumptions.get("fx_assumptions"), dict) else {}
     gpu_rental_cfg = assumptions.get("opex", {}).get("gpu_rental", {}) if isinstance(assumptions.get("opex"), dict) else {}
+    office_capex_cfg = capex_cfg.get("office_capex", {}) if isinstance(capex_cfg.get("office_capex"), dict) else {}
 
     infra_payload = {
         "active_scenario": strategy_cfg.get("active_scenario", "build_own_dc"),
@@ -835,9 +992,26 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         "required_gpu": required_gpu_by_year,
         "team_opex": team_opex_by_year,
         "tokens": token_by_year,
+        "monthly_fte": monthly_fte_by_year,
+        "sga_monthly_fte": sga_fte_by_year,
         "unit_cost": as_float(capex_cfg.get("gpu", {}).get("unit_cost")),
         "infra_multiplier": as_float(capex_cfg.get("infra_multiplier", {}).get("value")),
         "useful_life_years": int(capex_cfg.get("depreciation", {}).get("useful_life_years", 5)),
+        "office_server_quantity": year_value((office_capex_cfg.get("office_server", {}) or {}).get("quantity"), years[0], 0),
+        "office_server_unit_cost_rub": year_value((office_capex_cfg.get("office_server", {}) or {}).get("unit_cost_rub"), years[0], 0),
+        "employee_laptops_unit_cost_rub": year_value((office_capex_cfg.get("employee_laptops", {}) or {}).get("unit_cost_rub"), years[0], 0),
+        "executive_laptops_quantity": year_value((office_capex_cfg.get("executive_laptops", {}) or {}).get("quantity"), years[0], 0),
+        "executive_laptops_unit_cost_rub": year_value((office_capex_cfg.get("executive_laptops", {}) or {}).get("unit_cost_rub"), years[0], 0),
+        "mfu_quantity": year_value((office_capex_cfg.get("mfu", {}) or {}).get("quantity"), years[0], 0),
+        "mfu_unit_cost_rub": year_value((office_capex_cfg.get("mfu", {}) or {}).get("unit_cost_rub"), years[0], 0),
+        "meeting_rooms_total_cost_rub": year_value((office_capex_cfg.get("meeting_rooms", {}) or {}).get("total_cost_rub"), years[0], 0),
+        "office_furniture_total_cost_rub": year_value((office_capex_cfg.get("office_furniture", {}) or {}).get("total_cost_rub"), years[0], 0),
+        "office_server_life_years": int(year_value((office_capex_cfg.get("office_server", {}) or {}).get("useful_life_years"), years[0], 5) or 5),
+        "employee_laptops_life_years": int(year_value((office_capex_cfg.get("employee_laptops", {}) or {}).get("useful_life_years"), years[0], 3) or 3),
+        "executive_laptops_life_years": int(year_value((office_capex_cfg.get("executive_laptops", {}) or {}).get("useful_life_years"), years[0], 3) or 3),
+        "mfu_life_years": int(year_value((office_capex_cfg.get("mfu", {}) or {}).get("useful_life_years"), years[0], 5) or 5),
+        "meeting_rooms_life_years": int(year_value((office_capex_cfg.get("meeting_rooms", {}) or {}).get("useful_life_years"), years[0], 5) or 5),
+        "office_furniture_life_years": int(year_value((office_capex_cfg.get("office_furniture", {}) or {}).get("useful_life_years"), years[0], 7) or 7),
         "gpu_power_kw": as_float((drivers_cfg.get("gpu_power_kw", {}) or {}).get("value")),
         "pue": as_float((drivers_cfg.get("pue", {}) or {}).get("value")),
         "operating_hours_per_day": as_float((drivers_cfg.get("operating_hours_per_day", {}) or {}).get("value")) or 24.0,
@@ -949,7 +1123,14 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
 
   const rows = [];
   const usefulLife = Math.max(1, Math.round(INFRA_DATA.useful_life_years || 5));
-  const totalCapexHist = [];
+  const gpuInfraCapexHist = [];
+  const dcCapexHist = [];
+  const officeServerHist = [];
+  const employeeLaptopsHist = [];
+  const executiveLaptopsHist = [];
+  const mfuHist = [];
+  const meetingRoomsHist = [];
+  const officeFurnitureHist = [];
   let prevOwned = 0;
   let prevFx = null;
   let prevElPrice = null;
@@ -990,10 +1171,36 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
     const gpuInfraCapex = gpuCapex * (INFRA_DATA.infra_multiplier || 0);
     const componentUsdMln = (INFRA_DATA.benchmark_components_total_usd_mln || 0) * targetCapacityMw / (INFRA_DATA.benchmark_capacity_mw || 1);
     const dcConstructionCapex = (selectedScenario === 'rent_gpu_only') ? 0 : componentUsdMln * 1000000 * (fx || 0) * constructionFlag;
-    const totalCapex = gpuInfraCapex + dcConstructionCapex;
-    totalCapexHist.push(totalCapex);
-    const depWindow = totalCapexHist.slice(-usefulLife);
-    const depreciation = (selectedScenario === 'rent_gpu_only') ? 0 : depWindow.reduce((a,b)=>a+b,0) / usefulLife;
+    const totalFte = yrVal(INFRA_DATA.monthly_fte, year, 0) + yrVal(INFRA_DATA.sga_monthly_fte, year, 0);
+    const isOfficeCapexPurchaseYear = idx === 0;
+    const officeServerCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.office_server_quantity || 0) * (INFRA_DATA.office_server_unit_cost_rub || 0) : 0;
+    const employeeLaptopsCapex = isOfficeCapexPurchaseYear ? totalFte * (INFRA_DATA.employee_laptops_unit_cost_rub || 0) : 0;
+    const executiveLaptopsCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.executive_laptops_quantity || 0) * (INFRA_DATA.executive_laptops_unit_cost_rub || 0) : 0;
+    const mfuCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.mfu_quantity || 0) * (INFRA_DATA.mfu_unit_cost_rub || 0) : 0;
+    const meetingRoomsCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.meeting_rooms_total_cost_rub || 0) : 0;
+    const officeFurnitureCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.office_furniture_total_cost_rub || 0) : 0;
+    const totalOfficeCapex = officeServerCapex + employeeLaptopsCapex + executiveLaptopsCapex + mfuCapex + meetingRoomsCapex + officeFurnitureCapex;
+    const totalCapex = gpuInfraCapex + dcConstructionCapex + totalOfficeCapex;
+
+    gpuInfraCapexHist.push(gpuInfraCapex);
+    dcCapexHist.push(dcConstructionCapex);
+    officeServerHist.push(officeServerCapex);
+    employeeLaptopsHist.push(employeeLaptopsCapex);
+    executiveLaptopsHist.push(executiveLaptopsCapex);
+    mfuHist.push(mfuCapex);
+    meetingRoomsHist.push(meetingRoomsCapex);
+    officeFurnitureHist.push(officeFurnitureCapex);
+
+    const gpuDep = gpuInfraCapexHist.slice(-usefulLife).reduce((a,b)=>a+b,0) / usefulLife;
+    const dcDep = dcCapexHist.slice(-usefulLife).reduce((a,b)=>a+b,0) / usefulLife;
+    const officeServerDep = officeServerHist.slice(-Math.max(1, Math.round(INFRA_DATA.office_server_life_years || 5))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.office_server_life_years || 5));
+    const employeeLaptopsDep = employeeLaptopsHist.slice(-Math.max(1, Math.round(INFRA_DATA.employee_laptops_life_years || 3))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.employee_laptops_life_years || 3));
+    const executiveLaptopsDep = executiveLaptopsHist.slice(-Math.max(1, Math.round(INFRA_DATA.executive_laptops_life_years || 3))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.executive_laptops_life_years || 3));
+    const mfuDep = mfuHist.slice(-Math.max(1, Math.round(INFRA_DATA.mfu_life_years || 5))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.mfu_life_years || 5));
+    const meetingRoomsDep = meetingRoomsHist.slice(-Math.max(1, Math.round(INFRA_DATA.meeting_rooms_life_years || 5))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.meeting_rooms_life_years || 5));
+    const officeFurnitureDep = officeFurnitureHist.slice(-Math.max(1, Math.round(INFRA_DATA.office_furniture_life_years || 7))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.office_furniture_life_years || 7));
+    const officeCapexDep = officeServerDep + employeeLaptopsDep + executiveLaptopsDep + mfuDep + meetingRoomsDep + officeFurnitureDep;
+    const depreciation = gpuDep + dcDep + officeCapexDep;
 
     const gpuBOY = prevOwned;
     const gpuEOY = ownedGpu;
@@ -1030,7 +1237,9 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
     rows.push({{
       year, selectedScenario, constructionStartYear, constructionFlag,
       requiredGpu, ownedGpu, rentedGpu, ownedInc,
-      gpuCapex, gpuInfraCapex, dcConstructionCapex, totalCapex, depreciation,
+      gpuCapex, gpuInfraCapex, dcConstructionCapex,
+      officeServerCapex, employeeLaptopsCapex, executiveLaptopsCapex, mfuCapex, meetingRoomsCapex, officeFurnitureCapex, totalOfficeCapex, officeCapexDep,
+      totalCapex, depreciation,
       totalDcOpex, teamOpex, gpuRentalOpex, totalOpex,
       revenue, cogs, grossProfit, grossMargin
     }});
@@ -1075,8 +1284,19 @@ function renderInfraTables() {{
     metricRow('gpu_capex', vals('gpuCapex')),
     metricRow('gpu_infra_capex', vals('gpuInfraCapex')),
     metricRow('datacenter_construction_capex', vals('dcConstructionCapex')),
+    metricRow('total_office_capex', vals('totalOfficeCapex')),
     metricRow('total_capex', vals('totalCapex')),
     metricRow('annual_depreciation', vals('depreciation')),
+  ].join(''));
+  html += infraBlock('Office CAPEX', [
+    metricRow('office_server_capex', vals('officeServerCapex')),
+    metricRow('employee_laptops_capex', vals('employeeLaptopsCapex')),
+    metricRow('executive_laptops_capex', vals('executiveLaptopsCapex')),
+    metricRow('mfu_capex', vals('mfuCapex')),
+    metricRow('meeting_rooms_capex', vals('meetingRoomsCapex')),
+    metricRow('office_furniture_capex', vals('officeFurnitureCapex')),
+    metricRow('total_office_capex', vals('totalOfficeCapex')),
+    metricRow('office_capex_depreciation', vals('officeCapexDep')),
   ].join(''));
   html += infraBlock('Datacenter OPEX', [metricRow('total_datacenter_opex', vals('totalDcOpex'))].join(''));
   html += infraBlock('GPU Rental OPEX', [metricRow('annual_gpu_rental_cost', vals('gpuRentalOpex'))].join(''));
@@ -1087,6 +1307,8 @@ function renderInfraTables() {{
     metricRow('total_opex', vals('totalOpex')),
   ].join(''));
   html += infraBlock('Summary', [
+    metricRow('total_capex', vals('totalCapex')),
+    metricRow('annual_depreciation', vals('depreciation')),
     metricRow('revenue', vals('revenue')),
     metricRow('cogs', vals('cogs')),
     metricRow('gross_profit', vals('grossProfit')),
