@@ -133,6 +133,24 @@ def driver_value(drivers: dict[str, Any], field_name: str) -> float | None:
     return as_float(raw)
 
 
+def inflation_index_map(inflation_growth_by_year: dict[int, float], years: list[int]) -> dict[int, float]:
+    """Build inflation index with base year index=1.0 and chained annual growth."""
+    index: dict[int, float] = {}
+    prev_index = 1.0
+    for i, year in enumerate(years):
+        if i == 0:
+            idx = 1.0
+        else:
+            growth = as_float(inflation_growth_by_year.get(year))
+            if growth is None:
+                print(f"WARNING: отсутствует rub_inflation для {year}; используется 0.0.", file=sys.stderr)
+                growth = 0.0
+            idx = prev_index * (1.0 + float(growth))
+        index[year] = idx
+        prev_index = idx
+    return index
+
+
 def fmt_num(value: float | int | None, digits: int = 2) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "NaN"
@@ -219,10 +237,14 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
             "annual_team_opex",
         ],
     ),
+    ("SG&A", ["annual_fixed_sga", "required_office_area_sqm", "annual_office_rent", "total_sga"]),
     ("GPU Rental OPEX", ["rental_price_per_gpu_per_year", "annual_gpu_rental_cost"]),
     ("Total OPEX", ["total_datacenter_opex", "annual_team_opex", "annual_gpu_rental_cost", "total_opex"]),
     ("Revenue", ["revenue", "cogs", "gross_profit", "gross_margin"]),
-    ("Summary", ["workplace_token_share", "contact_center_token_share", "required_gpu", "total_capex", "annual_depreciation", "total_opex"]),
+    (
+        "Summary",
+        ["workplace_token_share", "contact_center_token_share", "required_gpu", "total_capex", "annual_depreciation", "total_opex", "total_sga", "ebitda"],
+    ),
 ]
 SCENARIO_ORDER = ["conservative", "base", "aggressive"]
 SCENARIO_MULTIPLIERS = {"conservative": 0.85, "base": 1.0, "aggressive": 1.2}
@@ -271,6 +293,7 @@ def build_revenue_scenario_blocks(rows: list[dict[str, Any]], years: list[int]) 
             r = by_year[y]
             tokens = as_float(r.get("total_annual_tokens")) or 0.0
             total_opex = as_float(r.get("total_opex"))
+            total_sga = as_float(r.get("total_sga"))
             # Revenue base is derived deterministically from token volume.
             base_revenue = tokens * 0.002
             revenue = base_revenue * mult
@@ -278,7 +301,11 @@ def build_revenue_scenario_blocks(rows: list[dict[str, Any]], years: list[int]) 
             gross_profit = revenue - cogs
             gross_margin = gross_profit / revenue if revenue else float("nan")
             revenue_per_1m_tokens = revenue / (tokens / 1_000_000) if tokens else float("nan")
-            ebitda = float("nan") if total_opex is None or math.isnan(total_opex) else revenue - total_opex
+            ebitda = (
+                float("nan")
+                if total_opex is None or math.isnan(total_opex) or total_sga is None or math.isnan(total_sga)
+                else revenue - total_opex - total_sga
+            )
             scenario_rows.append(
                 {
                     "year": y,
@@ -290,6 +317,7 @@ def build_revenue_scenario_blocks(rows: list[dict[str, Any]], years: list[int]) 
                     "annual_team_opex": r.get("annual_team_opex"),
                     "total_datacenter_opex": r.get("total_datacenter_opex"),
                     "total_opex": total_opex,
+                    "total_sga": total_sga,
                     "ebitda": ebitda,
                     "ebitda_margin": ebitda / revenue if revenue and not math.isnan(ebitda) else float("nan"),
                 }
@@ -305,7 +333,7 @@ def build_revenue_scenario_blocks(rows: list[dict[str, Any]], years: list[int]) 
                 "title": "P&L / Summary",
                 "rows": to_wide_rows(
                     scenario_rows,
-                    ["revenue", "total_datacenter_opex", "annual_team_opex", "total_opex", "ebitda"],
+                    ["revenue", "total_datacenter_opex", "annual_team_opex", "total_opex", "total_sga", "ebitda"],
                     years,
                 ),
             },
@@ -371,6 +399,10 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     team = ass.get("team", opex_root.get("team", {}))
     sga = ass.get("sga", {})
     drivers = datacenter.get("drivers", {}) if isinstance(datacenter.get("drivers"), dict) else {}
+    inflation = ass.get("inflation_assumptions", {}) if isinstance(ass.get("inflation_assumptions"), dict) else {}
+    inflation_rub = inflation.get("rub_inflation", {}) if isinstance(inflation.get("rub_inflation"), dict) else {}
+    inflation_growth_by_year = to_year_map(inflation_rub.get("annual_growth"))
+    inflation_index_by_year = inflation_index_map(inflation_growth_by_year, years)
 
     wp_usage = usage["Workplace.ai"]
     cc_usage = usage["Contact_Center.ai"]
@@ -507,6 +539,19 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 break
         if isinstance(sga.get("hiring_plan_monthly"), (dict, list, tuple, int, float)):
             sga_hiring_plan_cfg = sga.get("hiring_plan_monthly")
+    sga_monthly_cost_base = sum(flatten_role_values(sga.get("monthly_cost_base_2026", {})).values()) if isinstance(sga, dict) else 0.0
+    if sga_monthly_cost_base == 0.0:
+        print("WARNING: sga.monthly_cost_base_2026 отсутствует или равен 0.", file=sys.stderr)
+    office_rent_cfg = sga.get("office_rent", {}) if isinstance(sga.get("office_rent"), dict) else {}
+    office_rent_drivers = office_rent_cfg.get("drivers", {}) if isinstance(office_rent_cfg.get("drivers"), dict) else {}
+    sqm_per_fte = warn_if_missing(
+        year_value(office_rent_drivers.get("sqm_per_fte"), years[0]),
+        "sga.office_rent.drivers.sqm_per_fte.value",
+    )
+    rent_base_2026 = warn_if_missing(
+        year_value(office_rent_drivers.get("rent_rub_per_sqm_per_month_base_2026"), years[0]),
+        "sga.office_rent.drivers.rent_rub_per_sqm_per_month_base_2026.value",
+    )
 
     seconds_per_year = working_days * working_hours * 3600.0
     if seconds_per_year <= 0:
@@ -769,6 +814,14 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             sga_monthly_fte = 0.0
 
         total_fte = safe_add(monthly_fte, sga_monthly_fte)
+        inflation_index_t = inflation_index_by_year.get(year, float("nan"))
+        monthly_cost_t = safe_mul(sga_monthly_cost_base, inflation_index_t)
+        annual_fixed_sga = safe_mul(monthly_cost_t, 12.0)
+        required_office_area_sqm = safe_mul(total_fte, sqm_per_fte)
+        rent_rub_per_sqm_per_month_t = safe_mul(rent_base_2026, inflation_index_t)
+        monthly_office_rent = safe_mul(required_office_area_sqm, rent_rub_per_sqm_per_month_t)
+        annual_office_rent = safe_mul(monthly_office_rent, 12.0)
+        total_sga = safe_add(annual_fixed_sga, annual_office_rent)
         is_office_capex_purchase_year = year == years[0]
         office_server_capex = safe_mul(office_server_qty, office_server_unit_cost) if is_office_capex_purchase_year else 0.0
         employee_laptops_capex = safe_mul(total_fte, employee_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
@@ -835,6 +888,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         cogs = base_revenue * 0.35
         gross_profit = base_revenue - cogs
         gross_margin = gross_profit / base_revenue if base_revenue else float("nan")
+        ebitda = base_revenue - total_opex - total_sga if not any(math.isnan(v) for v in [base_revenue, total_opex, total_sga]) else float("nan")
 
         rows.append(
             {
@@ -888,11 +942,19 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "sga_monthly_fte": sga_monthly_fte,
                 "total_fte": total_fte,
                 "annual_team_opex": annual_team_opex,
+                "inflation_index_t": inflation_index_t,
+                "annual_fixed_sga": annual_fixed_sga,
+                "required_office_area_sqm": required_office_area_sqm,
+                "rent_rub_per_sqm_per_month_t": rent_rub_per_sqm_per_month_t,
+                "monthly_office_rent": monthly_office_rent,
+                "annual_office_rent": annual_office_rent,
+                "total_sga": total_sga,
                 "total_opex": total_opex,
                 "revenue": base_revenue,
                 "cogs": cogs,
                 "gross_profit": gross_profit,
                 "gross_margin": gross_margin,
+                "ebitda": ebitda,
             }
         )
 
@@ -936,6 +998,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         "Datacenter OPEX",
         "GPU Rental OPEX",
         "Total OPEX",
+        "SG&A",
         "Summary",
     }
 
@@ -974,6 +1037,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     token_by_year = {str(r["year"]): float(as_float(r.get("total_annual_tokens")) or 0.0) for r in rows}
     monthly_fte_by_year = {str(r["year"]): float(as_float(r.get("monthly_fte")) or 0.0) for r in rows}
     sga_fte_by_year = {str(r["year"]): float(as_float(r.get("sga_monthly_fte")) or 0.0) for r in rows}
+    total_sga_by_year = {str(r["year"]): float(as_float(r.get("total_sga")) or 0.0) for r in rows}
 
     capex_cfg = assumptions.get("capex", {}) if isinstance(assumptions.get("capex"), dict) else {}
     strategy_cfg = capex_cfg.get("strategy_scenarios", {}) if isinstance(capex_cfg.get("strategy_scenarios"), dict) else {}
@@ -984,6 +1048,11 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     fx_cfg = assumptions.get("fx_assumptions", {}).get("usd_rub", {}) if isinstance(assumptions.get("fx_assumptions"), dict) else {}
     gpu_rental_cfg = assumptions.get("opex", {}).get("gpu_rental", {}) if isinstance(assumptions.get("opex"), dict) else {}
     office_capex_cfg = capex_cfg.get("office_capex", {}) if isinstance(capex_cfg.get("office_capex"), dict) else {}
+    sga_cfg = assumptions.get("sga", {}) if isinstance(assumptions.get("sga"), dict) else {}
+    sga_office_cfg = sga_cfg.get("office_rent", {}) if isinstance(sga_cfg.get("office_rent"), dict) else {}
+    sga_office_drivers = sga_office_cfg.get("drivers", {}) if isinstance(sga_office_cfg.get("drivers"), dict) else {}
+    inflation_cfg = assumptions.get("inflation_assumptions", {}) if isinstance(assumptions.get("inflation_assumptions"), dict) else {}
+    rub_inflation_cfg = inflation_cfg.get("rub_inflation", {}) if isinstance(inflation_cfg.get("rub_inflation"), dict) else {}
 
     infra_payload = {
         "active_scenario": strategy_cfg.get("active_scenario", "build_own_dc"),
@@ -994,6 +1063,11 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         "tokens": token_by_year,
         "monthly_fte": monthly_fte_by_year,
         "sga_monthly_fte": sga_fte_by_year,
+        "total_sga": total_sga_by_year,
+        "sga_monthly_cost_base_2026": sum(flatten_role_values(sga_cfg.get("monthly_cost_base_2026", {})).values()),
+        "office_sqm_per_fte": year_value(sga_office_drivers.get("sqm_per_fte"), years[0], 0),
+        "office_rent_base_2026": year_value(sga_office_drivers.get("rent_rub_per_sqm_per_month_base_2026"), years[0], 0),
+        "rub_inflation_growth": to_year_map(rub_inflation_cfg.get("annual_growth")),
         "unit_cost": as_float(capex_cfg.get("gpu", {}).get("unit_cost")),
         "infra_multiplier": as_float(capex_cfg.get("infra_multiplier", {}).get("value")),
         "useful_life_years": int(capex_cfg.get("depreciation", {}).get("useful_life_years", 5)),
@@ -1046,7 +1120,8 @@ thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;p
 <li>required_gpu_increment = max(required_gpu_t - required_gpu_(t-1), 0), для 2026 = required_gpu</li>
 <li>Datacenter OPEX: electricity + maintenance + network + land + other</li>
 <li>Team OPEX: monthly_fte × (gross + bonus + social) × 12</li>
-<li>Total OPEX = total_datacenter_opex + annual_team_opex</li>
+<li>Total SG&A = annual_fixed_sga + annual_office_rent</li>
+<li>EBITDA = revenue - total_opex - total_sga</li>
 </ul></div>
 <div class=\"note\">
   <label for=\"scenarioSelect\"><b>Revenue scenario:</b></label>
@@ -1134,6 +1209,7 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
   let prevOwned = 0;
   let prevFx = null;
   let prevElPrice = null;
+  let prevInflationIdx = 1.0;
 
   YEARS.forEach((year, idx) => {{
     const requiredGpu = yrVal(INFRA_DATA.required_gpu, year, 0);
@@ -1228,11 +1304,20 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
 
     const gpuRentalOpex = rentedGpu * (INFRA_DATA.rental_price_per_gpu_per_year || 0);
     const teamOpex = yrVal(INFRA_DATA.team_opex, year, 0);
+    const inflationGrowth = idx === 0 ? 0 : yrVal(INFRA_DATA.rub_inflation_growth, year, 0);
+    const inflationIndex = idx === 0 ? 1.0 : prevInflationIdx * (1 + inflationGrowth);
+    prevInflationIdx = inflationIndex;
+    const annualFixedSga = (INFRA_DATA.sga_monthly_cost_base_2026 || 0) * inflationIndex * 12;
+    const requiredOfficeArea = totalFte * (INFRA_DATA.office_sqm_per_fte || 0);
+    const officeRentPerSqm = (INFRA_DATA.office_rent_base_2026 || 0) * inflationIndex;
+    const annualOfficeRent = requiredOfficeArea * officeRentPerSqm * 12;
+    const totalSga = annualFixedSga + annualOfficeRent;
     const totalOpex = totalDcOpex + teamOpex + gpuRentalOpex;
     const revenue = yrVal(INFRA_DATA.tokens, year, 0) * 0.002;
     const cogs = revenue * 0.35;
     const grossProfit = revenue - cogs;
     const grossMargin = revenue ? grossProfit / revenue : NaN;
+    const ebitda = revenue - totalOpex - totalSga;
 
     rows.push({{
       year, selectedScenario, constructionStartYear, constructionFlag,
@@ -1241,7 +1326,8 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
       officeServerCapex, employeeLaptopsCapex, executiveLaptopsCapex, mfuCapex, meetingRoomsCapex, officeFurnitureCapex, totalOfficeCapex, officeCapexDep,
       totalCapex, depreciation,
       totalDcOpex, teamOpex, gpuRentalOpex, totalOpex,
-      revenue, cogs, grossProfit, grossMargin
+      annualFixedSga, requiredOfficeArea, annualOfficeRent, totalSga,
+      revenue, cogs, grossProfit, grossMargin, ebitda
     }});
     prevOwned = ownedGpu;
   }});
@@ -1306,6 +1392,12 @@ function renderInfraTables() {{
     metricRow('annual_gpu_rental_cost', vals('gpuRentalOpex')),
     metricRow('total_opex', vals('totalOpex')),
   ].join(''));
+  html += infraBlock('SG&A', [
+    metricRow('annual_fixed_sga', vals('annualFixedSga')),
+    metricRow('required_office_area_sqm', vals('requiredOfficeArea')),
+    metricRow('annual_office_rent', vals('annualOfficeRent')),
+    metricRow('total_sga', vals('totalSga')),
+  ].join(''));
   html += infraBlock('Summary', [
     metricRow('total_capex', vals('totalCapex')),
     metricRow('annual_depreciation', vals('depreciation')),
@@ -1314,6 +1406,8 @@ function renderInfraTables() {{
     metricRow('gross_profit', vals('grossProfit')),
     metricRow('gross_margin', vals('grossMargin'), false, true),
     metricRow('total_opex', vals('totalOpex')),
+    metricRow('total_sga', vals('totalSga')),
+    metricRow('ebitda', vals('ebitda')),
   ].join(''));
   infraContainer.innerHTML = html;
 }}
