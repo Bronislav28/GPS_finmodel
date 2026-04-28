@@ -149,6 +149,18 @@ def fmt_ratio(value: float | None) -> str:
 
 DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
     (
+        "Infrastructure Scenario",
+        [
+            "active_scenario",
+            "construction_start_year",
+            "construction_flag",
+            "required_gpu",
+            "owned_gpu",
+            "rented_gpu",
+            "owned_gpu_increment",
+        ],
+    ),
+    (
         "Token Load",
         [
             "active_users",
@@ -161,8 +173,8 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
             "total_annual_tokens",
         ],
     ),
-    ("GPU Calculation", ["weighted_throughput", "tokens_per_second", "required_gpu", "required_gpu_increment"]),
-    ("CAPEX", ["gpu_capex", "total_capex", "annual_depreciation"]),
+    ("GPU Calculation", ["weighted_throughput", "tokens_per_second", "required_gpu"]),
+    ("CAPEX", ["gpu_capex", "gpu_infra_capex", "datacenter_construction_capex", "total_capex", "annual_depreciation"]),
     (
         "Datacenter OPEX",
         [
@@ -194,7 +206,9 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
             "annual_team_opex",
         ],
     ),
-    ("Total OPEX", ["total_datacenter_opex", "annual_team_opex", "total_opex"]),
+    ("GPU Rental OPEX", ["rental_price_per_gpu_per_year", "annual_gpu_rental_cost"]),
+    ("Total OPEX", ["total_datacenter_opex", "annual_team_opex", "annual_gpu_rental_cost", "total_opex"]),
+    ("Revenue", ["revenue", "cogs", "gross_profit", "gross_margin"]),
     ("Summary", ["workplace_token_share", "contact_center_token_share", "required_gpu", "total_capex", "total_opex"]),
 ]
 SCENARIO_ORDER = ["conservative", "base", "aggressive"]
@@ -435,26 +449,43 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     if seconds_per_year <= 0:
         raise ValueError("working_days_per_year * working_hours_per_day * 3600 должно быть > 0")
 
-    rows: list[dict[str, Any]] = []
-    prev_required_gpu = 0
-    total_capex_history: list[float] = []
-    prev_electricity_price: float | None = None
-    salary_growth_factor = 1.0
-    warned_missing_salary: set[tuple[str, ...]] = set()
+    scenario_cfg = capex.get("strategy_scenarios", {})
+    scenario_name = scenario_cfg.get("active_scenario")
+    scenarios = scenario_cfg.get("scenarios", {}) if isinstance(scenario_cfg.get("scenarios"), dict) else {}
+    if scenario_name not in scenarios:
+        print(
+            f"WARNING: capex.strategy_scenarios.active_scenario='{scenario_name}' не найден; используется build_own_dc.",
+            file=sys.stderr,
+        )
+        scenario_name = "build_own_dc"
+    active_scenario = scenarios.get(scenario_name, {}) if isinstance(scenarios.get(scenario_name), dict) else {}
+    construction_start_year = active_scenario.get("construction_start_year")
+    construction_flag_map = to_year_map(active_scenario.get("construction_flag"))
 
+    fx_cfg = ass.get("fx_assumptions", {}).get("usd_rub", {}) if isinstance(ass.get("fx_assumptions"), dict) else {}
+    fx_base_value = warn_if_missing(as_float(fx_cfg.get("base_value")), "fx_assumptions.usd_rub.base_value")
+    fx_growth_map = to_year_map(fx_cfg.get("annual_growth"))
+    dc_build = capex.get("datacenter_construction", {})
+    benchmark_capacity_mw = warn_if_missing(as_float(dc_build.get("benchmark_capacity_mw")), "capex.datacenter_construction.benchmark_capacity_mw")
+    benchmark_components = dc_build.get("benchmark_components_3mw_usd_mln", {})
+    component_total_3mw = warn_if_missing(as_float(benchmark_components.get("total")), "capex.datacenter_construction.benchmark_components_3mw_usd_mln.total")
+
+    rental_price_per_gpu_per_year = warn_if_missing(
+        year_value(opex_root.get("gpu_rental", {}).get("rental_price_per_gpu_per_year"), years[0]),
+        "opex.gpu_rental.rental_price_per_gpu_per_year.value",
+    )
+
+    base_rows: list[dict[str, Any]] = []
+    prev_required_gpu = 0
     for year in years:
-        # Token Load
         active_users = safe_mul(as_float(wp_usage.get("total_employees")), as_float(wp_activation.get(year)))
         wp_daily_tokens = safe_mul(active_users, as_float(wp_tokens_per_user.get(year)))
         wp_annual_tokens = safe_mul(wp_daily_tokens, working_days)
-
         automated_interactions = safe_mul(as_float(cc_usage.get("interactions_per_day")), as_float(cc_automation.get(year)))
         cc_daily_tokens = safe_mul(automated_interactions, as_float(cc_usage.get("tokens_per_interaction")))
         cc_annual_tokens = safe_mul(cc_daily_tokens, calendar_days)
-
         total_daily_tokens = safe_add(wp_daily_tokens, cc_daily_tokens)
         total_annual_tokens = safe_add(wp_annual_tokens, cc_annual_tokens)
-
         if is_nan(total_annual_tokens) or total_annual_tokens == 0:
             wp_share = float("nan")
             cc_share = float("nan")
@@ -462,64 +493,138 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             wp_share = float(wp_annual_tokens) / float(total_annual_tokens)
             cc_share = float(cc_annual_tokens) / float(total_annual_tokens)
 
-        # GPU
         mix = {model: float(share) for model, share in model_mix_by_year[year].items()}
         weighted_tp = harmonic_weighted_throughput(mix, throughput)
-
         utilization = as_float(util_by_year.get(year))
         if is_nan(utilization) or float(utilization) <= 0:
             raise ValueError(f"compute_model.infra.utilization[{year}] должен быть > 0")
-
         tokens_per_second = float(total_annual_tokens) / seconds_per_year
         required_gpu_raw = tokens_per_second / (weighted_tp * float(utilization)) * peak_factor
         required_gpu = int(math.ceil(required_gpu_raw))
+        required_gpu_increment = required_gpu if year == years[0] else max(required_gpu - prev_required_gpu, 0)
+        base_rows.append(
+            {
+                "year": year,
+                "active_users": active_users,
+                "workplace_daily_tokens": wp_daily_tokens,
+                "workplace_annual_tokens": wp_annual_tokens,
+                "automated_interactions": automated_interactions,
+                "contact_center_daily_tokens": cc_daily_tokens,
+                "contact_center_annual_tokens": cc_annual_tokens,
+                "total_daily_tokens": total_daily_tokens,
+                "total_annual_tokens": total_annual_tokens,
+                "workplace_token_share": wp_share,
+                "contact_center_token_share": cc_share,
+                "weighted_throughput": weighted_tp,
+                "tokens_per_second": tokens_per_second,
+                "required_gpu": required_gpu,
+                "required_gpu_increment": required_gpu_increment,
+            }
+        )
+        prev_required_gpu = required_gpu
 
-        if year == years[0]:
-            required_gpu_increment = required_gpu
+    peak_required_gpu = max((int(r["required_gpu"]) for r in base_rows), default=0)
+    target_capacity_mw = float("nan")
+    if gpu_power_kw is not None and pue is not None:
+        it_peak_mw = peak_required_gpu * gpu_power_kw / 1000
+        total_peak_mw = it_peak_mw * pue
+        target_capacity_mw = float(math.ceil(total_peak_mw))
+
+    rows: list[dict[str, Any]] = []
+    total_capex_history: list[float] = []
+    prev_electricity_price: float | None = None
+    prev_fx: float | None = None
+    prev_owned_gpu = 0
+    salary_growth_factor = 1.0
+    warned_missing_salary: set[tuple[str, ...]] = set()
+
+    for base in base_rows:
+        year = int(base["year"])
+        required_gpu = int(base["required_gpu"])
+
+        if scenario_name == "build_own_dc":
+            owned_gpu, rented_gpu = required_gpu, 0
+        elif scenario_name == "rent_gpu_only":
+            owned_gpu, rented_gpu = 0, required_gpu
+        elif scenario_name == "hybrid":
+            if construction_start_year is None:
+                owned_gpu, rented_gpu = 0, required_gpu
+            elif year < int(construction_start_year):
+                owned_gpu, rented_gpu = 0, required_gpu
+            else:
+                owned_gpu, rented_gpu = required_gpu, 0
         else:
-            required_gpu_increment = max(required_gpu - prev_required_gpu, 0)
+            owned_gpu, rented_gpu = required_gpu, 0
 
-        # CAPEX
-        if gpu_unit_cost is None or infra_multiplier is None:
+        owned_gpu_increment = owned_gpu if year == years[0] else max(owned_gpu - prev_owned_gpu, 0)
+        construction_flag = int(as_float(construction_flag_map.get(year)) or 0)
+
+        if fx_base_value is None:
+            fx_usd_rub_t = float("nan")
+        elif year == years[0]:
+            fx_usd_rub_t = fx_base_value
+        else:
+            growth_t = as_float(fx_growth_map.get(year, 0.0))
+            fx_usd_rub_t = float("nan") if prev_fx is None or growth_t is None else prev_fx * (1 + growth_t)
+        prev_fx = fx_usd_rub_t
+
+        if benchmark_capacity_mw in (None, 0) or component_total_3mw is None or math.isnan(target_capacity_mw):
+            datacenter_construction_capex = float("nan")
+        else:
+            total_component_usd_mln = component_total_3mw * target_capacity_mw / benchmark_capacity_mw
+            total_component_rub = total_component_usd_mln * 1_000_000 * fx_usd_rub_t
+            datacenter_construction_capex = total_component_rub * construction_flag
+
+        if gpu_unit_cost is None:
             gpu_capex = float("nan")
-            total_capex = float("nan")
         else:
-            gpu_capex = required_gpu_increment * gpu_unit_cost
-            total_capex = gpu_capex * infra_multiplier
+            gpu_capex = owned_gpu_increment * gpu_unit_cost
+        gpu_infra_capex = safe_mul(gpu_capex, infra_multiplier)
+        total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex)
 
         total_capex_history.append(total_capex)
         window = total_capex_history[-useful_life:]
         annual_depreciation = float("nan") if any(math.isnan(v) for v in window) else sum(window) / useful_life
 
-        # Datacenter OPEX
-        gpu_beginning_of_year = float(prev_required_gpu)
-        gpu_end_of_year = float(required_gpu)
+        # Datacenter OPEX (owned infra only)
+        gpu_beginning_of_year = float(prev_owned_gpu)
+        gpu_end_of_year = float(owned_gpu)
         average_gpu = (gpu_beginning_of_year + gpu_end_of_year) / 2.0
-
         it_load_mw = safe_mul(average_gpu, gpu_power_kw, 1 / 1000)
         total_load_mw = safe_mul(it_load_mw, pue)
         electricity_kwh = safe_mul(total_load_mw, 1000, operating_hours_per_day, calendar_days)
 
-        if base_price_per_kwh is None:
-            electricity_price_t = float("nan")
-        elif year == years[0]:
-            electricity_price_t = base_price_per_kwh
+        if owned_gpu <= 0:
+            electricity_price_t = 0.0 if prev_electricity_price is None else prev_electricity_price
+            electricity_cost = 0.0
+            maintenance_cost = 0.0
+            network_cost = 0.0
+            land_rent = 0.0
+            datacenter_opex = 0.0
+            other_opex = 0.0
+            total_datacenter_opex = 0.0
         else:
-            growth_t = as_float(annual_growth_map.get(year, 0.0))
-            if prev_electricity_price is None or is_nan(prev_electricity_price) or growth_t is None:
+            if base_price_per_kwh is None:
                 electricity_price_t = float("nan")
+            elif year == years[0]:
+                electricity_price_t = base_price_per_kwh
             else:
-                electricity_price_t = prev_electricity_price * (1 + growth_t)
+                growth_t = as_float(annual_growth_map.get(year, 0.0))
+                if prev_electricity_price is None or is_nan(prev_electricity_price) or growth_t is None:
+                    electricity_price_t = float("nan")
+                else:
+                    electricity_price_t = prev_electricity_price * (1 + growth_t)
+
+            electricity_cost = safe_mul(electricity_kwh, electricity_price_t)
+            maintenance_cost = safe_mul(total_capex, maintenance_pct)
+            network_cost = safe_mul(total_load_mw, network_cost_per_mw)
+            land_rent = safe_mul(total_load_mw, land_rent_per_mw)
+            datacenter_opex = safe_add(electricity_cost, maintenance_cost, network_cost, land_rent)
+            other_opex = safe_mul(datacenter_opex, other_opex_percent)
+            total_datacenter_opex = safe_add(datacenter_opex, other_opex)
         prev_electricity_price = electricity_price_t
 
-        electricity_cost = safe_mul(electricity_kwh, electricity_price_t)
-        maintenance_cost = safe_mul(total_capex, maintenance_pct)
-        network_cost = safe_mul(total_load_mw, network_cost_per_mw)
-        land_rent = safe_mul(total_load_mw, land_rent_per_mw)
-
-        datacenter_opex = safe_add(electricity_cost, maintenance_cost, network_cost, land_rent)
-        other_opex = safe_mul(datacenter_opex, other_opex_percent)
-        total_datacenter_opex = safe_add(datacenter_opex, other_opex)
+        annual_gpu_rental_cost = safe_mul(rented_gpu, rental_price_per_gpu_per_year)
 
         # Team OPEX
         role_target_fte = flatten_role_values(target_fte_cfg)
@@ -585,27 +690,27 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             monthly_social = 0.0
             monthly_cost_per_fte = 0.0
 
-        total_opex = safe_add(total_datacenter_opex, annual_team_opex)
+        total_opex = safe_add(total_datacenter_opex, annual_team_opex, annual_gpu_rental_cost)
+        base_revenue = (as_float(base.get("total_annual_tokens")) or 0.0) * 0.002
+        cogs = base_revenue * 0.35
+        gross_profit = base_revenue - cogs
+        gross_margin = gross_profit / base_revenue if base_revenue else float("nan")
 
         rows.append(
             {
-                "year": year,
-                "active_users": active_users,
-                "workplace_daily_tokens": wp_daily_tokens,
-                "workplace_annual_tokens": wp_annual_tokens,
-                "automated_interactions": automated_interactions,
-                "contact_center_daily_tokens": cc_daily_tokens,
-                "contact_center_annual_tokens": cc_annual_tokens,
-                "total_daily_tokens": total_daily_tokens,
-                "total_annual_tokens": total_annual_tokens,
-                "workplace_token_share": wp_share,
-                "contact_center_token_share": cc_share,
-                "weighted_throughput": weighted_tp,
-                "tokens_per_second": tokens_per_second,
-                "required_gpu": required_gpu,
-                "required_gpu_increment": required_gpu_increment,
+                **base,
+                "active_scenario": scenario_name,
+                "construction_start_year": construction_start_year,
+                "construction_flag": construction_flag,
+                "owned_gpu": owned_gpu,
+                "rented_gpu": rented_gpu,
+                "owned_gpu_increment": owned_gpu_increment,
+                "target_capacity_mw": target_capacity_mw,
                 "gpu_capex": gpu_capex,
+                "gpu_infra_capex": gpu_infra_capex,
+                "datacenter_construction_capex": datacenter_construction_capex,
                 "total_capex": total_capex,
+                "depreciable_base": safe_add(gpu_infra_capex, datacenter_construction_capex),
                 "annual_depreciation": annual_depreciation,
                 "gpu_beginning_of_year": gpu_beginning_of_year,
                 "gpu_end_of_year": gpu_end_of_year,
@@ -621,6 +726,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "datacenter_opex": datacenter_opex,
                 "other_opex": other_opex,
                 "total_datacenter_opex": total_datacenter_opex,
+                "rental_price_per_gpu_per_year": rental_price_per_gpu_per_year,
+                "annual_gpu_rental_cost": annual_gpu_rental_cost,
                 "monthly_fte": monthly_fte,
                 "monthly_gross": monthly_gross,
                 "monthly_bonus": monthly_bonus,
@@ -629,10 +736,14 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "monthly_team_cost": monthly_team_cost,
                 "annual_team_opex": annual_team_opex,
                 "total_opex": total_opex,
+                "revenue": base_revenue,
+                "cogs": cogs,
+                "gross_profit": gross_profit,
+                "gross_margin": gross_margin,
             }
         )
 
-        prev_required_gpu = required_gpu
+        prev_owned_gpu = owned_gpu
 
     return rows
 
@@ -661,21 +772,35 @@ def write_csv(rows: list[dict[str, Any]], output: Path) -> None:
                     writer.writerow(out)
 
 
-def build_html(rows: list[dict[str, Any]]) -> str:
+def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     years = [int(r["year"]) for r in rows]
     blocks = build_report_blocks(rows, years)
     scenario_blocks = build_revenue_scenario_blocks(rows, years)
+    interactive_titles = {
+        "Infrastructure Scenario",
+        "CAPEX",
+        "Datacenter OPEX",
+        "GPU Rental OPEX",
+        "Total OPEX",
+        "Summary",
+    }
 
     def format_cell(metric: str, value: Any) -> str:
+        if isinstance(value, str):
+            return value
         val = as_float(value)
+        if val is None and value is not None:
+            return str(value)
         if metric.endswith("_share"):
             return fmt_ratio(val)
-        if metric in {"required_gpu", "required_gpu_increment"}:
+        if metric in {"required_gpu", "required_gpu_increment", "owned_gpu", "rented_gpu", "owned_gpu_increment", "construction_flag"}:
             return fmt_num(val, 0)
         return fmt_num(val, 2)
 
     block_tables = []
     for block in blocks:
+        if block["title"] in interactive_titles:
+            continue
         body_rows = []
         for w_row in block["rows"]:
             cells = "".join(f"<td>{format_cell(w_row['Metric'], w_row[str(y)])}</td>" for y in years)
@@ -690,6 +815,46 @@ def build_html(rows: list[dict[str, Any]]) -> str:
 
     scenario_json = json.dumps(scenario_blocks, ensure_ascii=False)
     years_json = json.dumps(years)
+    required_gpu_by_year = {str(r["year"]): int(as_float(r.get("required_gpu")) or 0) for r in rows}
+    team_opex_by_year = {str(r["year"]): float(as_float(r.get("annual_team_opex")) or 0.0) for r in rows}
+    token_by_year = {str(r["year"]): float(as_float(r.get("total_annual_tokens")) or 0.0) for r in rows}
+
+    capex_cfg = assumptions.get("capex", {}) if isinstance(assumptions.get("capex"), dict) else {}
+    strategy_cfg = capex_cfg.get("strategy_scenarios", {}) if isinstance(capex_cfg.get("strategy_scenarios"), dict) else {}
+    scenarios_cfg = strategy_cfg.get("scenarios", {}) if isinstance(strategy_cfg.get("scenarios"), dict) else {}
+    datacenter_cfg = assumptions.get("opex", {}).get("datacenter", {}) if isinstance(assumptions.get("opex"), dict) else {}
+    drivers_cfg = datacenter_cfg.get("drivers", {}) if isinstance(datacenter_cfg.get("drivers"), dict) else {}
+    dc_build_cfg = capex_cfg.get("datacenter_construction", {}) if isinstance(capex_cfg.get("datacenter_construction"), dict) else {}
+    fx_cfg = assumptions.get("fx_assumptions", {}).get("usd_rub", {}) if isinstance(assumptions.get("fx_assumptions"), dict) else {}
+    gpu_rental_cfg = assumptions.get("opex", {}).get("gpu_rental", {}) if isinstance(assumptions.get("opex"), dict) else {}
+
+    infra_payload = {
+        "active_scenario": strategy_cfg.get("active_scenario", "build_own_dc"),
+        "hybrid_default_start_year": (scenarios_cfg.get("hybrid", {}) or {}).get("construction_start_year"),
+        "build_default_start_year": 2026,
+        "required_gpu": required_gpu_by_year,
+        "team_opex": team_opex_by_year,
+        "tokens": token_by_year,
+        "unit_cost": as_float(capex_cfg.get("gpu", {}).get("unit_cost")),
+        "infra_multiplier": as_float(capex_cfg.get("infra_multiplier", {}).get("value")),
+        "useful_life_years": int(capex_cfg.get("depreciation", {}).get("useful_life_years", 5)),
+        "gpu_power_kw": as_float((drivers_cfg.get("gpu_power_kw", {}) or {}).get("value")),
+        "pue": as_float((drivers_cfg.get("pue", {}) or {}).get("value")),
+        "operating_hours_per_day": as_float((drivers_cfg.get("operating_hours_per_day", {}) or {}).get("value")) or 24.0,
+        "calendar_days_per_year": as_float((drivers_cfg.get("calendar_days_per_year", {}) or {}).get("value")) or 365.0,
+        "electricity_base_price_per_kwh": as_float((drivers_cfg.get("electricity_price", {}) or {}).get("base_price_per_kwh")),
+        "electricity_annual_growth": to_year_map((drivers_cfg.get("electricity_price", {}) or {}).get("annual_growth")),
+        "maintenance_percent_of_capex": as_float((drivers_cfg.get("maintenance_percent_of_capex", {}) or {}).get("value")),
+        "network_cost_per_mw_per_year": as_float((drivers_cfg.get("network_cost_per_mw_per_year", {}) or {}).get("value")),
+        "land_rent_per_mw_per_year": as_float((drivers_cfg.get("land_rent_per_mw_per_year", {}) or {}).get("value")),
+        "other_opex_percent": as_float((drivers_cfg.get("other_opex_percent", {}) or {}).get("value")),
+        "benchmark_capacity_mw": as_float(dc_build_cfg.get("benchmark_capacity_mw")),
+        "benchmark_components_total_usd_mln": as_float((dc_build_cfg.get("benchmark_components_3mw_usd_mln", {}) or {}).get("total")),
+        "fx_base_value": as_float(fx_cfg.get("base_value")),
+        "fx_annual_growth": to_year_map(fx_cfg.get("annual_growth")),
+        "rental_price_per_gpu_per_year": as_float((gpu_rental_cfg.get("rental_price_per_gpu_per_year", {}) or {}).get("value")),
+    }
+    infra_json = json.dumps(infra_payload, ensure_ascii=False)
 
     return f"""<!doctype html>
 <html lang=\"ru\"><head><meta charset=\"utf-8\"><title>GPS Finmodel</title>
@@ -717,13 +882,28 @@ thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;p
     <option value=\"aggressive\">aggressive</option>
   </select>
 </div>
+<div class=\"note\">
+  <label for=\"infraScenarioSelect\"><b>Infrastructure scenario:</b></label>
+  <select id=\"infraScenarioSelect\">
+    <option value=\"build_own_dc\">build_own_dc</option>
+    <option value=\"rent_gpu_only\">rent_gpu_only</option>
+    <option value=\"hybrid\">hybrid</option>
+  </select>
+  <label for=\"constructionStartYear\" style=\"margin-left:12px;\"><b>construction_start_year:</b></label>
+  <input id=\"constructionStartYear\" type=\"number\" step=\"1\" style=\"width:90px;\" />
+</div>
 <div id=\"scenarioTables\"></div>
+<div id=\"infraTables\"></div>
 {''.join(block_tables)}
 <script>
 const SCENARIO_DATA = {scenario_json};
 const YEARS = {years_json};
+const INFRA_DATA = {infra_json};
 const container = document.getElementById('scenarioTables');
 const selector = document.getElementById('scenarioSelect');
+const infraContainer = document.getElementById('infraTables');
+const infraSelector = document.getElementById('infraScenarioSelect');
+const constructionInput = document.getElementById('constructionStartYear');
 
 function fmt(metric, value) {{
   if (value === null || Number.isNaN(value)) return 'NaN';
@@ -747,13 +927,201 @@ function renderScenarioTables(scenario) {{
 
 selector.addEventListener('change', (e) => renderScenarioTables(e.target.value));
 renderScenarioTables('base');
+
+function toNum(v) {{
+  if (v === null || v === undefined || v === '') return NaN;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+}}
+
+function yrVal(mapObj, year, fallback = 0) {{
+  const v = mapObj[String(year)];
+  const n = toNum(v);
+  return Number.isFinite(n) ? n : fallback;
+}}
+
+function calcInfraRows(selectedScenario, constructionStartYear) {{
+  const required = YEARS.map(y => yrVal(INFRA_DATA.required_gpu, y, 0));
+  const peakRequired = required.length ? Math.max(...required) : 0;
+  const itPeakMw = peakRequired * (INFRA_DATA.gpu_power_kw || 0) / 1000;
+  const totalPeakMw = itPeakMw * (INFRA_DATA.pue || 0);
+  const targetCapacityMw = Math.ceil(totalPeakMw || 0);
+
+  const rows = [];
+  const usefulLife = Math.max(1, Math.round(INFRA_DATA.useful_life_years || 5));
+  const totalCapexHist = [];
+  let prevOwned = 0;
+  let prevFx = null;
+  let prevElPrice = null;
+
+  YEARS.forEach((year, idx) => {{
+    const requiredGpu = yrVal(INFRA_DATA.required_gpu, year, 0);
+    let ownedGpu = 0;
+    let rentedGpu = 0;
+    let constructionFlag = 0;
+    if (selectedScenario === 'build_own_dc') {{
+      ownedGpu = requiredGpu;
+      rentedGpu = 0;
+      constructionFlag = year === 2026 ? 1 : 0;
+    }} else if (selectedScenario === 'rent_gpu_only') {{
+      ownedGpu = 0;
+      rentedGpu = requiredGpu;
+      constructionFlag = 0;
+    }} else {{
+      if (Number.isFinite(constructionStartYear) && year >= constructionStartYear) {{
+        ownedGpu = requiredGpu;
+        rentedGpu = 0;
+      }} else {{
+        ownedGpu = 0;
+        rentedGpu = requiredGpu;
+      }}
+      constructionFlag = (Number.isFinite(constructionStartYear) && year === constructionStartYear) ? 1 : 0;
+    }}
+    const ownedInc = idx === 0 ? ownedGpu : Math.max(ownedGpu - prevOwned, 0);
+
+    let fx = INFRA_DATA.fx_base_value;
+    if (idx > 0) {{
+      const g = yrVal(INFRA_DATA.fx_annual_growth, year, 0);
+      fx = (prevFx ?? INFRA_DATA.fx_base_value ?? 0) * (1 + g);
+    }}
+    prevFx = fx;
+
+    const gpuCapex = (selectedScenario === 'rent_gpu_only') ? 0 : ownedInc * (INFRA_DATA.unit_cost || 0);
+    const gpuInfraCapex = gpuCapex * (INFRA_DATA.infra_multiplier || 0);
+    const componentUsdMln = (INFRA_DATA.benchmark_components_total_usd_mln || 0) * targetCapacityMw / (INFRA_DATA.benchmark_capacity_mw || 1);
+    const dcConstructionCapex = (selectedScenario === 'rent_gpu_only') ? 0 : componentUsdMln * 1000000 * (fx || 0) * constructionFlag;
+    const totalCapex = gpuInfraCapex + dcConstructionCapex;
+    totalCapexHist.push(totalCapex);
+    const depWindow = totalCapexHist.slice(-usefulLife);
+    const depreciation = (selectedScenario === 'rent_gpu_only') ? 0 : depWindow.reduce((a,b)=>a+b,0) / usefulLife;
+
+    const gpuBOY = prevOwned;
+    const gpuEOY = ownedGpu;
+    const avgGpu = (gpuBOY + gpuEOY) / 2;
+    const itLoadMw = avgGpu * (INFRA_DATA.gpu_power_kw || 0) / 1000;
+    const totalLoadMw = itLoadMw * (INFRA_DATA.pue || 0);
+    const electricityKwh = totalLoadMw * 1000 * (INFRA_DATA.operating_hours_per_day || 24) * (INFRA_DATA.calendar_days_per_year || 365);
+
+    let elPrice = INFRA_DATA.electricity_base_price_per_kwh || 0;
+    if (idx > 0) {{
+      const g = yrVal(INFRA_DATA.electricity_annual_growth, year, 0);
+      elPrice = (prevElPrice ?? (INFRA_DATA.electricity_base_price_per_kwh || 0)) * (1 + g);
+    }}
+    prevElPrice = elPrice;
+
+    let totalDcOpex = 0;
+    if (ownedGpu > 0 && selectedScenario !== 'rent_gpu_only') {{
+      const electricityCost = electricityKwh * elPrice;
+      const maintenance = totalCapex * (INFRA_DATA.maintenance_percent_of_capex || 0);
+      const network = totalLoadMw * (INFRA_DATA.network_cost_per_mw_per_year || 0);
+      const land = totalLoadMw * (INFRA_DATA.land_rent_per_mw_per_year || 0);
+      const dcBase = electricityCost + maintenance + network + land;
+      totalDcOpex = dcBase + dcBase * (INFRA_DATA.other_opex_percent || 0);
+    }}
+
+    const gpuRentalOpex = rentedGpu * (INFRA_DATA.rental_price_per_gpu_per_year || 0);
+    const teamOpex = yrVal(INFRA_DATA.team_opex, year, 0);
+    const totalOpex = totalDcOpex + teamOpex + gpuRentalOpex;
+    const revenue = yrVal(INFRA_DATA.tokens, year, 0) * 0.002;
+    const cogs = revenue * 0.35;
+    const grossProfit = revenue - cogs;
+    const grossMargin = revenue ? grossProfit / revenue : NaN;
+
+    rows.push({{
+      year, selectedScenario, constructionStartYear, constructionFlag,
+      requiredGpu, ownedGpu, rentedGpu, ownedInc,
+      gpuCapex, gpuInfraCapex, dcConstructionCapex, totalCapex, depreciation,
+      totalDcOpex, teamOpex, gpuRentalOpex, totalOpex,
+      revenue, cogs, grossProfit, grossMargin
+    }});
+    prevOwned = ownedGpu;
+  }});
+  return rows;
+}}
+
+function metricRow(label, vals, isInt = false, isPct = false) {{
+  const cells = YEARS.map((_, i) => {{
+    const v = vals[i];
+    if (typeof v === 'string') return `<td>${{v}}</td>`;
+    if (isPct) return `<td>${{Number.isFinite(v) ? (v*100).toFixed(2)+'%' : 'NaN'}}</td>`;
+    if (!Number.isFinite(v)) return '<td>NaN</td>';
+    if (isInt) return `<td>${{Math.round(v).toLocaleString()}}</td>`;
+    return `<td>${{Number(v).toLocaleString(undefined, {{maximumFractionDigits:2, minimumFractionDigits:2}})}}</td>`;
+  }}).join('');
+  return `<tr><td>${{label}}</td>${{cells}}</tr>`;
+}}
+
+function infraBlock(title, rowsHtml) {{
+  const header = YEARS.map(y => `<th>${{y}}</th>`).join('');
+  return `<h2>${{title}}</h2><table><thead><tr><th>Metric</th>${{header}}</tr></thead><tbody>${{rowsHtml}}</tbody></table>`;
+}}
+
+function renderInfraTables() {{
+  const scenario = infraSelector.value;
+  const cYear = toNum(constructionInput.value);
+  const rows = calcInfraRows(scenario, cYear);
+  const vals = (k) => rows.map(r => r[k]);
+  let html = '';
+  html += infraBlock('Infrastructure Scenario', [
+    metricRow('active_scenario', vals('selectedScenario')),
+    metricRow('construction_start_year', vals('constructionStartYear'), true),
+    metricRow('construction_flag', vals('constructionFlag'), true),
+    metricRow('required_gpu', vals('requiredGpu'), true),
+    metricRow('owned_gpu', vals('ownedGpu'), true),
+    metricRow('rented_gpu', vals('rentedGpu'), true),
+    metricRow('owned_gpu_increment', vals('ownedInc'), true),
+  ].join(''));
+  html += infraBlock('CAPEX', [
+    metricRow('gpu_capex', vals('gpuCapex')),
+    metricRow('gpu_infra_capex', vals('gpuInfraCapex')),
+    metricRow('datacenter_construction_capex', vals('dcConstructionCapex')),
+    metricRow('total_capex', vals('totalCapex')),
+    metricRow('annual_depreciation', vals('depreciation')),
+  ].join(''));
+  html += infraBlock('Datacenter OPEX', [metricRow('total_datacenter_opex', vals('totalDcOpex'))].join(''));
+  html += infraBlock('GPU Rental OPEX', [metricRow('annual_gpu_rental_cost', vals('gpuRentalOpex'))].join(''));
+  html += infraBlock('Total OPEX', [
+    metricRow('total_datacenter_opex', vals('totalDcOpex')),
+    metricRow('annual_team_opex', vals('teamOpex')),
+    metricRow('annual_gpu_rental_cost', vals('gpuRentalOpex')),
+    metricRow('total_opex', vals('totalOpex')),
+  ].join(''));
+  html += infraBlock('Summary', [
+    metricRow('revenue', vals('revenue')),
+    metricRow('cogs', vals('cogs')),
+    metricRow('gross_profit', vals('grossProfit')),
+    metricRow('gross_margin', vals('grossMargin'), false, true),
+    metricRow('total_opex', vals('totalOpex')),
+  ].join(''));
+  infraContainer.innerHTML = html;
+}}
+
+function setConstructionInputState() {{
+  const scenario = infraSelector.value;
+  if (scenario === 'rent_gpu_only') {{
+    constructionInput.value = '';
+    constructionInput.disabled = true;
+  }} else if (scenario === 'build_own_dc') {{
+    constructionInput.value = INFRA_DATA.build_default_start_year;
+    constructionInput.disabled = false;
+  }} else {{
+    constructionInput.value = INFRA_DATA.hybrid_default_start_year || '';
+    constructionInput.disabled = false;
+  }}
+  renderInfraTables();
+}}
+
+infraSelector.addEventListener('change', setConstructionInputState);
+constructionInput.addEventListener('input', renderInfraTables);
+infraSelector.value = INFRA_DATA.active_scenario || 'build_own_dc';
+setConstructionInputState();
 </script>
 </body></html>"""
 
 
-def write_html(rows: list[dict[str, Any]], output: Path) -> None:
+def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(build_html(rows), encoding="utf-8")
+    output.write_text(build_html(rows, assumptions), encoding="utf-8")
 
 
 def main() -> None:
@@ -764,7 +1132,7 @@ def main() -> None:
 
     rows = calculate(assumptions)
     write_csv(rows, OUT_CSV)
-    write_html(rows, OUT_HTML)
+    write_html(rows, assumptions, OUT_HTML)
 
     print("year | total_annual_tokens | required_gpu | total_capex | total_opex")
     print("-" * 90)
