@@ -318,6 +318,84 @@ capex:
       component_target_rub: component_target_usd * fx_usd_rub_t
       datacenter_construction_capex: total_component_rub * construction_flag
 
+  office_capex:
+    description: >
+      Корпоративный CAPEX GPS, не связанный с production AI infrastructure.
+      Включает офисное оборудование, рабочие устройства сотрудников
+      и базовую офисную инфраструктуру.
+    office_server:
+      description: >
+        Корпоративный сервер для AD, file services, backup, monitoring и внутренних сервисов.
+      quantity:
+        value: 1
+      unit_cost_rub:
+        value: 2500000
+      useful_life_years:
+        value: 5
+    employee_laptops:
+      description: >
+        Ноутбуки для core team и SG&A сотрудников. 1 ноутбук на 1 FTE.
+      allocation_logic:
+        formula: total_fte
+      unit_cost_rub:
+        value: 180000
+      useful_life_years:
+        value: 3
+    executive_laptops:
+      description: >
+        Ноутбуки для руководителей: CEO, CFO, COO, Head of AI, Chief Architect.
+      quantity:
+        value: 5
+      unit_cost_rub:
+        value: 350000
+      useful_life_years:
+        value: 3
+    mfu:
+      description: >
+        МФУ / принтеры. 1 устройство на 30–40 сотрудников.
+      quantity:
+        value: 4
+      unit_cost_rub:
+        value: 120000
+      useful_life_years:
+        value: 5
+    meeting_rooms:
+      description: >
+        Оснащение переговорных комнат: VC systems, displays, conference equipment.
+      quantity:
+        value: 3
+      total_cost_rub:
+        value: 1500000
+      useful_life_years:
+        value: 5
+    office_furniture:
+      description: >
+        Стартовый CAPEX на мебель и базовое оснащение отдельного офиса GPS.
+      total_cost_rub:
+        value: 8000000
+      useful_life_years:
+        value: 7
+    calculation_logic:
+      office_server_capex: >
+        quantity * unit_cost_rub
+      employee_laptops_capex: >
+        total_fte * unit_cost_rub
+      executive_laptops_capex: >
+        quantity * unit_cost_rub
+      mfu_capex: >
+        quantity * unit_cost_rub
+      meeting_rooms_capex: >
+        total_cost_rub
+      office_furniture_capex: >
+        total_cost_rub
+      total_office_capex: >
+        office_server_capex +
+        employee_laptops_capex +
+        executive_laptops_capex +
+        mfu_capex +
+        meeting_rooms_capex +
+        office_furniture_capex
+
 opex:
   gpu_rental: # opex
     description: >
