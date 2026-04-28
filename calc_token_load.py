@@ -769,12 +769,13 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             sga_monthly_fte = 0.0
 
         total_fte = safe_add(monthly_fte, sga_monthly_fte)
-        office_server_capex = safe_mul(office_server_qty, office_server_unit_cost)
-        employee_laptops_capex = safe_mul(total_fte, employee_laptops_unit_cost)
-        executive_laptops_capex = safe_mul(executive_laptops_qty, executive_laptops_unit_cost)
-        mfu_capex = safe_mul(mfu_qty, mfu_unit_cost)
-        meeting_rooms_capex = meeting_rooms_total_cost if meeting_rooms_total_cost is not None else float("nan")
-        office_furniture_capex = office_furniture_total_cost if office_furniture_total_cost is not None else float("nan")
+        is_office_capex_purchase_year = year == years[0]
+        office_server_capex = safe_mul(office_server_qty, office_server_unit_cost) if is_office_capex_purchase_year else 0.0
+        employee_laptops_capex = safe_mul(total_fte, employee_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
+        executive_laptops_capex = safe_mul(executive_laptops_qty, executive_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
+        mfu_capex = safe_mul(mfu_qty, mfu_unit_cost) if is_office_capex_purchase_year else 0.0
+        meeting_rooms_capex = (meeting_rooms_total_cost if meeting_rooms_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
+        office_furniture_capex = (office_furniture_total_cost if office_furniture_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
         total_office_capex = safe_add(
             office_server_capex,
             employee_laptops_capex,
@@ -1171,12 +1172,13 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
     const componentUsdMln = (INFRA_DATA.benchmark_components_total_usd_mln || 0) * targetCapacityMw / (INFRA_DATA.benchmark_capacity_mw || 1);
     const dcConstructionCapex = (selectedScenario === 'rent_gpu_only') ? 0 : componentUsdMln * 1000000 * (fx || 0) * constructionFlag;
     const totalFte = yrVal(INFRA_DATA.monthly_fte, year, 0) + yrVal(INFRA_DATA.sga_monthly_fte, year, 0);
-    const officeServerCapex = (INFRA_DATA.office_server_quantity || 0) * (INFRA_DATA.office_server_unit_cost_rub || 0);
-    const employeeLaptopsCapex = totalFte * (INFRA_DATA.employee_laptops_unit_cost_rub || 0);
-    const executiveLaptopsCapex = (INFRA_DATA.executive_laptops_quantity || 0) * (INFRA_DATA.executive_laptops_unit_cost_rub || 0);
-    const mfuCapex = (INFRA_DATA.mfu_quantity || 0) * (INFRA_DATA.mfu_unit_cost_rub || 0);
-    const meetingRoomsCapex = INFRA_DATA.meeting_rooms_total_cost_rub || 0;
-    const officeFurnitureCapex = INFRA_DATA.office_furniture_total_cost_rub || 0;
+    const isOfficeCapexPurchaseYear = idx === 0;
+    const officeServerCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.office_server_quantity || 0) * (INFRA_DATA.office_server_unit_cost_rub || 0) : 0;
+    const employeeLaptopsCapex = isOfficeCapexPurchaseYear ? totalFte * (INFRA_DATA.employee_laptops_unit_cost_rub || 0) : 0;
+    const executiveLaptopsCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.executive_laptops_quantity || 0) * (INFRA_DATA.executive_laptops_unit_cost_rub || 0) : 0;
+    const mfuCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.mfu_quantity || 0) * (INFRA_DATA.mfu_unit_cost_rub || 0) : 0;
+    const meetingRoomsCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.meeting_rooms_total_cost_rub || 0) : 0;
+    const officeFurnitureCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.office_furniture_total_cost_rub || 0) : 0;
     const totalOfficeCapex = officeServerCapex + employeeLaptopsCapex + executiveLaptopsCapex + mfuCapex + meetingRoomsCapex + officeFurnitureCapex;
     const totalCapex = gpuInfraCapex + dcConstructionCapex + totalOfficeCapex;
 
