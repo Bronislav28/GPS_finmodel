@@ -1038,12 +1038,18 @@ funding:
       2029: 0.25
       2030: 0.25
   calculation_logic:
+    closing_cash_before_funding: opening_cash + net_cash_flow
     funding_need: max(-closing_cash_before_funding, 0)
     equity_injection: funding_need * equity_share
     revolver_drawdown: funding_need * revolver_share
-    revolver_balance: previous_revolver_balance + revolver_drawdown - revolver_repayment
+    cash_after_drawdown: closing_cash_before_funding + equity_injection + revolver_drawdown
+    opening_revolver_balance: previous_year_closing_revolver_balance
+    excess_cash_available_for_repayment: max(cash_after_drawdown - minimum_cash_balance, 0)
+    revolver_repayment: min(excess_cash_available_for_repayment, opening_revolver_balance)
+    revolver_balance: opening_revolver_balance + revolver_drawdown - revolver_repayment
+    average_revolver_balance: (opening_revolver_balance + revolver_balance) / 2
     interest_expense: average_revolver_balance * revolver_interest_rate
-    closing_cash_after_funding: closing_cash_before_funding + equity_injection + revolver_drawdown
+    closing_cash_after_funding: cash_after_drawdown - revolver_repayment
 
 balance_sheet:
   currency: RUB

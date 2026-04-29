@@ -1450,6 +1450,52 @@ Baseline:
 
 ---
 
+---
+
+# Revolver Repayment Logic
+
+Revolver должен автоматически погашаться,
+если после операционного и инвестиционного cash flow
+у компании появляется положительный cash balance.
+
+На текущем этапе минимальный cash buffer не используется:
+
+- minimum_cash_balance = 0
+
+Формулы:
+
+- closing_cash_before_funding =
+  opening_cash +
+  net_cash_flow
+
+- funding_need =
+  max(-closing_cash_before_funding, 0)
+
+- cash_after_drawdown =
+  closing_cash_before_funding +
+  equity_injection +
+  revolver_drawdown
+
+- excess_cash_available_for_repayment =
+  max(cash_after_drawdown - minimum_cash_balance, 0)
+
+- revolver_repayment =
+  min(excess_cash_available_for_repayment, opening_revolver_balance)
+
+- revolver_balance =
+  opening_revolver_balance +
+  revolver_drawdown -
+  revolver_repayment
+
+- closing_cash_after_funding =
+  cash_after_drawdown -
+  revolver_repayment
+
+Если revolver_balance = 0,
+дальнейшее погашение не производится.
+
+---
+
 # Interest Expense
 
 Формула:
