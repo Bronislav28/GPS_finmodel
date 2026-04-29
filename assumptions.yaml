@@ -703,11 +703,16 @@ revenue:
   calculation_logic:
     sold_tokens: available_token_capacity * utilization_of_token_capacity
     sold_tokens_by_product: available_tokens_by_product * utilization_of_token_capacity
-    opex_by_product: total_opex * product_token_share
-    revenue_by_product: opex_by_product / (1 - target_contribution_margin)
+    pricing_base: total_cogs + total_depreciation
+    pricing_base_by_product: pricing_base * product_token_share
+    revenue_by_product: pricing_base_by_product / (1 - target_contribution_margin)
     total_revenue: sum(revenue_by_product)
     implied_price_per_1m_tokens: revenue_by_product / sold_tokens_by_product * 1000000
-
+  pricing_base_description: >
+    База для расчета выручки и implied token price включает COGS и depreciation.
+    SG&A не включается в pricing base и учитывается ниже в P&L при расчете EBITDA.
+    Это сохраняет зависимость от infrastructure scenarios, так как depreciation зависит
+    от owned GPU, строительства ЦОДа и office CAPEX.
 pnl:
   currency: RUB
   description: >

@@ -695,21 +695,56 @@ Revenue scenario →
 
 ---
 
-## Revenue logic
+# Revenue
 
-Revenue зависит от:
+Revenue считается через реальное потребление мощности
+и contribution margin.
 
-- utilization scenario
-- annual token consumption
-- monetization assumptions
-- contribution margin
+Важно: база для расчета revenue и implied token price
+должна включать:
 
-Необходима возможность
-сценарного анализа:
+- total_cogs
+- total_depreciation
 
-- conservative
-- base
-- aggressive
+SG&A не включается в pricing base
+и учитывается ниже в P&L
+при расчете EBITDA.
+
+Формула:
+
+- pricing_base =
+  total_cogs +
+  total_depreciation
+
+Revenue по продуктам:
+
+- pricing_base_by_product =
+  pricing_base × product_token_share
+
+- revenue_by_product =
+  pricing_base_by_product /
+  (1 - target_contribution_margin)
+
+- total_revenue =
+  workplace_ai_revenue +
+  contact_center_ai_revenue
+
+Implied price:
+
+- implied_price_per_1m_tokens =
+  revenue_by_product /
+  sold_tokens_by_product × 1,000,000
+
+Зависимость от сценариев инфраструктуры сохраняется, потому что:
+
+- build_own_dc меняет CAPEX и depreciation
+- rent_gpu_only меняет GPU rental OPEX и depreciation
+- hybrid меняет rental OPEX и depreciation по годам
+
+Таким образом:
+
+- pricing покрывает delivery cost и возврат инвестиций
+- SG&A оценивается отдельно на уровне EBITDA / EBIT
 
 ---
 
