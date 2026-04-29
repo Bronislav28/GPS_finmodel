@@ -245,6 +245,23 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
         "P&L Summary",
         ["total_revenue", "total_cogs", "gross_profit", "total_sga", "ebitda", "total_depreciation", "ebit", "profit_tax", "net_income"],
     ),
+    (
+        "Cash Flow Statement",
+        [
+            "net_income",
+            "total_depreciation",
+            "operating_cash_flow",
+            "gpu_capex",
+            "datacenter_construction_capex",
+            "office_capex",
+            "investing_cash_flow",
+            "financing_cash_flow",
+            "net_cash_flow",
+            "opening_cash",
+            "closing_cash",
+            "cumulative_cash",
+        ],
+    ),
 ]
 SCENARIO_ORDER = ["conservative", "base", "aggressive"]
 SCENARIO_MULTIPLIERS = {"conservative": 0.85, "base": 1.0, "aggressive": 1.2}
@@ -595,6 +612,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     if profit_tax_rate is None:
         print("WARNING: pnl.tax.profit_tax_rate отсутствует; используется 0.", file=sys.stderr)
         profit_tax_rate = 0.0
+    cash_flow_cfg = ass.get("cash_flow", {}) if isinstance(ass.get("cash_flow"), dict) else {}
+    opening_cash_map = to_year_map(cash_flow_cfg.get("opening_cash_balance"))
+    financing_cf_value = ((cash_flow_cfg.get("financing_cash_flow", {}) or {}).get("value", 0.0) if isinstance(cash_flow_cfg.get("financing_cash_flow"), dict) else cash_flow_cfg.get("financing_cash_flow", 0.0))
 
     base_rows: list[dict[str, Any]] = []
     prev_required_gpu = 0
@@ -665,6 +685,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     prev_electricity_price: float | None = None
     prev_fx: float | None = None
     prev_owned_gpu = 0
+    prev_closing_cash: float | None = None
+    cumulative_cash_prev = 0.0
     salary_growth_factor = 1.0
     warned_missing_salary: set[tuple[str, ...]] = set()
 
@@ -933,6 +955,16 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         ebit = safe_add(ebitda, -total_depreciation)
         profit_tax = max(ebit, 0.0) * float(profit_tax_rate) if not math.isnan(ebit) else float("nan")
         net_income = safe_add(ebit, -profit_tax)
+        operating_cash_flow = safe_add(net_income, total_depreciation)
+        office_capex = total_office_capex
+        investing_cash_flow = safe_add(-gpu_capex, -datacenter_construction_capex, -office_capex)
+        financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
+        net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
+        opening_cash = as_float(opening_cash_map.get(year))
+        if opening_cash is None:
+            opening_cash = prev_closing_cash if prev_closing_cash is not None else 0.0
+        closing_cash = safe_add(opening_cash, net_cash_flow)
+        cumulative_cash = safe_add(cumulative_cash_prev, net_cash_flow)
 
         rows.append(
             {
@@ -1016,10 +1048,20 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "ebit": ebit,
                 "profit_tax": profit_tax,
                 "net_income": net_income,
+                "operating_cash_flow": operating_cash_flow,
+                "office_capex": office_capex,
+                "investing_cash_flow": investing_cash_flow,
+                "financing_cash_flow": financing_cash_flow,
+                "net_cash_flow": net_cash_flow,
+                "opening_cash": opening_cash,
+                "closing_cash": closing_cash,
+                "cumulative_cash": cumulative_cash,
             }
         )
 
         prev_owned_gpu = owned_gpu
+        prev_closing_cash = closing_cash
+        cumulative_cash_prev = cumulative_cash
 
     return rows
 
