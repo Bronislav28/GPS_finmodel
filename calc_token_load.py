@@ -243,6 +243,19 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
     ("Total OPEX", ["total_datacenter_opex", "annual_team_opex", "annual_gpu_rental_cost", "total_opex"]),
     ("Revenue", ["workplace_ai_revenue", "contact_center_ai_revenue", "total_revenue"]),
     (
+        "Intangible Assets",
+        [
+            "workplace_ai_ip_value",
+            "contact_center_ai_ip_value",
+            "total_intangible_assets",
+            "intangible_capex",
+            "ip_amortization",
+            "gross_intangible_assets",
+            "accumulated_amortization",
+            "net_intangible_assets",
+        ],
+    ),
+    (
         "P&L Summary",
         ["total_revenue", "total_cogs", "gross_profit", "total_sga", "ebitda", "total_depreciation", "ebit", "interest_expense", "ebt", "profit_tax", "net_income"],
     ),
@@ -265,7 +278,7 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
             "cumulative_cash",
         ],
     ),
-    ("Funding", ["funding_need", "equity_injection", "revolver_drawdown", "revolver_balance", "interest_expense", "closing_cash_after_funding"]),
+    ("Funding", ["funding_need", "equity_injection", "revolver_drawdown", "revolver_repayment", "revolver_balance", "interest_expense", "closing_cash_after_funding"]),
     (
         "Balance Sheet",
         ["cash", "gross_ppe", "accumulated_depreciation", "net_ppe", "gross_intangible_assets", "accumulated_amortization", "net_intangible_assets", "total_assets", "revolver_balance", "total_liabilities", "paid_in_capital", "retained_earnings", "total_equity", "balance_check"],
@@ -693,6 +706,27 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         total_peak_mw = it_peak_mw * pue
         target_capacity_mw = float(math.ceil(total_peak_mw))
 
+    products_cfg = (((ass.get("capex", {}) or {}).get("intangible_assets", {}) or {}).get("products", {}) or {})
+    wp_go_live_cfg = products_cfg.get("workplace_ai", {}) if isinstance(products_cfg.get("workplace_ai"), dict) else {}
+    cc_go_live_cfg = products_cfg.get("contact_center_ai", {}) if isinstance(products_cfg.get("contact_center_ai"), dict) else {}
+
+    def revenue_availability_factor(year: int, go_live_year: Any, go_live_month: Any) -> float:
+        try:
+            go_year = int(go_live_year)
+        except (TypeError, ValueError):
+            return 1.0
+        try:
+            go_month = int(go_live_month) if go_live_month is not None else 1
+        except (TypeError, ValueError):
+            go_month = 1
+        go_month = min(max(go_month, 1), 12)
+        if year < go_year:
+            return 0.0
+        if year > go_year:
+            return 1.0
+        active_months = max(12 - go_month + 1, 0)
+        return active_months / 12.0
+
     rows: list[dict[str, Any]] = []
     gpu_infra_capex_history: list[float] = []
     datacenter_capex_history: list[float] = []
@@ -758,7 +792,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             gpu_capex = owned_gpu_increment * gpu_unit_cost
         gpu_infra_capex = safe_mul(gpu_capex, infra_multiplier)
-        total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex)
+        depreciable_infra_capex = safe_add(gpu_infra_capex, datacenter_construction_capex)
 
         # Datacenter OPEX (owned infra only)
         gpu_beginning_of_year = float(prev_owned_gpu)
@@ -790,7 +824,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                     electricity_price_t = prev_electricity_price * (1 + growth_t)
 
             electricity_cost = safe_mul(electricity_kwh, electricity_price_t)
-            maintenance_cost = safe_mul(total_capex, maintenance_pct)
+            maintenance_cost = safe_mul(depreciable_infra_capex, maintenance_pct)
             network_cost = safe_mul(total_load_mw, network_cost_per_mw)
             land_rent = safe_mul(total_load_mw, land_rent_per_mw)
             datacenter_opex = safe_add(electricity_cost, maintenance_cost, network_cost, land_rent)
@@ -934,15 +968,39 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             meeting_rooms_depreciation,
             office_furniture_depreciation,
         )
-        workplace_ai_ip_value = 0.0
-        contact_center_ai_ip_value = 0.0
+        dev_assumptions = (((ass.get("capex", {}) or {}).get("intangible_assets", {}) or {}).get("development_assumptions", {}) or {})
+        dev_infra_pct = as_float((dev_assumptions.get("development_infrastructure_percent", {}) or {}).get("value")) or 0.0
+        data_acq_pct = as_float((dev_assumptions.get("data_acquisition_percent", {}) or {}).get("value")) or 0.0
+
+        def build_phase_factor(year_value_int: int, product_cfg: dict[str, Any]) -> float:
+            go_year = as_float(product_cfg.get("go_live_year"))
+            go_month = as_float(product_cfg.get("go_live_month"))
+            build_months = as_float(product_cfg.get("build_period_months"))
+            if go_year is None or build_months is None:
+                return 0.0
+            go_year_i = int(go_year)
+            go_month_i = int(go_month) if go_month is not None else 1
+            go_month_i = min(max(go_month_i, 1), 12)
+            build_months_i = max(int(build_months), 0)
+            if year_value_int != go_year_i or build_months_i == 0:
+                return 0.0
+            active_build_months = min(build_months_i, max(go_month_i - 1, 0))
+            return active_build_months / 12.0
+
+        wp_effort_share = as_float((wp_go_live_cfg.get("effort_share_of_core_team", {}) or {}).get("value")) or 0.0
+        cc_effort_share = as_float((cc_go_live_cfg.get("effort_share_of_core_team", {}) or {}).get("value")) or 0.0
+        wp_build_factor = build_phase_factor(year, wp_go_live_cfg)
+        cc_build_factor = build_phase_factor(year, cc_go_live_cfg)
+        capitalization_multiplier = 1.0 + dev_infra_pct + data_acq_pct
+        workplace_ai_ip_value = safe_mul(annual_team_opex, wp_effort_share, wp_build_factor, capitalization_multiplier)
+        contact_center_ai_ip_value = safe_mul(annual_team_opex, cc_effort_share, cc_build_factor, capitalization_multiplier)
         intangible_capex = safe_add(workplace_ai_ip_value, contact_center_ai_ip_value)
         intangible_capex_history.append(intangible_capex)
         ip_life = max(1, int(((ass.get("capex", {}).get("intangible_assets", {}) or {}).get("amortization", {}) or {}).get("useful_life_years", 5)))
         ip_window = intangible_capex_history[-ip_life:]
         ip_amortization = float("nan") if any(math.isnan(v) for v in ip_window) else sum(ip_window) / ip_life
 
-        total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex, total_office_capex)
+        total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex, total_office_capex, intangible_capex)
         gpu_infra_capex_history.append(gpu_infra_capex)
         datacenter_capex_history.append(datacenter_construction_capex)
         gpu_window = gpu_infra_capex_history[-useful_life:]
@@ -960,6 +1018,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
         utilization = as_float(util_map.get(year))
         contribution_margin = as_float(margin_map.get(year))
+        wp_revenue_factor = revenue_availability_factor(year, wp_go_live_cfg.get("go_live_year"), wp_go_live_cfg.get("go_live_month"))
+        cc_revenue_factor = revenue_availability_factor(year, cc_go_live_cfg.get("go_live_year"), cc_go_live_cfg.get("go_live_month"))
+
         if utilization is None or contribution_margin is None:
             print(f"WARNING: revenue assumptions missing for {year}; revenue set to NaN.", file=sys.stderr)
             total_revenue = float("nan")
@@ -968,13 +1029,15 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             workplace_implied_price_per_1m_tokens = float("nan")
             contact_center_implied_price_per_1m_tokens = float("nan")
         else:
-            sold_wp_tokens = safe_mul(as_float(base.get("workplace_annual_tokens")), utilization)
-            sold_cc_tokens = safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization)
+            sold_wp_tokens = safe_mul(safe_mul(as_float(base.get("workplace_annual_tokens")), utilization), wp_revenue_factor)
+            sold_cc_tokens = safe_mul(safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization), cc_revenue_factor)
             pricing_base = safe_add(total_cogs, total_depreciation)
             pricing_base_wp = safe_mul(pricing_base, as_float(base.get("workplace_token_share")))
             pricing_base_cc = safe_mul(pricing_base, as_float(base.get("contact_center_token_share")))
-            workplace_ai_revenue = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
-            contact_center_ai_revenue = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            workplace_revenue_full_year = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            contact_center_revenue_full_year = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            workplace_ai_revenue = safe_mul(workplace_revenue_full_year, wp_revenue_factor)
+            contact_center_ai_revenue = safe_mul(contact_center_revenue_full_year, cc_revenue_factor)
             total_revenue = safe_add(workplace_ai_revenue, contact_center_ai_revenue)
             workplace_implied_price_per_1m_tokens = (
                 (workplace_ai_revenue / sold_wp_tokens) * 1_000_000 if sold_wp_tokens and sold_wp_tokens > 0 else float("nan")
@@ -986,14 +1049,18 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         gross_profit = safe_add(total_revenue, -total_cogs)
         ebitda = safe_add(gross_profit, -total_sga)
         ebit = safe_add(ebitda, -total_depreciation)
-        interest_expense = ((prev_revolver_balance + prev_revolver_balance) / 2.0) * float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
+        office_capex = total_office_capex
+        investing_cash_flow = safe_add(-gpu_infra_capex, -datacenter_construction_capex, -office_capex, -intangible_capex)
+        financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
+
+        opening_revolver_balance = prev_revolver_balance
+        revolver_interest_rate = float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
+        minimum_cash_balance = 0.0
+        interest_expense = ((opening_revolver_balance + opening_revolver_balance) / 2.0) * revolver_interest_rate
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
         operating_cash_flow = safe_add(net_income, total_depreciation)
-        office_capex = total_office_capex
-        investing_cash_flow = safe_add(-gpu_infra_capex, -datacenter_construction_capex, -office_capex, -intangible_capex)
-        financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
         net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
         opening_cash = as_float(opening_cash_map.get(year))
         if opening_cash is None:
@@ -1003,10 +1070,12 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
         equity_injection = funding_need * equity_share
         revolver_drawdown = funding_need * revolver_share
-        revolver_repayment = 0.0
-        revolver_balance = prev_revolver_balance + revolver_drawdown - revolver_repayment
-        avg_revolver_balance = (prev_revolver_balance + revolver_balance) / 2.0
-        interest_expense = avg_revolver_balance * float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
+        cash_after_drawdown = safe_add(closing_cash_before_funding, equity_injection, revolver_drawdown)
+        excess_cash_available_for_repayment = max((cash_after_drawdown or 0.0) - minimum_cash_balance, 0.0)
+        revolver_repayment = min(excess_cash_available_for_repayment, opening_revolver_balance)
+        revolver_balance = opening_revolver_balance + revolver_drawdown - revolver_repayment
+        avg_revolver_balance = (opening_revolver_balance + revolver_balance) / 2.0
+        interest_expense = avg_revolver_balance * revolver_interest_rate
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
@@ -1016,8 +1085,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
         equity_injection = funding_need * equity_share
         revolver_drawdown = funding_need * revolver_share
-        revolver_balance = prev_revolver_balance + revolver_drawdown
-        closing_cash_after_funding = safe_add(closing_cash_before_funding, equity_injection, revolver_drawdown)
+        cash_after_drawdown = safe_add(closing_cash_before_funding, equity_injection, revolver_drawdown)
+        excess_cash_available_for_repayment = max((cash_after_drawdown or 0.0) - minimum_cash_balance, 0.0)
+        revolver_repayment = min(excess_cash_available_for_repayment, opening_revolver_balance)
+        revolver_balance = opening_revolver_balance + revolver_drawdown - revolver_repayment
+        closing_cash_after_funding = safe_add(cash_after_drawdown, -revolver_repayment)
         closing_cash = closing_cash_after_funding
         cumulative_cash = safe_add(cumulative_cash_prev, net_cash_flow)
         cumulative_equity_injection += equity_injection
@@ -1123,6 +1195,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "net_income": net_income,
                 "operating_cash_flow": operating_cash_flow,
                 "office_capex": office_capex,
+                "workplace_ai_ip_value": workplace_ai_ip_value,
+                "contact_center_ai_ip_value": contact_center_ai_ip_value,
+                "total_intangible_assets": intangible_capex,
                 "intangible_capex": intangible_capex,
                 "investing_cash_flow": investing_cash_flow,
                 "financing_cash_flow": financing_cash_flow,
@@ -1133,6 +1208,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "funding_need": funding_need,
                 "equity_injection": equity_injection,
                 "revolver_drawdown": revolver_drawdown,
+                "revolver_repayment": revolver_repayment,
                 "revolver_balance": revolver_balance,
                 "closing_cash_after_funding": closing_cash_after_funding,
                 "cash": cash,
