@@ -244,7 +244,7 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
     ("Revenue", ["workplace_ai_revenue", "contact_center_ai_revenue", "total_revenue"]),
     (
         "P&L Summary",
-        ["total_revenue", "total_cogs", "gross_profit", "total_sga", "ebitda", "total_depreciation", "ebit", "profit_tax", "net_income"],
+        ["total_revenue", "total_cogs", "gross_profit", "total_sga", "ebitda", "total_depreciation", "ebit", "interest_expense", "ebt", "profit_tax", "net_income"],
     ),
     (
         "Cash Flow Statement",
@@ -253,8 +253,10 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
             "total_depreciation",
             "operating_cash_flow",
             "gpu_capex",
+            "gpu_infra_capex",
             "datacenter_construction_capex",
             "office_capex",
+            "intangible_capex",
             "investing_cash_flow",
             "financing_cash_flow",
             "net_cash_flow",
@@ -263,6 +265,12 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
             "cumulative_cash",
         ],
     ),
+    ("Funding", ["funding_need", "equity_injection", "revolver_drawdown", "revolver_balance", "interest_expense", "closing_cash_after_funding"]),
+    (
+        "Balance Sheet",
+        ["cash", "gross_ppe", "accumulated_depreciation", "net_ppe", "gross_intangible_assets", "accumulated_amortization", "net_intangible_assets", "total_assets", "revolver_balance", "total_liabilities", "paid_in_capital", "retained_earnings", "total_equity", "balance_check"],
+    ),
+    ("Return Metrics", ["roic", "roe", "roa", "debt_to_equity", "net_debt", "net_debt_to_ebitda", "interest_coverage"]),
 ]
 SCENARIO_ORDER = ["conservative", "base", "aggressive"]
 SCENARIO_MULTIPLIERS = {"conservative": 0.85, "base": 1.0, "aggressive": 1.2}
@@ -616,6 +624,33 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     cash_flow_cfg = ass.get("cash_flow", {}) if isinstance(ass.get("cash_flow"), dict) else {}
     opening_cash_map = to_year_map(cash_flow_cfg.get("opening_cash_balance"))
     financing_cf_value = ((cash_flow_cfg.get("financing_cash_flow", {}) or {}).get("value", 0.0) if isinstance(cash_flow_cfg.get("financing_cash_flow"), dict) else cash_flow_cfg.get("financing_cash_flow", 0.0))
+    funding_cfg = ass.get("funding", {}) if isinstance(ass.get("funding"), dict) else {}
+    funding_scenario = funding_cfg.get("active_scenario", "equity_only")
+    funding_scenarios = funding_cfg.get("scenarios", {}) if isinstance(funding_cfg.get("scenarios"), dict) else {}
+    funding_shares = funding_scenarios.get(funding_scenario, {}) if isinstance(funding_scenarios.get(funding_scenario), dict) else {}
+    equity_share = year_value((funding_shares.get("equity_share", {}) or {}).get("value"), years[0], 0.0) or 0.0
+    revolver_share = year_value((funding_shares.get("revolver_share", {}) or {}).get("value"), years[0], 0.0) or 0.0
+    if funding_scenario == "equity_only":
+        equity_share, revolver_share = 1.0, 0.0
+    elif funding_scenario == "revolver_only":
+        equity_share, revolver_share = 0.0, 1.0
+    if abs((equity_share + revolver_share) - 1.0) > 1e-9:
+        print(f"WARNING: funding shares sum != 1.0 ({equity_share + revolver_share:.4f})", file=sys.stderr)
+    revolver_rate_map = to_year_map((funding_cfg.get("revolver", {}) or {}).get("interest_rate"))
+    intangible_cfg = capex.get("intangible_assets", {}) if isinstance(capex.get("intangible_assets"), dict) else {}
+    products_cfg = intangible_cfg.get("products", {}) if isinstance(intangible_cfg.get("products"), dict) else {}
+    wp_go_live_year = int((products_cfg.get("workplace_ai", {}) or {}).get("go_live_year", years[0]))
+    wp_go_live_month = int((products_cfg.get("workplace_ai", {}) or {}).get("go_live_month", 1) or 1)
+    cc_go_live_year = int((products_cfg.get("contact_center_ai", {}) or {}).get("go_live_year", years[0]))
+    cc_go_live_month = int((products_cfg.get("contact_center_ai", {}) or {}).get("go_live_month", 1) or 1)
+
+    def availability_factor(year: int, go_live_year: int, go_live_month: int) -> float:
+        glm = min(max(go_live_month, 1), 12)
+        if year < go_live_year:
+            return 0.0
+        if year == go_live_year:
+            return (12 - glm + 1) / 12.0
+        return 1.0
 
     base_rows: list[dict[str, Any]] = []
     prev_required_gpu = 0
@@ -683,10 +718,14 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         "meeting_rooms": [],
         "office_furniture": [],
     }
+    intangible_capex_history: list[float] = []
     prev_electricity_price: float | None = None
     prev_fx: float | None = None
     prev_owned_gpu = 0
     prev_closing_cash: float | None = None
+    prev_revolver_balance = 0.0
+    cumulative_equity_injection = 0.0
+    cumulative_net_income = 0.0
     cumulative_cash_prev = 0.0
     salary_growth_factor = 1.0
     warned_missing_salary: set[tuple[str, ...]] = set()
@@ -909,6 +948,13 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             meeting_rooms_depreciation,
             office_furniture_depreciation,
         )
+        workplace_ai_ip_value = 0.0
+        contact_center_ai_ip_value = 0.0
+        intangible_capex = safe_add(workplace_ai_ip_value, contact_center_ai_ip_value)
+        intangible_capex_history.append(intangible_capex)
+        ip_life = max(1, int(((ass.get("capex", {}).get("intangible_assets", {}) or {}).get("amortization", {}) or {}).get("useful_life_years", 5)))
+        ip_window = intangible_capex_history[-ip_life:]
+        ip_amortization = float("nan") if any(math.isnan(v) for v in ip_window) else sum(ip_window) / ip_life
 
         total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex, total_office_capex)
         gpu_infra_capex_history.append(gpu_infra_capex)
@@ -917,7 +963,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         datacenter_window = datacenter_capex_history[-useful_life:]
         gpu_depreciation = float("nan") if any(math.isnan(v) for v in gpu_window) else sum(gpu_window) / useful_life
         datacenter_depreciation = float("nan") if any(math.isnan(v) for v in datacenter_window) else sum(datacenter_window) / useful_life
-        total_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation)
+        total_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation, ip_amortization)
 
         payroll_gross = total_gross_cost_year
         annual_bonus = total_bonus_cost_year
@@ -928,6 +974,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
         utilization = as_float(util_map.get(year))
         contribution_margin = as_float(margin_map.get(year))
+        wp_availability = availability_factor(year, wp_go_live_year, wp_go_live_month)
+        cc_availability = availability_factor(year, cc_go_live_year, cc_go_live_month)
         if utilization is None or contribution_margin is None:
             print(f"WARNING: revenue assumptions missing for {year}; revenue set to NaN.", file=sys.stderr)
             total_revenue = float("nan")
@@ -936,36 +984,73 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             workplace_implied_price_per_1m_tokens = float("nan")
             contact_center_implied_price_per_1m_tokens = float("nan")
         else:
-            sold_wp_tokens = safe_mul(as_float(base.get("workplace_annual_tokens")), utilization)
-            sold_cc_tokens = safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization)
+            sold_wp_tokens = safe_mul(as_float(base.get("workplace_annual_tokens")), utilization, wp_availability)
+            sold_cc_tokens = safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization, cc_availability)
             pricing_base = safe_add(total_cogs, total_depreciation)
             pricing_base_wp = safe_mul(pricing_base, as_float(base.get("workplace_token_share")))
             pricing_base_cc = safe_mul(pricing_base, as_float(base.get("contact_center_token_share")))
-            workplace_ai_revenue = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
-            contact_center_ai_revenue = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            workplace_ai_revenue = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin), wp_availability) if contribution_margin < 1 else float("nan")
+            contact_center_ai_revenue = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin), cc_availability) if contribution_margin < 1 else float("nan")
             total_revenue = safe_add(workplace_ai_revenue, contact_center_ai_revenue)
             workplace_implied_price_per_1m_tokens = (
-                (workplace_ai_revenue / sold_wp_tokens) * 1_000_000 if sold_wp_tokens and sold_wp_tokens > 0 else float("nan")
+                (workplace_ai_revenue / sold_wp_tokens) * 1_000_000 if sold_wp_tokens and sold_wp_tokens > 0 else None
             )
             contact_center_implied_price_per_1m_tokens = (
-                (contact_center_ai_revenue / sold_cc_tokens) * 1_000_000 if sold_cc_tokens and sold_cc_tokens > 0 else float("nan")
+                (contact_center_ai_revenue / sold_cc_tokens) * 1_000_000 if sold_cc_tokens and sold_cc_tokens > 0 else None
             )
 
         gross_profit = safe_add(total_revenue, -total_cogs)
         ebitda = safe_add(gross_profit, -total_sga)
         ebit = safe_add(ebitda, -total_depreciation)
-        profit_tax = max(ebit, 0.0) * float(profit_tax_rate) if not math.isnan(ebit) else float("nan")
-        net_income = safe_add(ebit, -profit_tax)
+        interest_expense = ((prev_revolver_balance + prev_revolver_balance) / 2.0) * float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
+        ebt = safe_add(ebit, -interest_expense)
+        profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
+        net_income = safe_add(ebt, -profit_tax)
         operating_cash_flow = safe_add(net_income, total_depreciation)
         office_capex = total_office_capex
-        investing_cash_flow = safe_add(-gpu_capex, -datacenter_construction_capex, -office_capex)
+        investing_cash_flow = safe_add(-gpu_infra_capex, -datacenter_construction_capex, -office_capex, -intangible_capex)
         financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
         net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
         opening_cash = as_float(opening_cash_map.get(year))
         if opening_cash is None:
             opening_cash = prev_closing_cash if prev_closing_cash is not None else 0.0
         closing_cash = safe_add(opening_cash, net_cash_flow)
+        closing_cash_before_funding = closing_cash
+        funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
+        equity_injection = funding_need * equity_share
+        revolver_drawdown = funding_need * revolver_share
+        revolver_repayment = 0.0
+        revolver_balance = prev_revolver_balance + revolver_drawdown - revolver_repayment
+        avg_revolver_balance = (prev_revolver_balance + revolver_balance) / 2.0
+        interest_expense = avg_revolver_balance * float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
+        ebt = safe_add(ebit, -interest_expense)
+        profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
+        net_income = safe_add(ebt, -profit_tax)
+        operating_cash_flow = safe_add(net_income, total_depreciation)
+        net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
+        closing_cash_before_funding = safe_add(opening_cash, net_cash_flow)
+        funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
+        equity_injection = funding_need * equity_share
+        revolver_drawdown = funding_need * revolver_share
+        revolver_balance = prev_revolver_balance + revolver_drawdown
+        closing_cash_after_funding = safe_add(closing_cash_before_funding, equity_injection, revolver_drawdown)
+        closing_cash = closing_cash_after_funding
         cumulative_cash = safe_add(cumulative_cash_prev, net_cash_flow)
+        cumulative_equity_injection += equity_injection
+        cumulative_net_income += (net_income or 0.0)
+        gross_ppe = sum(gpu_infra_capex_history) + sum(datacenter_capex_history) + sum(sum(v) for v in office_capex_history.values())
+        accumulated_depreciation = sum((as_float(r.get("gpu_depreciation")) or 0.0) + (as_float(r.get("datacenter_depreciation")) or 0.0) + (as_float(r.get("office_capex_depreciation")) or 0.0) for r in rows) + gpu_depreciation + datacenter_depreciation + office_capex_depreciation
+        net_ppe = gross_ppe - accumulated_depreciation
+        gross_intangible_assets = sum(intangible_capex_history)
+        accumulated_amortization = sum((as_float(r.get("ip_amortization")) or 0.0) for r in rows) + ip_amortization
+        net_intangible_assets = gross_intangible_assets - accumulated_amortization
+        cash = closing_cash_after_funding
+        total_assets = cash + net_ppe + net_intangible_assets
+        total_liabilities = revolver_balance
+        paid_in_capital = cumulative_equity_injection
+        retained_earnings = cumulative_net_income
+        total_equity = paid_in_capital + retained_earnings
+        balance_check = total_assets - total_liabilities - total_equity
 
         rows.append(
             {
@@ -992,6 +1077,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "gpu_depreciation": gpu_depreciation,
                 "datacenter_depreciation": datacenter_depreciation,
                 "office_capex_depreciation": office_capex_depreciation,
+                "ip_amortization": ip_amortization,
                 "total_depreciation": total_depreciation,
                 "annual_depreciation": total_depreciation,
                 "gpu_beginning_of_year": gpu_beginning_of_year,
@@ -1047,22 +1133,51 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "gross_profit": gross_profit,
                 "ebitda": ebitda,
                 "ebit": ebit,
+                "interest_expense": interest_expense,
+                "ebt": ebt,
                 "profit_tax": profit_tax,
                 "net_income": net_income,
                 "operating_cash_flow": operating_cash_flow,
                 "office_capex": office_capex,
+                "intangible_capex": intangible_capex,
                 "investing_cash_flow": investing_cash_flow,
                 "financing_cash_flow": financing_cash_flow,
                 "net_cash_flow": net_cash_flow,
                 "opening_cash": opening_cash,
                 "closing_cash": closing_cash,
                 "cumulative_cash": cumulative_cash,
+                "funding_need": funding_need,
+                "equity_injection": equity_injection,
+                "revolver_drawdown": revolver_drawdown,
+                "revolver_balance": revolver_balance,
+                "closing_cash_after_funding": closing_cash_after_funding,
+                "cash": cash,
+                "gross_ppe": gross_ppe,
+                "accumulated_depreciation": accumulated_depreciation,
+                "net_ppe": net_ppe,
+                "gross_intangible_assets": gross_intangible_assets,
+                "accumulated_amortization": accumulated_amortization,
+                "net_intangible_assets": net_intangible_assets,
+                "total_assets": total_assets,
+                "total_liabilities": total_liabilities,
+                "paid_in_capital": paid_in_capital,
+                "retained_earnings": retained_earnings,
+                "total_equity": total_equity,
+                "balance_check": balance_check,
+                "roic": (ebit * (1.0 - float(profit_tax_rate)) / net_ppe) if net_ppe > 0 else None,
+                "roe": (net_income / total_equity) if total_equity > 0 else None,
+                "roa": (net_income / total_assets) if total_assets > 0 else None,
+                "debt_to_equity": (revolver_balance / total_equity) if total_equity > 0 else None,
+                "net_debt": revolver_balance - cash,
+                "net_debt_to_ebitda": ((revolver_balance - cash) / ebitda) if ebitda and ebitda > 0 else None,
+                "interest_coverage": (ebit / interest_expense) if interest_expense and interest_expense > 0 else None,
             }
         )
 
         prev_owned_gpu = owned_gpu
         prev_closing_cash = closing_cash
         cumulative_cash_prev = cumulative_cash
+        prev_revolver_balance = revolver_balance
 
     return rows
 
@@ -1110,6 +1225,28 @@ def build_dcf_metrics(rows: list[dict[str, Any]], discount_rate: float) -> tuple
     metrics = {"npv": npv_val, "irr": irr_val, "simple_payback": simple_payback, "discounted_payback": discounted_payback}
     return dcf_rows, metrics
 
+
+def build_sensitivity_table(assumptions: dict[str, Any], base_rows: list[dict[str, Any]], years: list[int]) -> list[dict[str, Any]]:
+    inv = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
+    sa = inv.get("sensitivity_analysis", {}) if isinstance(inv.get("sensitivity_analysis"), dict) else {}
+    cases = ["base", "downside", "upside"]
+    out: list[dict[str, Any]] = []
+    for case in cases:
+        ass_copy = copy.deepcopy(assumptions)
+        drivers = (sa.get("drivers", {}) or {})
+        for k, cfg in drivers.items():
+            if isinstance(cfg, dict) and case in cfg:
+                v = cfg.get(case)
+                if k == "discount_rate":
+                    ((((ass_copy.setdefault("investment_metrics", {})).setdefault("discount_rate", {})).setdefault("value", {}))[2026]) = v
+        rows = calculate(ass_copy) if case != "base" else base_rows
+        dr = as_float((((ass_copy.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(2026))
+        dr = 0.2 if dr is None else dr
+        _, m = build_dcf_metrics(rows, dr)
+        last = rows[-1]
+        out.append({"year": years[0], "case": case, "npv": m["npv"], "irr": m["irr"], "simple_payback": m["simple_payback"], "discounted_payback": m["discounted_payback"], "roic": last.get("roic"), "roe": last.get("roe"), "net_debt_to_ebitda": last.get("net_debt_to_ebitda")})
+    return out
+
 def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     years = [int(r["year"]) for r in rows]
     blocks = build_report_blocks(rows, years)
@@ -1117,6 +1254,7 @@ def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: P
     discount_rate = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(2026))
     discount_rate = 0.20 if discount_rate is None else discount_rate
     dcf_rows, inv_metrics = build_dcf_metrics(rows, discount_rate)
+    sensitivity_rows = build_sensitivity_table(assumptions, rows, years)
 
     scenario_compare = []
     for sc in ("build_own_dc", "rent_gpu_only", "hybrid"):
@@ -1160,6 +1298,14 @@ def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: P
                     out[str(years[2])] = sc_metrics["simple_payback"]
                     out[str(years[3])] = sc_metrics["discounted_payback"]
                     out[str(years[4])] = ""
+                    writer.writerow(out)
+                for srow in sensitivity_rows:
+                    out = {"scenario": "base", "table": "Sensitivity Analysis", "metric": srow["case"]}
+                    out[str(years[0])] = srow["npv"]
+                    out[str(years[1])] = srow["irr"]
+                    out[str(years[2])] = srow["simple_payback"]
+                    out[str(years[3])] = srow["discounted_payback"]
+                    out[str(years[4])] = srow["net_debt_to_ebitda"]
                     writer.writerow(out)
 
 
@@ -1282,6 +1428,13 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     inv_cfg = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
     dr = as_float((((inv_cfg.get("discount_rate", {}) or {}).get("value", {}) or {}).get(2026)) )
     default_discount_rate = 0.20 if dr is None else dr
+    sensitivity_rows = build_sensitivity_table(assumptions, rows, years)
+    sens_header = "".join(f"<th>{c}</th>" for c in ["NPV", "IRR", "Simple Payback", "Discounted Payback", "ROIC", "ROE", "Net Debt / EBITDA"])
+    sens_body = "".join(
+        f"<tr><td>{r['case']}</td><td>{fmt_num(r['npv'])}</td><td>{fmt_ratio(r['irr']) if isinstance(r['irr'], (int,float)) else r['irr']}</td><td>{r['simple_payback']}</td><td>{r['discounted_payback']}</td><td>{fmt_ratio(r['roic']) if isinstance(r['roic'], (int,float)) else 'N/A'}</td><td>{fmt_ratio(r['roe']) if isinstance(r['roe'], (int,float)) else 'N/A'}</td><td>{fmt_num(r['net_debt_to_ebitda']) if r['net_debt_to_ebitda'] is not None else 'N/A'}</td></tr>"
+        for r in sensitivity_rows
+    )
+    sensitivity_html = f"<h2>Sensitivity Analysis</h2><table><thead><tr><th>Case</th>{sens_header}</tr></thead><tbody>{sens_body}</tbody></table>"
 
     return f"""<!doctype html>
 <html lang=\"ru\"><head><meta charset=\"utf-8\"><title>GPS Finmodel</title>
@@ -1327,6 +1480,7 @@ thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;p
 <div id=\"scenarioTables\"></div>
 <div id=\"infraTables\"></div>
 <div id=\"dcfTables\"></div>
+{sensitivity_html}
 {''.join(block_tables)}
 <script>
 const SCENARIO_DATA = {scenario_json};
