@@ -1320,8 +1320,13 @@ thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;p
   <label for=\"constructionStartYear\" style=\"margin-left:12px;\"><b>construction_start_year:</b></label>
   <input id=\"constructionStartYear\" type=\"number\" step=\"1\" style=\"width:90px;\" />
 </div>
+<div class=\"note\">
+  <label for=\"discountRateInput\"><b>Discount rate (decimal):</b></label>
+  <input id=\"discountRateInput\" type=\"number\" step=\"0.01\" min=\"0\" style=\"width:90px;\" value=\"{default_discount_rate}\" />
+</div>
 <div id=\"scenarioTables\"></div>
 <div id=\"infraTables\"></div>
+<div id=\"dcfTables\"></div>
 {''.join(block_tables)}
 <script>
 const SCENARIO_DATA = {scenario_json};
@@ -1499,6 +1504,12 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
     const grossProfit = revenue - cogs;
     const grossMargin = revenue ? grossProfit / revenue : NaN;
     const ebitda = revenue - totalOpex - totalSga;
+    const netIncome = ebitda;
+    const operatingCashFlow = netIncome + depreciation;
+    const investingCashFlow = -gpuCapex - dcConstructionCapex - totalOfficeCapex;
+    const netCashFlow = operatingCashFlow + investingCashFlow;
+    const prevCumCash = rows.length ? rows[rows.length - 1].cumulativeCash : 0;
+    const cumulativeCash = prevCumCash + netCashFlow;
 
     rows.push({{
       year, selectedScenario, constructionStartYear, constructionFlag,
@@ -1508,7 +1519,8 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
       totalCapex, depreciation,
       totalDcOpex, teamOpex, gpuRentalOpex, totalOpex,
       annualFixedSga, requiredOfficeArea, annualOfficeRent, totalSga,
-      revenue, cogs, grossProfit, grossMargin, ebitda
+      revenue, cogs, grossProfit, grossMargin, ebitda, netIncome,
+      operatingCashFlow, investingCashFlow, netCashFlow, cumulativeCash
     }});
     prevOwned = ownedGpu;
   }});
@@ -1615,14 +1627,14 @@ function renderDcfTables(rows) {{
   const dr = Number(discountRateInput.value);
   const discountRate = Number.isFinite(dr) ? dr : 0.2;
   const dcf = rows.map((r, idx) => {{
-    const free = (r.netIncome || 0) + (r.depreciation || 0) + (-(r.gpuCapex||0) - (r.dcConstructionCapex||0) - (r.totalOfficeCapex||0));
+    const free = (r.operatingCashFlow || 0) + (r.investingCashFlow || 0);
     const factor = 1 / Math.pow(1 + discountRate, idx);
     return {{ year: r.year, free_cash_flow: free, discount_rate: discountRate, discount_factor: factor, discounted_fcf: free * factor }};
   }});
   let cum = 0; dcf.forEach(r => {{ cum += r.discounted_fcf; r.cumulative_discounted_fcf = cum; }});
   const npv = dcf.reduce((a,r)=>a+r.discounted_fcf,0);
   const irr = computeIrr(dcf.map(r=>r.free_cash_flow));
-  const simplePayback = rows.find(r => (r.netIncome||0)+(r.depreciation||0) > 0)?.year || 'Not reached';
+  const simplePayback = rows.find(r => (r.cumulativeCash || 0) > 0)?.year || 'Not reached';
   const discountedPayback = dcf.find(r => r.cumulative_discounted_fcf > 0)?.year || 'Not reached';
   const vals = (arr,k)=>arr.map(x=>x[k]);
   let html='';
@@ -1637,12 +1649,12 @@ function renderDcfTables(rows) {{
   const compareRows = scenarioList.map(sc => {{
     const scRows = calcInfraRows(sc, sc === 'hybrid' ? (toNum(constructionInput.value) || INFRA_DATA.hybrid_default_start_year) : 2026);
     const scDcf = scRows.map((r, i) => {{
-      const free = (r.netIncome || 0) + (r.depreciation || 0) + (-(r.gpuCapex||0) - (r.dcConstructionCapex||0) - (r.totalOfficeCapex||0));
+      const free = (r.operatingCashFlow || 0) + (r.investingCashFlow || 0);
       return free / Math.pow(1 + discountRate, i);
     }});
     const npvV = scDcf.reduce((a,v)=>a+v,0);
-    const irrV = computeIrr(scRows.map(r => (r.netIncome||0)+(r.depreciation||0)+ (-(r.gpuCapex||0) - (r.dcConstructionCapex||0) - (r.totalOfficeCapex||0))));
-    const sp = scRows.find(r => (r.netIncome||0)+(r.depreciation||0) > 0)?.year || 'Not reached';
+    const irrV = computeIrr(scRows.map(r => (r.operatingCashFlow || 0) + (r.investingCashFlow || 0)));
+    const sp = scRows.find(r => (r.cumulativeCash || 0) > 0)?.year || 'Not reached';
     let cum=0; let dp='Not reached';
     for(let i=0;i<scRows.length;i++){{ cum += scDcf[i]; if(cum>0){{dp=scRows[i].year; break;}}}}
     return {{sc,npvV,irrV,sp,dp}};
