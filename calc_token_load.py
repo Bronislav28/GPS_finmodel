@@ -693,6 +693,27 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         total_peak_mw = it_peak_mw * pue
         target_capacity_mw = float(math.ceil(total_peak_mw))
 
+    products_cfg = (((ass.get("capex", {}) or {}).get("intangible_assets", {}) or {}).get("products", {}) or {})
+    wp_go_live_cfg = products_cfg.get("workplace_ai", {}) if isinstance(products_cfg.get("workplace_ai"), dict) else {}
+    cc_go_live_cfg = products_cfg.get("contact_center_ai", {}) if isinstance(products_cfg.get("contact_center_ai"), dict) else {}
+
+    def revenue_availability_factor(year: int, go_live_year: Any, go_live_month: Any) -> float:
+        try:
+            go_year = int(go_live_year)
+        except (TypeError, ValueError):
+            return 1.0
+        try:
+            go_month = int(go_live_month) if go_live_month is not None else 1
+        except (TypeError, ValueError):
+            go_month = 1
+        go_month = min(max(go_month, 1), 12)
+        if year < go_year:
+            return 0.0
+        if year > go_year:
+            return 1.0
+        active_months = max(12 - go_month + 1, 0)
+        return active_months / 12.0
+
     rows: list[dict[str, Any]] = []
     gpu_infra_capex_history: list[float] = []
     datacenter_capex_history: list[float] = []
@@ -960,6 +981,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
         utilization = as_float(util_map.get(year))
         contribution_margin = as_float(margin_map.get(year))
+        wp_revenue_factor = revenue_availability_factor(year, wp_go_live_cfg.get("go_live_year"), wp_go_live_cfg.get("go_live_month"))
+        cc_revenue_factor = revenue_availability_factor(year, cc_go_live_cfg.get("go_live_year"), cc_go_live_cfg.get("go_live_month"))
+
         if utilization is None or contribution_margin is None:
             print(f"WARNING: revenue assumptions missing for {year}; revenue set to NaN.", file=sys.stderr)
             total_revenue = float("nan")
@@ -968,13 +992,15 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             workplace_implied_price_per_1m_tokens = float("nan")
             contact_center_implied_price_per_1m_tokens = float("nan")
         else:
-            sold_wp_tokens = safe_mul(as_float(base.get("workplace_annual_tokens")), utilization)
-            sold_cc_tokens = safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization)
+            sold_wp_tokens = safe_mul(safe_mul(as_float(base.get("workplace_annual_tokens")), utilization), wp_revenue_factor)
+            sold_cc_tokens = safe_mul(safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization), cc_revenue_factor)
             pricing_base = safe_add(total_cogs, total_depreciation)
             pricing_base_wp = safe_mul(pricing_base, as_float(base.get("workplace_token_share")))
             pricing_base_cc = safe_mul(pricing_base, as_float(base.get("contact_center_token_share")))
-            workplace_ai_revenue = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
-            contact_center_ai_revenue = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            workplace_revenue_full_year = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            contact_center_revenue_full_year = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            workplace_ai_revenue = safe_mul(workplace_revenue_full_year, wp_revenue_factor)
+            contact_center_ai_revenue = safe_mul(contact_center_revenue_full_year, cc_revenue_factor)
             total_revenue = safe_add(workplace_ai_revenue, contact_center_ai_revenue)
             workplace_implied_price_per_1m_tokens = (
                 (workplace_ai_revenue / sold_wp_tokens) * 1_000_000 if sold_wp_tokens and sold_wp_tokens > 0 else float("nan")
