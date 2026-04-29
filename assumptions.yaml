@@ -228,11 +228,14 @@ capex:
     gpu_capex: owned_gpu_increment * gpu.unit_cost
     gpu_infra_capex: gpu_capex * infra_multiplier.value
     datacenter_construction_capex: total_component_rub * construction_flag
-    total_capex: gpu_infra_capex + datacenter_construction_capex
+    office_capex: total_office_capex
+    intangible_capex: workplace_ai_ip_value + contact_center_ai_ip_value
+    tangible_capex: gpu_infra_capex + datacenter_construction_capex + office_capex
+    total_capex: tangible_capex + intangible_capex
   depreciation:
     method: straight_line
     useful_life_years: 5
-    depreciable_base: gpu_infra_capex + datacenter_construction_capex
+    depreciable_base: gpu_infra_capex + datacenter_construction_capex + office_capex
 
   strategy_scenarios:
     description: >
@@ -333,6 +336,95 @@ capex:
       component_target_usd: component_3mw_usd * target_capacity_mw / benchmark_capacity_mw
       component_target_rub: component_target_usd * fx_usd_rub_t
       datacenter_construction_capex: total_component_rub * construction_flag
+
+  intangible_assets:
+    currency: RUB
+    description: >
+      Intangible Assets (capitalized development costs) for proprietary AI products:
+      Workplace.ai and Contact_Center.ai.
+      В balance sheet отражаются как капитализированные затраты на разработку IP,
+      а не как PP&E.
+    amortization:
+      method: straight_line
+      useful_life_years: 5
+    development_assumptions:
+      development_infrastructure_percent:
+        description: >
+          Development GPU / sandbox / experimentation /
+          vector DB / fine-tuning infrastructure.
+        value: 0.15
+      data_acquisition_percent:
+        description: >
+          Data acquisition / annotation / synthetic datasets / domain corpora /
+          evaluation datasets.
+        value: 0.10
+    eligible_core_team_roles:
+      description: >
+        Только эти роли core team капитализируются в Intangible Assets.
+        Остальные остаются в OPEX / SG&A.
+      roles:
+        leadership:
+          - head_of_ai
+        genai_team:
+          - genai_lead
+          - llm_engineer
+          - ml_engineer
+          - data_engineer
+        platform_team:
+          - platform_lead
+          - backend_engineer
+          - ai_platform_engineer
+          - devops_engineer
+        agent_team:
+          - agent_lead
+          - agent_engineer
+          - business_analyst
+        architecture_team:
+          - chief_architect
+          - solution_architect
+        mlops_team:
+          - mlops_lead
+          - ml_engineer
+          - devops_engineer
+        validation_team:
+          - qa_lead
+          - qa_engineer
+        data_team:
+          - data_lead
+          - data_labeling_specialist
+    products:
+      workplace_ai:
+        build_period_months: 6
+        go_live_year: 2026
+        effort_share_of_core_team:
+          value: 0.70
+        calculation_logic:
+          eligible_core_team_payroll: payroll_of_eligible_roles
+          capitalized_payroll: eligible_core_team_payroll * effort_share_of_core_team
+          capitalized_sfr: capitalized_payroll * sfr_rate
+          development_infrastructure_cost: capitalized_payroll * development_infrastructure_percent
+          data_acquisition_cost: capitalized_payroll * data_acquisition_percent
+          total_ip_asset_value: capitalized_payroll + capitalized_sfr + development_infrastructure_cost + data_acquisition_cost
+      contact_center_ai:
+        build_period_months: 6
+        go_live_year: 2026
+        effort_share_of_core_team:
+          value: 0.30
+        calculation_logic:
+          eligible_core_team_payroll: payroll_of_eligible_roles
+          capitalized_payroll: eligible_core_team_payroll * effort_share_of_core_team
+          capitalized_sfr: capitalized_payroll * sfr_rate
+          development_infrastructure_cost: capitalized_payroll * development_infrastructure_percent
+          data_acquisition_cost: capitalized_payroll * data_acquisition_percent
+          total_ip_asset_value: capitalized_payroll + capitalized_sfr + development_infrastructure_cost + data_acquisition_cost
+    html_output:
+      wide_format: true
+      tables:
+        intangible_assets:
+          - workplace_ai_ip_value
+          - contact_center_ai_ip_value
+          - total_intangible_assets
+          - annual_ip_amortization
 
   office_capex:
     description: >
@@ -790,8 +882,9 @@ pnl:
       source: capex.datacenter_depreciation
     office_capex_depreciation:
       source: capex.office_capex_depreciation
-    total_depreciation:
-      source: capex.total_depreciation
+    ip_amortization:
+      source: intangible_assets.annual_ip_amortization
+    total_depreciation: gpu_depreciation + datacenter_depreciation + office_capex_depreciation + ip_amortization
   ebit:
     formula: ebitda - total_depreciation
   profit_tax: max(ebit, 0) * profit_tax_rate
@@ -867,8 +960,10 @@ cash_flow:
       source: capex.datacenter_construction_capex
     office_capex:
       source: capex.total_office_capex
+    intangible_capex:
+      source: capex.intangible_capex
     investing_cash_flow:
-      formula: -gpu_capex -datacenter_construction_capex -office_capex
+      formula: -gpu_capex -datacenter_construction_capex -office_capex -intangible_capex
   financing_section:
     financing_cash_flow:
       source: cash_flow.financing_cash_flow.value
@@ -899,6 +994,116 @@ cash_flow:
         - opening_cash
         - closing_cash
         - cumulative_cash
+
+funding:
+  currency: RUB
+  description: >
+    Funding model GPS. Используется для покрытия отрицательного cash balance
+    через equity, revolver или mix.
+  active_scenario: mix
+  scenarios:
+    equity_only:
+      equity_share:
+        value: 1.0
+      revolver_share:
+        value: 0.0
+    revolver_only:
+      equity_share:
+        value: 0.0
+      revolver_share:
+        value: 1.0
+    mix:
+      description: >
+        Funding need покрывается комбинацией equity и revolver.
+        Доли задаются пользователем вручную.
+      equity_share:
+        value: 0.50
+      revolver_share:
+        value: 0.50
+      validation:
+        formula: equity_share + revolver_share = 1.0
+  revolver:
+    interest_rate:
+      2026: 0.25
+      2027: 0.25
+      2028: 0.25
+      2029: 0.25
+      2030: 0.25
+  calculation_logic:
+    funding_need: max(-closing_cash_before_funding, 0)
+    equity_injection: funding_need * equity_share
+    revolver_drawdown: funding_need * revolver_share
+    revolver_balance: previous_revolver_balance + revolver_drawdown - revolver_repayment
+    interest_expense: average_revolver_balance * revolver_interest_rate
+    closing_cash_after_funding: closing_cash_before_funding + equity_injection + revolver_drawdown
+
+balance_sheet:
+  currency: RUB
+  description: >
+    Balance Sheet GPS. Строится на основе Cash Flow, CAPEX,
+    Intangible Assets, Funding и P&L.
+  assets:
+    current_assets:
+      cash:
+        source: funding.closing_cash_after_funding
+    non_current_assets:
+      ppe:
+        gross_ppe:
+          formula: >
+            cumulative_gpu_infra_capex + cumulative_datacenter_construction_capex + cumulative_office_capex
+        accumulated_depreciation:
+          formula: cumulative_gpu_depreciation + cumulative_datacenter_depreciation + cumulative_office_capex_depreciation
+        net_ppe:
+          formula: gross_ppe - accumulated_depreciation
+      intangible_assets:
+        gross_intangible_assets:
+          formula: cumulative_workplace_ai_ip_value + cumulative_contact_center_ai_ip_value
+        accumulated_amortization:
+          formula: cumulative_ip_amortization
+        net_intangible_assets:
+          formula: gross_intangible_assets - accumulated_amortization
+    total_assets:
+      formula: cash + net_ppe + net_intangible_assets
+  liabilities:
+    debt:
+      revolver_balance:
+        source: funding.revolver_balance
+    total_liabilities:
+      formula: revolver_balance
+  equity:
+    paid_in_capital:
+      formula: cumulative_equity_injection
+    retained_earnings:
+      formula: cumulative_net_income
+    total_equity:
+      formula: paid_in_capital + retained_earnings
+  balance_check:
+    formula: total_assets - total_liabilities - total_equity
+  html_output:
+    wide_format: true
+    tables:
+      funding:
+        - funding_need
+        - equity_injection
+        - revolver_drawdown
+        - revolver_balance
+        - interest_expense
+        - closing_cash_after_funding
+      balance_sheet:
+        - cash
+        - gross_ppe
+        - accumulated_depreciation
+        - net_ppe
+        - gross_intangible_assets
+        - accumulated_amortization
+        - net_intangible_assets
+        - total_assets
+        - revolver_balance
+        - total_liabilities
+        - paid_in_capital
+        - retained_earnings
+        - total_equity
+        - balance_check
 
 investment_metrics:
   currency: RUB
@@ -947,17 +1152,92 @@ investment_metrics:
       - irr
       - simple_payback
       - discounted_payback
-  html_output:
     wide_format: true
-    tables:
-      dcf:
-        - free_cash_flow
-        - discount_rate
-        - discount_factor
-        - discounted_fcf
-        - cumulative_discounted_fcf
-      investment_metrics:
-        - npv
-        - irr
-        - simple_payback
-        - discounted_payback
+  return_metrics:
+    description: >
+      Метрики доходности и эффективности капитала GPS.
+    roic:
+      formula: nopat / average_invested_capital
+      components:
+        nopat: ebit * (1 - profit_tax_rate)
+        invested_capital: net_ppe + net_intangible_assets
+        average_invested_capital: (invested_capital_beginning + invested_capital_ending) / 2
+    roe:
+      formula: net_income / average_equity
+      components:
+        average_equity: (total_equity_beginning + total_equity_ending) / 2
+    roa:
+      formula: net_income / average_total_assets
+      components:
+        average_total_assets: (total_assets_beginning + total_assets_ending) / 2
+    debt_to_equity:
+      formula: revolver_balance / total_equity
+    net_debt:
+      formula: revolver_balance - cash
+    net_debt_to_ebitda:
+      formula: net_debt / ebitda
+    interest_coverage:
+      formula: ebit / interest_expense
+  sensitivity_analysis:
+    description: >
+      Sensitivity analysis для ключевых драйверов инвестиционной модели GPS.
+
+    active_cases:
+      - base
+      - downside
+      - upside
+    drivers:
+      discount_rate:
+        base: 0.30
+        downside: 0.35
+        upside: 0.25
+      target_contribution_margin:
+        base_multiplier: 1.00
+        downside_multiplier: 0.85
+        upside_multiplier: 1.15
+      token_capacity_utilization:
+        base_multiplier: 1.00
+        downside_multiplier: 0.80
+        upside_multiplier: 1.20
+      gpu_unit_cost:
+        base_multiplier: 1.00
+        downside_multiplier: 1.20
+        upside_multiplier: 0.90
+      gpu_rental_price:
+        base_multiplier: 1.00
+        downside_multiplier: 1.20
+        upside_multiplier: 0.90
+      electricity_price:
+        base_multiplier: 1.00
+        downside_multiplier: 1.20
+        upside_multiplier: 0.90
+      fx_usd_rub:
+        base_multiplier: 1.00
+        downside_multiplier: 1.15
+        upside_multiplier: 0.90
+    output_metrics:
+      - npv
+      - irr
+      - simple_payback
+      - discounted_payback
+      - roic
+      - roe
+      - net_debt_to_ebitda
+    html_output:
+      tables:
+        return_metrics:
+          - roic
+          - roe
+          - roa
+          - debt_to_equity
+          - net_debt
+          - net_debt_to_ebitda
+          - interest_coverage
+        sensitivity_analysis:
+          - npv
+          - irr
+          - simple_payback
+          - discounted_payback
+          - roic
+          - roe
+          - net_debt_to_ebitda

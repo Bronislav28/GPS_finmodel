@@ -363,6 +363,264 @@ CAPEX строительства возникает только
 
 ---
 
+# Intangible Assets (Capitalized Development Costs)
+
+Модель должна учитывать
+не только PP&E:
+
+- GPU
+- Datacenter
+- Office CAPEX
+
+но и Intangible Assets:
+
+- Workplace.ai IP
+- Contact_Center.ai IP
+
+Это капитализированные затраты
+на разработку собственных AI-продуктов.
+
+Они отражаются в balance sheet
+как intangible assets,
+а не как PP&E.
+
+---
+
+# 1. Что капитализируется
+
+Капитализируются только
+конкретные роли core team,
+которые непосредственно
+создают продукт и IP.
+
+Используется explicit inclusion list:
+
+- eligible_core_team_roles
+
+Если роль входит в этот список:
+
+→ payroll капитализируется
+
+Если роли нет в списке:
+
+→ payroll остается в OPEX / SG&A
+
+Это исключает двойной учет
+и упрощает логику модели.
+
+---
+
+# 2. Eligible Core Team Roles
+
+Капитализируются только:
+
+- head_of_ai
+
+- genai_lead
+- llm_engineer
+- ml_engineer
+- data_engineer
+
+- platform_lead
+- backend_engineer
+- ai_platform_engineer
+- devops_engineer
+
+- agent_lead
+- agent_engineer
+- business_analyst
+
+- chief_architect
+- solution_architect
+
+- mlops_lead
+- ml_engineer
+- devops_engineer
+
+- qa_lead
+- qa_engineer
+
+- data_lead
+- data_labeling_specialist
+
+Это роли,
+непосредственно создающие
+Workplace.ai и Contact_Center.ai.
+
+---
+
+# 3. НЕ капитализируется
+
+Не капитализируются:
+
+- implementation_manager
+- sre_engineer
+- datacenter team
+- office / admin roles
+- CEO / CFO
+- HR / Finance
+- Sales / Marketing
+- Customer Success
+- Support / Run team
+
+Это остается в OPEX / SG&A.
+
+---
+
+# 4. Build Period
+
+## Workplace.ai
+
+- build_period = 6 months
+
+## Contact_Center.ai
+
+- build_period = 6 months
+
+После build phase:
+
+- начинается go-live
+- начинается amortization
+
+---
+
+# 5. Effort Allocation
+
+Core team распределяется между продуктами:
+
+## Workplace.ai
+
+- 70% effort
+
+## Contact_Center.ai
+
+- 30% effort
+
+Это отражает:
+
+Workplace.ai = platform product
+
+Contact_Center.ai = vertical solution
+
+---
+
+# 6. Additional Capitalized Costs
+
+Кроме payroll капитализируются:
+
+## SFR
+
+- payroll tax / social contribution
+
+---
+
+## Development Infrastructure
+
+Включает:
+
+- development GPU
+- sandbox clusters
+- vector DB
+- experimentation infra
+- fine-tuning environment
+
+Формула:
+
+- development_infrastructure =
+  15% от capitalized payroll
+
+---
+
+## Data Acquisition / Labeling
+
+Включает:
+
+- annotation
+- synthetic datasets
+- domain corpora
+- evaluation datasets
+- dataset preparation
+
+Формула:
+
+- data_acquisition =
+  10% от capitalized payroll
+
+---
+
+# 7. Total IP Asset Value
+
+Формула:
+
+- total_ip_asset_value =
+  capitalized_payroll +
+  capitalized_sfr +
+  development_infrastructure +
+  data_acquisition
+
+Для:
+
+- Workplace.ai
+- Contact_Center.ai
+
+---
+
+# 8. Amortization
+
+Метод:
+
+- straight-line
+
+Useful life:
+
+- 5 years
+
+Формула:
+
+- annual_ip_amortization =
+  total_ip_asset_value /
+  5
+
+Амортизация начинается
+после go-live.
+
+---
+
+# HTML / CSV output
+
+Все таблицы должны быть
+в wide format:
+
+Metric | 2026 | 2027 | 2028 | 2029 | 2030
+
+---
+
+# HTML-отчет должен включать
+
+## Intangible Assets
+
+- workplace_ai_ip_value
+- contact_center_ai_ip_value
+- total_intangible_assets
+- annual_ip_amortization
+
+---
+
+# Важно
+
+Часть core payroll должна
+перейти из OPEX в balance sheet
+через капитализацию IP.
+
+Это делает:
+
+- EBITDA корректнее
+- EBIT корректнее
+- Balance Sheet полноценным
+- IC намного сильнее
+
+---
+
 ## Total CAPEX
 
 Общий CAPEX модели:
@@ -1073,6 +1331,269 @@ Investing Cash Flow включает:
 
 ---
 
+# Funding Model
+
+Модель должна рассчитывать funding need GPS на основе Cash Flow Statement.
+
+Funding используется, если cash balance становится отрицательным.
+
+---
+
+# Funding Scenarios
+
+Модель должна поддерживать 3 сценария:
+
+## 1. equity_only
+
+- 100% funding need покрывается equity injection
+- revolver не используется
+
+## 2. revolver_only
+
+- 100% funding need покрывается revolver drawdown
+- equity injection не используется
+
+## 3. mix
+
+- funding need покрывается комбинацией equity и revolver
+- equity_share и revolver_share задаются пользователем вручную
+- сумма equity_share + revolver_share должна быть равна 1.0
+
+Baseline:
+
+- equity_share = 50%
+- revolver_share = 50%
+
+---
+
+# Funding Need
+
+Формула:
+
+- funding_need =
+  max(-closing_cash_before_funding, 0)
+
+---
+
+# Equity Injection
+
+Формула:
+
+- equity_injection =
+  funding_need × equity_share
+
+---
+
+# Revolver Drawdown
+
+Формула:
+
+- revolver_drawdown =
+  funding_need × revolver_share
+
+---
+
+# Revolver Balance
+
+Формула:
+
+- revolver_balance =
+  previous_revolver_balance +
+  revolver_drawdown -
+  revolver_repayment
+
+На первом этапе:
+
+- revolver_repayment = 0
+
+---
+
+# Interest Expense
+
+Формула:
+
+- interest_expense =
+  average_revolver_balance ×
+  revolver_interest_rate
+
+Interest expense должен попадать в P&L ниже EBIT перед налогом на прибыль на следующем этапе.
+
+---
+
+# Closing Cash After Funding
+
+Формула:
+
+- closing_cash_after_funding =
+  closing_cash_before_funding +
+  equity_injection +
+  revolver_drawdown
+
+---
+
+# Balance Sheet
+
+Модель должна рассчитывать Balance Sheet GPS по годам 2026–2030.
+
+Balance Sheet строится на основе:
+
+- Cash Flow
+- CAPEX
+- Intangible Assets
+- Funding
+- P&L
+
+---
+
+# Assets
+
+## Current Assets
+
+### Cash
+
+- cash = closing_cash_after_funding
+
+Cash в Balance Sheet должен браться после funding, а не напрямую из Cash Flow Statement.
+
+---
+
+## Non-current Assets
+
+## PP&E
+
+PP&E включает:
+
+- GPU infrastructure
+- Datacenter construction
+- Office CAPEX
+
+Формулы:
+
+- gross_ppe =
+  cumulative_gpu_infra_capex +
+  cumulative_datacenter_construction_capex +
+  cumulative_office_capex
+
+- accumulated_depreciation =
+  cumulative_gpu_depreciation +
+  cumulative_datacenter_depreciation +
+  cumulative_office_capex_depreciation
+
+- net_ppe =
+  gross_ppe -
+  accumulated_depreciation
+
+---
+
+# Intangible Assets
+
+Intangible Assets включают:
+
+- Workplace.ai IP
+- Contact_Center.ai IP
+
+Формулы:
+
+- gross_intangible_assets =
+  cumulative_workplace_ai_ip_value +
+  cumulative_contact_center_ai_ip_value
+
+- accumulated_amortization =
+  cumulative_ip_amortization
+
+- net_intangible_assets =
+  gross_intangible_assets -
+  accumulated_amortization
+
+---
+
+# Total Assets
+
+Формула:
+
+- total_assets =
+  cash +
+  net_ppe +
+  net_intangible_assets
+
+---
+
+# Liabilities
+
+## Revolver Debt
+
+Формула:
+
+- revolver_balance =
+  previous_revolver_balance +
+  revolver_drawdown -
+  revolver_repayment
+
+---
+
+# Total Liabilities
+
+Формула:
+
+- total_liabilities =
+  revolver_balance
+
+---
+
+# Equity
+
+## Paid-in Capital
+
+Формула:
+
+- paid_in_capital =
+  cumulative_equity_injection
+
+---
+
+## Retained Earnings
+
+Формула:
+
+- retained_earnings =
+  cumulative_net_income
+
+---
+
+## Total Equity
+
+Формула:
+
+- total_equity =
+  paid_in_capital +
+  retained_earnings
+
+---
+
+# Balance Check
+
+Формула:
+
+- balance_check =
+  total_assets -
+  total_liabilities -
+  total_equity
+
+Если модель собрана корректно:
+
+- balance_check = 0
+
+---
+
+# HTML / CSV output
+
+Все таблицы должны быть в wide format:
+
+```text
+Metric | 2026 | 2027 | 2028 | 2029 | 2030
+
+---
+
 # DCF / Investment Metrics
 
 Модель должна рассчитывать
@@ -1218,6 +1739,110 @@ IRR сравнивается с:
 
 Это ключевой output
 для IC / инвестиционного комитета.
+
+# Return Metrics
+
+Модель должна рассчитывать дополнительные метрики доходности и эффективности капитала.
+
+## ROIC
+
+Формула:
+
+- ROIC = NOPAT / average_invested_capital
+
+Где:
+
+- NOPAT = EBIT × (1 - profit_tax_rate)
+- invested_capital = net_ppe + net_intangible_assets
+- average_invested_capital =
+  (invested_capital_beginning + invested_capital_ending) / 2
+
+## ROE
+
+Формула:
+
+- ROE = net_income / average_equity
+
+## ROA
+
+Формула:
+
+- ROA = net_income / average_total_assets
+
+## Leverage metrics
+
+Модель должна рассчитывать:
+
+- debt_to_equity = revolver_balance / total_equity
+- net_debt = revolver_balance - cash
+- net_debt_to_ebitda = net_debt / ebitda
+- interest_coverage = ebit / interest_expense
+
+---
+
+# Sensitivity Analysis
+
+Модель должна рассчитывать sensitivity analysis по ключевым драйверам.
+
+## Cases
+
+- base
+- downside
+- upside
+
+## Sensitivity drivers
+
+- discount_rate
+- target_contribution_margin
+- token_capacity_utilization
+- gpu_unit_cost
+- gpu_rental_price
+- electricity_price
+- fx_usd_rub
+
+## Output metrics
+
+Для каждого sensitivity case модель должна показывать:
+
+- NPV
+- IRR
+- Simple Payback
+- Discounted Payback
+- ROIC
+- ROE
+- Net Debt / EBITDA
+
+## HTML / CSV output
+
+Добавить таблицы:
+
+### Return Metrics
+
+- ROIC
+- ROE
+- ROA
+- Debt / Equity
+- Net Debt
+- Net Debt / EBITDA
+- Interest Coverage
+
+### Sensitivity Analysis
+
+Строки:
+
+- base
+- downside
+- upside
+
+Колонки:
+
+- NPV
+- IRR
+- Simple Payback
+- Discounted Payback
+- ROIC
+- ROE
+- Net Debt / EBITDA
 
 ---
 
