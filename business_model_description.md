@@ -1073,6 +1073,154 @@ Investing Cash Flow включает:
 
 ---
 
+# DCF / Investment Metrics
+
+Модель должна рассчитывать
+инвестиционные метрики GPS
+по годам 2026–2030.
+
+Используется для сравнения сценариев:
+
+- build_own_dc
+- rent_gpu_only
+- hybrid
+
+---
+
+# 1. Free Cash Flow (FCFF)
+
+Free Cash Flow строится
+на основе уже рассчитанного
+Cash Flow Statement.
+
+Формула:
+
+- free_cash_flow =
+  operating_cash_flow +
+  investing_cash_flow
+
+Так как financing cash flow
+на текущем этапе = 0,
+FCF отражает реальную
+экономику проекта.
+
+---
+
+# 2. Discount Rate (WACC proxy)
+
+Используется отдельный editable parameter:
+
+- discount_rate
+
+Это proxy для:
+
+- WACC
+- hurdle rate
+- target return for IC
+
+Рекомендуемый baseline:
+
+- 20%
+
+Пользователь должен иметь возможность
+менять discount_rate вручную.
+
+---
+
+# 3. Discounted Cash Flow
+
+## Discount Factor
+
+Формула:
+
+- discount_factor =
+  1 / (1 + discount_rate)^year_index
+
+---
+
+## Discounted FCF
+
+Формула:
+
+- discounted_fcf =
+  free_cash_flow ×
+  discount_factor
+
+---
+
+# 4. NPV
+
+Формула:
+
+- npv =
+  сумма discounted_fcf
+
+NPV показывает:
+
+создает ли проект
+стоимость для акционера.
+
+---
+
+# 5. IRR
+
+Формула:
+
+- irr =
+  IRR(free_cash_flow_series)
+
+IRR сравнивается с:
+
+- discount_rate
+- hurdle rate
+
+---
+
+# 6. Payback
+
+## Simple Payback
+
+Формула:
+
+- simple_payback =
+  первый год,
+  когда cumulative_cash > 0
+
+---
+
+## Discounted Payback
+
+Формула:
+
+- discounted_payback =
+  первый год,
+  когда cumulative_discounted_fcf > 0
+
+Это более корректная
+инвестиционная метрика.
+
+---
+
+# 7. Scenario Comparison
+
+Обязательно сравнивать:
+
+- build_own_dc
+- rent_gpu_only
+- hybrid
+
+по следующим метрикам:
+
+- NPV
+- IRR
+- simple_payback
+- discounted_payback
+
+Это ключевой output
+для IC / инвестиционного комитета.
+
+---
+
 # HTML и CSV output
 
 Python должен формировать:

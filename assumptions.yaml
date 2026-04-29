@@ -899,3 +899,65 @@ cash_flow:
         - opening_cash
         - closing_cash
         - cumulative_cash
+
+investment_metrics:
+  currency: RUB
+  description: >
+    DCF / Investment Metrics model GPS.
+    Используется для оценки инвестиционной привлекательности
+    сценариев build_own_dc / rent_gpu_only / hybrid.
+  discount_rate:
+    description: >
+      Discount rate / WACC proxy для DCF модели.
+      Используется как hurdle rate для IC.
+      Должен быть editable parameter.
+    value:
+      2026: 0.30
+  free_cash_flow:
+    operating_cash_flow:
+      source: cash_flow.operating_cash_flow.operating_cash_flow
+    investing_cash_flow:
+      source: cash_flow.investing_cash_flow.investing_cash_flow
+    free_cash_flow:
+      formula: operating_cash_flow + investing_cash_flow
+  discounted_cash_flow:
+    discount_factor:
+      formula: 1 / (1 + discount_rate)^year_index
+    discounted_fcf: free_cash_flow * discount_factor
+  valuation:
+    npv:
+      formula: sum(discounted_fcf)
+    irr: IRR(free_cash_flow_series)
+  payback:
+    simple_payback:
+      description: >
+        Первый год, когда cumulative_cash > 0
+      formula: first_year(cumulative_cash > 0)
+    discounted_payback:
+      description: >
+        Первый год, когда cumulative_discounted_fcf > 0
+      formula: first_year(cumulative_discounted_fcf > 0)
+  scenario_comparison:
+    compare_by:
+      - build_own_dc
+      - rent_gpu_only
+      - hybrid
+    metrics:
+      - npv
+      - irr
+      - simple_payback
+      - discounted_payback
+  html_output:
+    wide_format: true
+    tables:
+      dcf:
+        - free_cash_flow
+        - discount_rate
+        - discount_factor
+        - discounted_fcf
+        - cumulative_discounted_fcf
+      investment_metrics:
+        - npv
+        - irr
+        - simple_payback
+        - discounted_payback
