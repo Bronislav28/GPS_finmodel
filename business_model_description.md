@@ -1004,6 +1004,41 @@ Implied price:
 - pricing покрывает delivery cost и возврат инвестиций
 - SG&A оценивается отдельно на уровне EBITDA / EBIT
 
+## Revenue Start / Go-live logic
+
+Revenue по каждому продукту начинается только после go-live.
+
+Для каждого продукта используются:
+
+- go_live_year
+- go_live_month
+
+Логика:
+
+- если year < go_live_year:
+  - product_revenue = 0
+
+- если year = go_live_year:
+  - revenue_availability_factor =
+    active_months / 12
+
+  - active_months =
+    12 - go_live_month + 1
+
+  - product_revenue =
+    annual_product_revenue × revenue_availability_factor
+
+- если year > go_live_year:
+  - revenue_availability_factor = 1.0
+  - product_revenue считается за полный год
+
+Пример:
+
+Если go_live_month = 7:
+
+- active_months = 6
+- revenue_availability_factor = 0.5
+
 ---
 
 # P&L calculation

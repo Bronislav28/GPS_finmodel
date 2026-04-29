@@ -396,6 +396,7 @@ capex:
       workplace_ai:
         build_period_months: 6
         go_live_year: 2026
+        go_live_month: 7
         effort_share_of_core_team:
           value: 0.70
         calculation_logic:
@@ -408,6 +409,7 @@ capex:
       contact_center_ai:
         build_period_months: 6
         go_live_year: 2026
+        go_live_month: 7
         effort_share_of_core_team:
           value: 0.30
         calculation_logic:
@@ -800,6 +802,12 @@ revenue:
     revenue_by_product: pricing_base_by_product / (1 - target_contribution_margin)
     total_revenue: sum(revenue_by_product)
     implied_price_per_1m_tokens: revenue_by_product / sold_tokens_by_product * 1000000
+    revenue_active_months: max(12 - go_live_month + 1, 0)
+    revenue_availability_factor:
+      2026: revenue_active_months / 12
+      next_years: 1.0
+    product_revenue: >
+      annual_revenue_before_go_live_adjustment * revenue_availability_factor
   pricing_base_description: >
     База для расчета выручки и implied token price включает COGS и depreciation.
     SG&A не включается в pricing base и учитывается ниже в P&L при расчете EBITDA.
