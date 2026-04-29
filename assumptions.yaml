@@ -596,10 +596,15 @@ opex:
 sga:
   currency: RUB
   description: >
-    Постоянные административные расходы GPS, не относящиеся к delivery OPEX,
-    ЦОДу, GPU rental и core AI/platform team.
+    SG&A — постоянные административные расходы GPS.
+    Расчет: gross salary + annual bonus + social contribution (SFR).
   inflation_driver: inflation_assumptions.rub_inflation
-  monthly_cost_base_2026:
+  payroll_assumptions:
+    annual_bonus_percent_of_gross:
+      value: 0.20
+    social_contribution_sfr_percent_of_gross:
+      value: 0.30
+  salary_gross_monthly_rub:
     corporate_management:
       ceo_gm: 1200000
       cfo_finance_controller: 700000
@@ -618,6 +623,12 @@ sga:
       procurement_support: 250000
     shared_corporate_services:
       audit: 250000
+  calculation_logic:
+    annual_gross_salary: monthly_gross_salary * 12 * inflation_index_t
+    annual_bonus: annual_gross_salary * annual_bonus_percent_of_gross * worked_months_ratio
+    annual_social_contribution_sfr: (annual_gross_salary + annual_bonus) * social_contribution_sfr_percent_of_gross
+    annual_fully_loaded_cost: annual_gross_salary + annual_bonus + annual_social_contribution_sfr
+    annual_fixed_sga: sum(annual_fully_loaded_cost)
   office_rent:
     description: >
       Аренда офиса GPS рассчитывается исходя из численности сотрудников,
@@ -634,11 +645,8 @@ sga:
       rent_rub_per_sqm_per_month_t: rent_rub_per_sqm_per_month_base_2026 * inflation_index_t
       monthly_office_rent: required_office_area_sqm * rent_rub_per_sqm_per_month_t
       annual_office_rent: monthly_office_rent * 12
-  calculation_logic:
-    monthly_cost_t: monthly_cost_base_2026 * inflation_index_t
-    annual_fixed_sga: sum(monthly_cost_t) * 12
-    annual_office_rent: office_rent.annual_office_rent
-    total_sga: annual_fixed_sga + annual_office_rent
+  total_sga:
+    formula: annual_fixed_sga + annual_office_rent
 
 revenue:
   currency: RUB
@@ -692,7 +700,6 @@ revenue:
     description: >
       OPEX распределяется между продуктами пропорционально фактическому
       потреблению токенов по каждому продукту.
-
   calculation_logic:
     sold_tokens: available_token_capacity * utilization_of_token_capacity
     sold_tokens_by_product: available_tokens_by_product * utilization_of_token_capacity
@@ -700,3 +707,125 @@ revenue:
     revenue_by_product: opex_by_product / (1 - target_contribution_margin)
     total_revenue: sum(revenue_by_product)
     implied_price_per_1m_tokens: revenue_by_product / sold_tokens_by_product * 1000000
+
+pnl:
+  currency: RUB
+  description: >
+    Profit & Loss model GPS. P&L строится на основе Revenue, COGS (delivery OPEX),
+    SG&A, Depreciation и налога на прибыль.
+  tax:
+    profit_tax_rate:
+      value: 0.25
+  revenue_block:
+    description: >
+      Revenue рассчитывается через utilization scenarios
+      и contribution margin logic.
+    lines:
+      workplace_ai_revenue:
+        source: revenue.workplace_ai_revenue
+      contact_center_ai_revenue:
+        source: revenue.contact_center_ai_revenue
+      total_revenue:
+        formula: workplace_ai_revenue + contact_center_ai_revenue
+  cogs_block:
+    description: >
+      COGS = delivery costs, необходимые для оказания AI-сервисов.
+    datacenter_opex:
+      electricity_cost:
+        source: opex.datacenter.electricity_cost
+      maintenance_cost:
+        source: opex.datacenter.maintenance_cost
+      network_cost:
+        source: opex.datacenter.network_cost
+      land_rent:
+        source: opex.datacenter.land_rent
+      other_datacenter_opex:
+        source: opex.datacenter.other_opex
+      total_datacenter_opex:
+        source: opex.datacenter.total_datacenter_opex
+    team_opex:
+      payroll_gross:
+        source: team.payroll_gross
+      annual_bonus:
+        source: team.annual_bonus
+      social_contribution_sfr:
+        source: team.social_contribution_sfr
+      total_team_opex:
+        source: team.annual_team_opex
+    gpu_rental_opex:
+      annual_gpu_rental_cost:
+        source: opex.gpu_rental.annual_gpu_rental_cost
+    total_cogs: total_datacenter_opex + total_team_opex + annual_gpu_rental_cost
+  gross_profit:
+    formula: total_revenue - total_cogs
+  sga_block:
+    description: >
+      SG&A = overhead costs, не относящиеся к delivery.
+    corporate_management:
+      source: sga.corporate_management
+    hr:
+      source: sga.hr
+    finance_and_accounting:
+      source: sga.finance_and_accounting
+    admin:
+      source: sga.admin
+    shared_corporate_services:
+      source: sga.shared_corporate_services
+    office_rent:
+      source: sga.office_rent.annual_office_rent
+    total_sga:
+      source: sga.total_sga
+  ebitda: gross_profit - total_sga
+  depreciation_block:
+    description: >
+      Амортизация только собственных активов.
+    gpu_depreciation:
+      source: capex.gpu_depreciation
+    datacenter_depreciation:
+      source: capex.datacenter_depreciation
+    office_capex_depreciation:
+      source: capex.office_capex_depreciation
+    total_depreciation:
+      source: capex.total_depreciation
+  ebit:
+    formula: ebitda - total_depreciation
+  profit_tax: max(ebit, 0) * profit_tax_rate
+  net_income: ebit - profit_tax
+  html_output:
+    wide_format: true
+    tables:
+      revenue:
+        - workplace_ai_revenue
+        - contact_center_ai_revenue
+        - total_revenue
+      cogs:
+        - electricity_cost
+        - maintenance_cost
+        - network_cost
+        - land_rent
+        - other_datacenter_opex
+        - total_datacenter_opex
+        - payroll_gross
+        - annual_bonus
+        - social_contribution_sfr
+        - total_team_opex
+        - annual_gpu_rental_cost
+        - total_cogs
+      sga:
+        - corporate_management
+        - hr
+        - finance_and_accounting
+        - admin
+        - shared_corporate_services
+        - office_rent
+        - total_sga
+      pnl_summary:
+        - total_revenue
+        - total_cogs
+        - gross_profit
+        - total_sga
+        - ebitda
+        - total_depreciation
+        - ebit
+        - profit_tax
+        - net_income

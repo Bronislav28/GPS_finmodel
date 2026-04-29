@@ -713,6 +713,209 @@ Revenue зависит от:
 
 ---
 
+# P&L calculation
+
+Модель должна рассчитывать полноценный Profit & Loss (P&L)
+по годам 2026–2030.
+
+P&L строится на основе:
+
+- Revenue
+- COGS (delivery costs)
+- SG&A
+- Depreciation
+- Profit Tax
+
+---
+
+# Revenue
+
+Revenue рассчитывается через utilization scenarios
+и contribution margin logic.
+
+Revenue должен быть раскрыт по продуктам:
+
+- Workplace.ai
+- Contact_Center.ai
+
+Формулы:
+
+- workplace_ai_revenue
+- contact_center_ai_revenue
+
+- total_revenue =
+  workplace_ai_revenue +
+  contact_center_ai_revenue
+
+---
+
+# COGS (Cost of Goods Sold)
+
+COGS = delivery costs,
+необходимые для оказания AI-сервисов.
+
+COGS включает:
+
+## Datacenter OPEX
+
+- electricity_cost
+- maintenance_cost
+- network_cost
+- land_rent
+- other_datacenter_opex
+- total_datacenter_opex
+
+---
+
+## Team OPEX
+
+Team payroll должен быть раскрыт отдельно:
+
+- payroll_gross
+- annual_bonus
+- social_contribution_sfr
+- total_team_opex
+
+---
+
+## GPU Rental OPEX
+
+- annual_gpu_rental_cost
+
+---
+
+## Total COGS
+
+Формула:
+
+- total_cogs =
+  total_datacenter_opex +
+  total_team_opex +
+  annual_gpu_rental_cost
+
+---
+
+# Gross Profit
+
+Формула:
+
+- gross_profit =
+  total_revenue -
+  total_cogs
+
+---
+
+# SG&A
+
+SG&A = overhead costs,
+не относящиеся к delivery.
+
+## Важно
+
+SG&A payroll считается как fully loaded cost:
+
+- annual gross salary
+- annual bonus
+- social contribution SFR (30%)
+
+Бонус:
+
+- начисляется один раз в декабре
+- пропорционально фактически отработанному времени в году
+
+SFR:
+
+- начисляется на:
+  gross salary + annual bonus
+
+---
+
+## SG&A включает:
+
+- corporate_management
+- hr
+- finance_and_accounting
+- admin
+- shared_corporate_services
+- office_rent
+
+---
+
+## Total SG&A
+
+Формула:
+
+- total_sga =
+  annual_fixed_sga +
+  annual_office_rent
+
+---
+
+# EBITDA
+
+Формула:
+
+- ebitda =
+  gross_profit -
+  total_sga
+
+---
+
+# Depreciation
+
+Амортизация начисляется только
+на собственные активы:
+
+- GPU
+- datacenter construction
+- office CAPEX
+
+Формулы:
+
+- gpu_depreciation
+- datacenter_depreciation
+- office_capex_depreciation
+
+- total_depreciation =
+  сумма всех видов depreciation
+
+GPU rental не амортизируется.
+
+---
+
+# EBIT
+
+Формула:
+
+- ebit =
+  ebitda -
+  total_depreciation
+
+---
+
+# Profit Tax
+
+Налог начисляется только
+при положительном EBIT.
+
+Формула:
+
+- profit_tax =
+  max(ebit, 0) ×
+  profit_tax_rate
+
+---
+
+# Net Income
+
+Формула:
+
+- net_income =
+  ebit -
+  profit_tax
+
+---
+
 # HTML и CSV output
 
 Python должен формировать:
