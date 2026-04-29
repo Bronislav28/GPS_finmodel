@@ -253,8 +253,10 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
             "total_depreciation",
             "operating_cash_flow",
             "gpu_capex",
+            "gpu_infra_capex",
             "datacenter_construction_capex",
             "office_capex",
+            "intangible_capex",
             "investing_cash_flow",
             "financing_cash_flow",
             "net_cash_flow",
@@ -702,6 +704,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         "meeting_rooms": [],
         "office_furniture": [],
     }
+    intangible_capex_history: list[float] = []
     prev_electricity_price: float | None = None
     prev_fx: float | None = None
     prev_owned_gpu = 0
@@ -931,6 +934,13 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             meeting_rooms_depreciation,
             office_furniture_depreciation,
         )
+        workplace_ai_ip_value = 0.0
+        contact_center_ai_ip_value = 0.0
+        intangible_capex = safe_add(workplace_ai_ip_value, contact_center_ai_ip_value)
+        intangible_capex_history.append(intangible_capex)
+        ip_life = max(1, int(((ass.get("capex", {}).get("intangible_assets", {}) or {}).get("amortization", {}) or {}).get("useful_life_years", 5)))
+        ip_window = intangible_capex_history[-ip_life:]
+        ip_amortization = float("nan") if any(math.isnan(v) for v in ip_window) else sum(ip_window) / ip_life
 
         total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex, total_office_capex)
         gpu_infra_capex_history.append(gpu_infra_capex)
@@ -939,7 +949,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         datacenter_window = datacenter_capex_history[-useful_life:]
         gpu_depreciation = float("nan") if any(math.isnan(v) for v in gpu_window) else sum(gpu_window) / useful_life
         datacenter_depreciation = float("nan") if any(math.isnan(v) for v in datacenter_window) else sum(datacenter_window) / useful_life
-        total_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation)
+        total_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation, ip_amortization)
 
         payroll_gross = total_gross_cost_year
         annual_bonus = total_bonus_cost_year
@@ -982,7 +992,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         net_income = safe_add(ebt, -profit_tax)
         operating_cash_flow = safe_add(net_income, total_depreciation)
         office_capex = total_office_capex
-        investing_cash_flow = safe_add(-gpu_capex, -datacenter_construction_capex, -office_capex)
+        investing_cash_flow = safe_add(-gpu_infra_capex, -datacenter_construction_capex, -office_capex, -intangible_capex)
         financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
         net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
         opening_cash = as_float(opening_cash_map.get(year))
@@ -1015,9 +1025,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         gross_ppe = sum(gpu_infra_capex_history) + sum(datacenter_capex_history) + sum(sum(v) for v in office_capex_history.values())
         accumulated_depreciation = sum((as_float(r.get("gpu_depreciation")) or 0.0) + (as_float(r.get("datacenter_depreciation")) or 0.0) + (as_float(r.get("office_capex_depreciation")) or 0.0) for r in rows) + gpu_depreciation + datacenter_depreciation + office_capex_depreciation
         net_ppe = gross_ppe - accumulated_depreciation
-        gross_intangible_assets = 0.0
-        accumulated_amortization = 0.0
-        net_intangible_assets = 0.0
+        gross_intangible_assets = sum(intangible_capex_history)
+        accumulated_amortization = sum((as_float(r.get("ip_amortization")) or 0.0) for r in rows) + ip_amortization
+        net_intangible_assets = gross_intangible_assets - accumulated_amortization
         cash = closing_cash_after_funding
         total_assets = cash + net_ppe + net_intangible_assets
         total_liabilities = revolver_balance
@@ -1051,6 +1061,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "gpu_depreciation": gpu_depreciation,
                 "datacenter_depreciation": datacenter_depreciation,
                 "office_capex_depreciation": office_capex_depreciation,
+                "ip_amortization": ip_amortization,
                 "total_depreciation": total_depreciation,
                 "annual_depreciation": total_depreciation,
                 "gpu_beginning_of_year": gpu_beginning_of_year,
@@ -1112,6 +1123,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "net_income": net_income,
                 "operating_cash_flow": operating_cash_flow,
                 "office_capex": office_capex,
+                "intangible_capex": intangible_capex,
                 "investing_cash_flow": investing_cash_flow,
                 "financing_cash_flow": financing_cash_flow,
                 "net_cash_flow": net_cash_flow,
