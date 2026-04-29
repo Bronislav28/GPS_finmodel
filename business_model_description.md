@@ -1416,7 +1416,7 @@ Baseline:
   average_revolver_balance ×
   revolver_interest_rate
 
-Interest expense должен попадать в P&L ниже EBIT перед налогом на прибыль на следующем этапе.
+Interest expense должен попадать в P&L ниже EBIT перед налогом на прибыль.
 
 ---
 
