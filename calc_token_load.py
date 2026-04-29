@@ -910,14 +910,23 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             total_revenue = float("nan")
             workplace_ai_revenue = float("nan")
             contact_center_ai_revenue = float("nan")
+            workplace_implied_price_per_1m_tokens = float("nan")
+            contact_center_implied_price_per_1m_tokens = float("nan")
         else:
             sold_wp_tokens = safe_mul(as_float(base.get("workplace_annual_tokens")), utilization)
             sold_cc_tokens = safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization)
-            cogs_wp = safe_mul(total_cogs, as_float(base.get("workplace_token_share")))
-            cogs_cc = safe_mul(total_cogs, as_float(base.get("contact_center_token_share")))
-            workplace_ai_revenue = safe_mul(cogs_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
-            contact_center_ai_revenue = safe_mul(cogs_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            pricing_base = safe_add(total_cogs, total_depreciation)
+            pricing_base_wp = safe_mul(pricing_base, as_float(base.get("workplace_token_share")))
+            pricing_base_cc = safe_mul(pricing_base, as_float(base.get("contact_center_token_share")))
+            workplace_ai_revenue = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            contact_center_ai_revenue = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
             total_revenue = safe_add(workplace_ai_revenue, contact_center_ai_revenue)
+            workplace_implied_price_per_1m_tokens = (
+                (workplace_ai_revenue / sold_wp_tokens) * 1_000_000 if sold_wp_tokens and sold_wp_tokens > 0 else float("nan")
+            )
+            contact_center_implied_price_per_1m_tokens = (
+                (contact_center_ai_revenue / sold_cc_tokens) * 1_000_000 if sold_cc_tokens and sold_cc_tokens > 0 else float("nan")
+            )
 
         gross_profit = safe_add(total_revenue, -total_cogs)
         ebitda = safe_add(gross_profit, -total_sga)
@@ -998,6 +1007,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "workplace_ai_revenue": workplace_ai_revenue,
                 "contact_center_ai_revenue": contact_center_ai_revenue,
                 "total_revenue": total_revenue,
+                "workplace_implied_price_per_1m_tokens": workplace_implied_price_per_1m_tokens,
+                "contact_center_implied_price_per_1m_tokens": contact_center_implied_price_per_1m_tokens,
                 "other_datacenter_opex": other_opex,
                 "total_cogs": total_cogs,
                 "gross_profit": gross_profit,
