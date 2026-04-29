@@ -47,6 +47,8 @@ const selector = document.getElementById('scenarioSelect');
 const infraContainer = document.getElementById('infraTables');
 const infraSelector = document.getElementById('infraScenarioSelect');
 const constructionInput = document.getElementById('constructionStartYear');
+const dcfContainer = document.getElementById('dcfTables');
+const discountRateInput = document.getElementById('discountRateInput');
 
 function fmt(metric, value) {
   if (value === null || Number.isNaN(value)) return 'NaN';
@@ -304,6 +306,70 @@ function renderInfraTables() {
     metricRow('ebitda', vals('ebitda')),
   ].join(''));
   infraContainer.innerHTML = html;
+  renderDcfTables(rows);
+}
+
+
+function computeIrr(cashFlows) {
+  const hasPos = cashFlows.some(v => v > 0);
+  const hasNeg = cashFlows.some(v => v < 0);
+  if (!hasPos || !hasNeg) return null;
+  const npv = (r) => cashFlows.reduce((a, cf, i) => a + cf / Math.pow(1 + r, i), 0);
+  let low = -0.9999, high = 10.0;
+  let fLow = npv(low), fHigh = npv(high);
+  if (!Number.isFinite(fLow) || !Number.isFinite(fHigh) || fLow * fHigh > 0) return null;
+  for (let i=0;i<200;i++) {
+    const mid = (low+high)/2; const fMid = npv(mid);
+    if (Math.abs(fMid) < 1e-7) return mid;
+    if (fLow * fMid <= 0) { high = mid; fHigh = fMid; } else { low = mid; fLow = fMid; }
+  }
+  return (low+high)/2;
+}
+
+function renderDcfTables(rows) {
+  const dr = Number(discountRateInput.value);
+  const discountRate = Number.isFinite(dr) ? dr : 0.2;
+  const dcf = rows.map((r, idx) => {
+    const free = (r.netIncome || 0) + (r.depreciation || 0) + (-(r.gpuCapex||0) - (r.dcConstructionCapex||0) - (r.totalOfficeCapex||0));
+    const factor = 1 / Math.pow(1 + discountRate, idx);
+    return { year: r.year, free_cash_flow: free, discount_rate: discountRate, discount_factor: factor, discounted_fcf: free * factor };
+  });
+  let cum = 0; dcf.forEach(r => { cum += r.discounted_fcf; r.cumulative_discounted_fcf = cum; });
+  const npv = dcf.reduce((a,r)=>a+r.discounted_fcf,0);
+  const irr = computeIrr(dcf.map(r=>r.free_cash_flow));
+  const simplePayback = rows.find(r => (r.netIncome||0)+(r.depreciation||0) > 0)?.year || 'Not reached';
+  const discountedPayback = dcf.find(r => r.cumulative_discounted_fcf > 0)?.year || 'Not reached';
+  const vals = (arr,k)=>arr.map(x=>x[k]);
+  let html='';
+  html += infraBlock('DCF', [
+    metricRow('free_cash_flow', vals(dcf,'free_cash_flow')),
+    metricRow('discount_rate', vals(dcf,'discount_rate'), false, true),
+    metricRow('discount_factor', vals(dcf,'discount_factor')),
+    metricRow('discounted_fcf', vals(dcf,'discounted_fcf')),
+    metricRow('cumulative_discounted_fcf', vals(dcf,'cumulative_discounted_fcf'))
+  ].join(''));
+  const scenarioList = ['build_own_dc', 'rent_gpu_only', 'hybrid'];
+  const compareRows = scenarioList.map(sc => {
+    const scRows = calcInfraRows(sc, sc === 'hybrid' ? (toNum(constructionInput.value) || INFRA_DATA.hybrid_default_start_year) : 2026);
+    const scDcf = scRows.map((r, i) => {
+      const free = (r.netIncome || 0) + (r.depreciation || 0) + (-(r.gpuCapex||0) - (r.dcConstructionCapex||0) - (r.totalOfficeCapex||0));
+      return free / Math.pow(1 + discountRate, i);
+    });
+    const npvV = scDcf.reduce((a,v)=>a+v,0);
+    const irrV = computeIrr(scRows.map(r => (r.netIncome||0)+(r.depreciation||0)+ (-(r.gpuCapex||0) - (r.dcConstructionCapex||0) - (r.totalOfficeCapex||0))));
+    const sp = scRows.find(r => (r.netIncome||0)+(r.depreciation||0) > 0)?.year || 'Not reached';
+    let cum=0; let dp='Not reached';
+    for(let i=0;i<scRows.length;i++){ cum += scDcf[i]; if(cum>0){dp=scRows[i].year; break;}}
+    return {sc,npvV,irrV,sp,dp};
+  });
+  html += infraBlock('Investment Metrics', [
+    metricRow('npv', [npv, '', '', '', '']),
+    metricRow('irr', [irr, '', '', '', ''], false, true),
+    metricRow('simple_payback', [simplePayback, '', '', '', '']),
+    metricRow('discounted_payback', [discountedPayback, '', '', '', ''])
+  ].join(''));
+  const scHeader = '<h2>Scenario Comparison</h2><table><thead><tr><th>Scenario</th><th>NPV</th><th>IRR</th><th>Simple Payback</th><th>Discounted Payback</th></tr></thead><tbody>' + compareRows.map(r => `<tr><td>${r.sc}</td><td>${fmt('npv',r.npvV)}</td><td>${r.irrV===null?'Not available':(r.irrV*100).toFixed(2)+'%'} </td><td>${r.sp}</td><td>${r.dp}</td></tr>`).join('') + '</tbody></table>';
+  dcfContainer.innerHTML = html + scHeader;
 }
 
 function setConstructionInputState() {
@@ -323,6 +389,7 @@ function setConstructionInputState() {
 
 infraSelector.addEventListener('change', setConstructionInputState);
 constructionInput.addEventListener('input', renderInfraTables);
+discountRateInput.addEventListener('input', renderInfraTables);
 infraSelector.value = INFRA_DATA.active_scenario || 'build_own_dc';
 setConstructionInputState();
 </script>

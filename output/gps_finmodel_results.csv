@@ -249,6 +249,18 @@ base,P&L / Summary,annual_team_opex,492102000.0,881846784.0,970031462.4000001,10
 base,P&L / Summary,total_opex,555102000.0,1123046784.0,1161668721.15,1134707549.2357507,1138518139.0930207
 base,P&L / Summary,total_sga,8400000.0,14380800.0,15243648.0,16005830.400000002,16806121.920000006
 base,P&L / Summary,ebitda,-479302323.0,-814804053.0,-336930507.1500001,977563213.3642493,1979815262.9869792
+base,DCF,free_cash_flow,50305686.27450979,206462023.19047627,-1911472217.6172628,683279617.8216953,1751466828.0288844
+base,DCF,discount_rate,0.3,0.3,0.3,0.3,0.3
+base,DCF,discount_factor,1.0,0.7692307692307692,0.5917159763313609,0.4551661356395084,0.35012779664577565
+base,DCF,discounted_fcf,50305686.27450979,158816940.91575095,-1131048649.4776702,311005743.20514125,613237221.395919
+base,DCF,cumulative_discounted_fcf,50305686.27450979,209122627.19026074,-921926022.2874094,-610920279.0822682,2316942.3136507273
+base,Investment Metrics,npv,2316942.3136507273,,,,
+base,Investment Metrics,irr,,,,,
+base,Investment Metrics,simple_payback,2026,,,,
+base,Investment Metrics,discounted_payback,2026,,,,
+build_own_dc,Scenario Comparison,summary,108086594.69462782,0.3353718086166201,2029,2030,
+rent_gpu_only,Scenario Comparison,summary,1124494407.0284555,,2026,2026,
+hybrid,Scenario Comparison,summary,2316942.3136507273,,2026,2026,
 aggressive,Infrastructure Scenario,active_scenario,hybrid,hybrid,hybrid,hybrid,hybrid
 aggressive,Infrastructure Scenario,construction_start_year,2028,2028,2028,2028,2028
 aggressive,Infrastructure Scenario,construction_flag,0,0,1,0,0
