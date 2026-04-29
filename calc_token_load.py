@@ -278,7 +278,7 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
             "cumulative_cash",
         ],
     ),
-    ("Funding", ["funding_need", "equity_injection", "revolver_drawdown", "revolver_balance", "interest_expense", "closing_cash_after_funding"]),
+    ("Funding", ["funding_need", "equity_injection", "revolver_drawdown", "revolver_repayment", "revolver_balance", "interest_expense", "closing_cash_after_funding"]),
     (
         "Balance Sheet",
         ["cash", "gross_ppe", "accumulated_depreciation", "net_ppe", "gross_intangible_assets", "accumulated_amortization", "net_intangible_assets", "total_assets", "revolver_balance", "total_liabilities", "paid_in_capital", "retained_earnings", "total_equity", "balance_check"],
@@ -1049,14 +1049,18 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         gross_profit = safe_add(total_revenue, -total_cogs)
         ebitda = safe_add(gross_profit, -total_sga)
         ebit = safe_add(ebitda, -total_depreciation)
-        interest_expense = ((prev_revolver_balance + prev_revolver_balance) / 2.0) * float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
+        office_capex = total_office_capex
+        investing_cash_flow = safe_add(-gpu_infra_capex, -datacenter_construction_capex, -office_capex, -intangible_capex)
+        financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
+
+        opening_revolver_balance = prev_revolver_balance
+        revolver_interest_rate = float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
+        minimum_cash_balance = 0.0
+        interest_expense = ((opening_revolver_balance + opening_revolver_balance) / 2.0) * revolver_interest_rate
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
         operating_cash_flow = safe_add(net_income, total_depreciation)
-        office_capex = total_office_capex
-        investing_cash_flow = safe_add(-gpu_infra_capex, -datacenter_construction_capex, -office_capex, -intangible_capex)
-        financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
         net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
         opening_cash = as_float(opening_cash_map.get(year))
         if opening_cash is None:
@@ -1066,10 +1070,12 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
         equity_injection = funding_need * equity_share
         revolver_drawdown = funding_need * revolver_share
-        revolver_repayment = 0.0
-        revolver_balance = prev_revolver_balance + revolver_drawdown - revolver_repayment
-        avg_revolver_balance = (prev_revolver_balance + revolver_balance) / 2.0
-        interest_expense = avg_revolver_balance * float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
+        cash_after_drawdown = safe_add(closing_cash_before_funding, equity_injection, revolver_drawdown)
+        excess_cash_available_for_repayment = max((cash_after_drawdown or 0.0) - minimum_cash_balance, 0.0)
+        revolver_repayment = min(excess_cash_available_for_repayment, opening_revolver_balance)
+        revolver_balance = opening_revolver_balance + revolver_drawdown - revolver_repayment
+        avg_revolver_balance = (opening_revolver_balance + revolver_balance) / 2.0
+        interest_expense = avg_revolver_balance * revolver_interest_rate
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
@@ -1079,8 +1085,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
         equity_injection = funding_need * equity_share
         revolver_drawdown = funding_need * revolver_share
-        revolver_balance = prev_revolver_balance + revolver_drawdown
-        closing_cash_after_funding = safe_add(closing_cash_before_funding, equity_injection, revolver_drawdown)
+        cash_after_drawdown = safe_add(closing_cash_before_funding, equity_injection, revolver_drawdown)
+        excess_cash_available_for_repayment = max((cash_after_drawdown or 0.0) - minimum_cash_balance, 0.0)
+        revolver_repayment = min(excess_cash_available_for_repayment, opening_revolver_balance)
+        revolver_balance = opening_revolver_balance + revolver_drawdown - revolver_repayment
+        closing_cash_after_funding = safe_add(cash_after_drawdown, -revolver_repayment)
         closing_cash = closing_cash_after_funding
         cumulative_cash = safe_add(cumulative_cash_prev, net_cash_flow)
         cumulative_equity_injection += equity_injection
@@ -1199,6 +1208,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "funding_need": funding_need,
                 "equity_injection": equity_injection,
                 "revolver_drawdown": revolver_drawdown,
+                "revolver_repayment": revolver_repayment,
                 "revolver_balance": revolver_balance,
                 "closing_cash_after_funding": closing_cash_after_funding,
                 "cash": cash,
