@@ -240,10 +240,10 @@ DEFAULT_BLOCKS: list[tuple[str, list[str]]] = [
     ("SG&A", ["annual_fixed_sga", "required_office_area_sqm", "annual_office_rent", "total_sga"]),
     ("GPU Rental OPEX", ["rental_price_per_gpu_per_year", "annual_gpu_rental_cost"]),
     ("Total OPEX", ["total_datacenter_opex", "annual_team_opex", "annual_gpu_rental_cost", "total_opex"]),
-    ("Revenue", ["revenue", "cogs", "gross_profit", "gross_margin"]),
+    ("Revenue", ["workplace_ai_revenue", "contact_center_ai_revenue", "total_revenue"]),
     (
-        "Summary",
-        ["workplace_token_share", "contact_center_token_share", "required_gpu", "total_capex", "annual_depreciation", "total_opex", "total_sga", "ebitda"],
+        "P&L Summary",
+        ["total_revenue", "total_cogs", "gross_profit", "total_sga", "ebitda", "total_depreciation", "ebit", "profit_tax", "net_income"],
     ),
 ]
 SCENARIO_ORDER = ["conservative", "base", "aggressive"]
@@ -582,6 +582,19 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         year_value(opex_root.get("gpu_rental", {}).get("rental_price_per_gpu_per_year"), years[0]),
         "opex.gpu_rental.rental_price_per_gpu_per_year.value",
     )
+    revenue_cfg = ass.get("revenue", {}) if isinstance(ass.get("revenue"), dict) else {}
+    revenue_scenario = str(revenue_cfg.get("active_scenario", "base"))
+    if revenue_scenario not in revenue_cfg.get("consumption_scenarios", {}):
+        print(f"WARNING: revenue.active_scenario='{revenue_scenario}' не найден; используется base.", file=sys.stderr)
+        revenue_scenario = "base"
+    util_map = to_year_map(
+        ((revenue_cfg.get("consumption_scenarios", {}).get(revenue_scenario, {}) or {}).get("utilization_of_token_capacity"))
+    )
+    margin_map = to_year_map((revenue_cfg.get("target_contribution_margin", {}) or {}).get(revenue_scenario))
+    profit_tax_rate = year_value(((ass.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate"), years[0], 0.0)
+    if profit_tax_rate is None:
+        print("WARNING: pnl.tax.profit_tax_rate отсутствует; используется 0.", file=sys.stderr)
+        profit_tax_rate = 0.0
 
     base_rows: list[dict[str, Any]] = []
     prev_required_gpu = 0
@@ -883,12 +896,34 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         datacenter_depreciation = float("nan") if any(math.isnan(v) for v in datacenter_window) else sum(datacenter_window) / useful_life
         total_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation)
 
+        payroll_gross = total_gross_cost_year
+        annual_bonus = total_bonus_cost_year
+        social_contribution_sfr = total_social_cost_year
+        total_team_opex = annual_team_opex
         total_opex = safe_add(total_datacenter_opex, annual_team_opex, annual_gpu_rental_cost)
-        base_revenue = (as_float(base.get("total_annual_tokens")) or 0.0) * 0.002
-        cogs = base_revenue * 0.35
-        gross_profit = base_revenue - cogs
-        gross_margin = gross_profit / base_revenue if base_revenue else float("nan")
-        ebitda = base_revenue - total_opex - total_sga if not any(math.isnan(v) for v in [base_revenue, total_opex, total_sga]) else float("nan")
+        total_cogs = safe_add(total_datacenter_opex, total_team_opex, annual_gpu_rental_cost)
+
+        utilization = as_float(util_map.get(year))
+        contribution_margin = as_float(margin_map.get(year))
+        if utilization is None or contribution_margin is None:
+            print(f"WARNING: revenue assumptions missing for {year}; revenue set to NaN.", file=sys.stderr)
+            total_revenue = float("nan")
+            workplace_ai_revenue = float("nan")
+            contact_center_ai_revenue = float("nan")
+        else:
+            sold_wp_tokens = safe_mul(as_float(base.get("workplace_annual_tokens")), utilization)
+            sold_cc_tokens = safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization)
+            cogs_wp = safe_mul(total_cogs, as_float(base.get("workplace_token_share")))
+            cogs_cc = safe_mul(total_cogs, as_float(base.get("contact_center_token_share")))
+            workplace_ai_revenue = safe_mul(cogs_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            contact_center_ai_revenue = safe_mul(cogs_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            total_revenue = safe_add(workplace_ai_revenue, contact_center_ai_revenue)
+
+        gross_profit = safe_add(total_revenue, -total_cogs)
+        ebitda = safe_add(gross_profit, -total_sga)
+        ebit = safe_add(ebitda, -total_depreciation)
+        profit_tax = max(ebit, 0.0) * float(profit_tax_rate) if not math.isnan(ebit) else float("nan")
+        net_income = safe_add(ebit, -profit_tax)
 
         rows.append(
             {
@@ -941,6 +976,10 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "monthly_team_cost": monthly_team_cost,
                 "sga_monthly_fte": sga_monthly_fte,
                 "total_fte": total_fte,
+                "payroll_gross": payroll_gross,
+                "annual_bonus": annual_bonus,
+                "social_contribution_sfr": social_contribution_sfr,
+                "total_team_opex": total_team_opex,
                 "annual_team_opex": annual_team_opex,
                 "inflation_index_t": inflation_index_t,
                 "annual_fixed_sga": annual_fixed_sga,
@@ -948,13 +987,24 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "rent_rub_per_sqm_per_month_t": rent_rub_per_sqm_per_month_t,
                 "monthly_office_rent": monthly_office_rent,
                 "annual_office_rent": annual_office_rent,
+                "corporate_management": float("nan"),
+                "hr": float("nan"),
+                "finance_and_accounting": float("nan"),
+                "admin": float("nan"),
+                "shared_corporate_services": float("nan"),
+                "office_rent": annual_office_rent,
                 "total_sga": total_sga,
                 "total_opex": total_opex,
-                "revenue": base_revenue,
-                "cogs": cogs,
+                "workplace_ai_revenue": workplace_ai_revenue,
+                "contact_center_ai_revenue": contact_center_ai_revenue,
+                "total_revenue": total_revenue,
+                "other_datacenter_opex": other_opex,
+                "total_cogs": total_cogs,
                 "gross_profit": gross_profit,
-                "gross_margin": gross_margin,
                 "ebitda": ebitda,
+                "ebit": ebit,
+                "profit_tax": profit_tax,
+                "net_income": net_income,
             }
         )
 
