@@ -834,3 +834,68 @@ pnl:
         - ebit
         - profit_tax
         - net_income
+
+cash_flow:
+  currency: RUB
+  description: >
+    Cash Flow Statement (CFS) GPS. Формируется на основе Net Income,
+    Depreciation и инвестиционных расходов CAPEX.
+  opening_cash_balance:
+    2026: 0
+  financing_cash_flow:
+    description: >
+      На первом этапе financing cash flow = 0.
+      Позже может быть заменено на equity injection
+      или debt funding.
+    value:
+      2026: 0
+      2027: 0
+      2028: 0
+      2029: 0
+      2030: 0
+  operating_cash_flow:
+    net_income:
+      source: pnl.net_income
+    depreciation:
+      source: pnl.depreciation_block.total_depreciation
+    operating_cash_flow:
+      formula: net_income + total_depreciation
+  investing_cash_flow:
+    gpu_capex:
+      source: capex.gpu_capex
+    datacenter_construction_capex:
+      source: capex.datacenter_construction_capex
+    office_capex:
+      source: capex.total_office_capex
+    investing_cash_flow:
+      formula: -gpu_capex -datacenter_construction_capex -office_capex
+  financing_section:
+    financing_cash_flow:
+      source: cash_flow.financing_cash_flow.value
+  net_cash_flow:
+    formula: operating_cash_flow + investing_cash_flow + financing_cash_flow
+  cash_balance:
+    opening_cash:
+      formula: previous_year_closing_cash
+    closing_cash: opening_cash + net_cash_flow
+    cumulative_cash: cumulative_previous_year + net_cash_flow
+  html_output:
+    wide_format: true
+    tables:
+      cash_flow_statement:
+        - net_income
+        - total_depreciation
+        - operating_cash_flow
+
+        - gpu_capex
+        - datacenter_construction_capex
+        - office_capex
+        - investing_cash_flow
+
+        - financing_cash_flow
+
+        - net_cash_flow
+
+        - opening_cash
+        - closing_cash
+        - cumulative_cash

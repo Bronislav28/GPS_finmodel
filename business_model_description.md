@@ -951,6 +951,128 @@ GPU rental не амортизируется.
 
 ---
 
+# Cash Flow Statement (CFS)
+
+Модель должна рассчитывать полноценный
+Cash Flow Statement по годам 2026–2030.
+
+CFS строится на основе:
+
+- Net Income
+- Depreciation
+- CAPEX
+- Financing Cash Flow
+
+---
+
+# 1. Operating Cash Flow (OCF)
+
+Operating Cash Flow начинается с:
+
+- net_income
+
+Добавляется non-cash adjustment:
+
+- total_depreciation
+
+Формула:
+
+- operating_cash_flow =
+  net_income +
+  total_depreciation
+
+На текущем этапе
+working capital не учитывается.
+
+---
+
+# 2. Investing Cash Flow (ICF)
+
+Investing Cash Flow включает:
+
+- gpu_capex
+- datacenter_construction_capex
+- office_capex
+
+Формула:
+
+- investing_cash_flow =
+  - gpu_capex
+  - datacenter_construction_capex
+  - office_capex
+
+Это отражает реальные
+инвестиционные денежные оттоки.
+
+---
+
+# 3. Financing Cash Flow
+
+На первом этапе:
+
+- financing_cash_flow = 0
+
+Позже может быть заменено на:
+
+- equity injection
+- debt funding
+- revolver
+
+для моделирования
+внешнего финансирования.
+
+---
+
+# 4. Net Cash Flow
+
+Формула:
+
+- net_cash_flow =
+  operating_cash_flow +
+  investing_cash_flow +
+  financing_cash_flow
+
+---
+
+# 5. Cash Balance
+
+## Opening Cash
+
+Для 2026:
+
+- opening_cash_balance = 0
+
+Для следующих лет:
+
+- opening_cash =
+  previous_year_closing_cash
+
+---
+
+## Closing Cash
+
+Формула:
+
+- closing_cash =
+  opening_cash +
+  net_cash_flow
+
+---
+
+## Cumulative Cash
+
+Формула:
+
+- cumulative_cash =
+  cumulative_previous_year +
+  net_cash_flow
+
+Это позволяет видеть
+накопленный cash position
+проекта GPS.
+
+---
+
 # HTML и CSV output
 
 Python должен формировать:
