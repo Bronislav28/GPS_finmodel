@@ -954,8 +954,8 @@ cash_flow:
     operating_cash_flow:
       formula: net_income + total_depreciation
   investing_cash_flow:
-    gpu_capex:
-      source: capex.gpu_capex
+    gpu_infra_capex:
+      source: capex.gpu_infra_capex
     datacenter_construction_capex:
       source: capex.datacenter_construction_capex
     office_capex:
@@ -963,7 +963,7 @@ cash_flow:
     intangible_capex:
       source: capex.intangible_capex
     investing_cash_flow:
-      formula: -gpu_capex -datacenter_construction_capex -office_capex -intangible_capex
+      formula: -gpu_infra_capex -datacenter_construction_capex -office_capex -intangible_capex
   financing_section:
     financing_cash_flow:
       source: cash_flow.financing_cash_flow.value
@@ -981,10 +981,10 @@ cash_flow:
         - net_income
         - total_depreciation
         - operating_cash_flow
-
-        - gpu_capex
+        - gpu_infra_capex
         - datacenter_construction_capex
         - office_capex
+        - intangible_capex
         - investing_cash_flow
 
         - financing_cash_flow

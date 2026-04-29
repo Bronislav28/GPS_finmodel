@@ -1248,16 +1248,23 @@ working capital не учитывается.
 
 Investing Cash Flow включает:
 
-- gpu_capex
+- gpu_infra_capex
 - datacenter_construction_capex
 - office_capex
+- intangible_capex
+
+Важно:
+
+- gpu_capex показывает стоимость GPU как оборудования
+- gpu_infra_capex показывает полный денежный outflow на GPU infrastructure и именно он используется в Investing Cash Flow
 
 Формула:
 
 - investing_cash_flow =
-  - gpu_capex
+  - gpu_infra_capex
   - datacenter_construction_capex
   - office_capex
+  - intangible_capex
 
 Это отражает реальные
 инвестиционные денежные оттоки.
@@ -1582,15 +1589,6 @@ Intangible Assets включают:
 Если модель собрана корректно:
 
 - balance_check = 0
-
----
-
-# HTML / CSV output
-
-Все таблицы должны быть в wide format:
-
-```text
-Metric | 2026 | 2027 | 2028 | 2029 | 2030
 
 ---
 
