@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import json
 import math
 import sys
@@ -1066,10 +1067,64 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def write_csv(rows: list[dict[str, Any]], output: Path) -> None:
+
+
+def compute_irr(cash_flows: list[float], tol: float = 1e-7, max_iter: int = 200) -> float | None:
+    if not cash_flows or not any(cf > 0 for cf in cash_flows) or not any(cf < 0 for cf in cash_flows):
+        return None
+    def npv(rate: float) -> float:
+        return sum(cf / ((1.0 + rate) ** idx) for idx, cf in enumerate(cash_flows))
+    low, high = -0.9999, 10.0
+    f_low, f_high = npv(low), npv(high)
+    if math.isnan(f_low) or math.isnan(f_high) or f_low * f_high > 0:
+        return None
+    for _ in range(max_iter):
+        mid = (low + high) / 2.0
+        f_mid = npv(mid)
+        if abs(f_mid) < tol:
+            return mid
+        if f_low * f_mid <= 0:
+            high, f_high = mid, f_mid
+        else:
+            low, f_low = mid, f_mid
+    return (low + high) / 2.0
+
+
+def build_dcf_metrics(rows: list[dict[str, Any]], discount_rate: float) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    dcf_rows: list[dict[str, Any]] = []
+    cumulative_discounted = 0.0
+    for idx, row in enumerate(rows):
+        free_cf = safe_add(as_float(row.get("operating_cash_flow")), as_float(row.get("investing_cash_flow")))
+        # Year index convention: 2026 = 0, 2027 = 1, ...
+        discount_factor = 1.0 / ((1.0 + discount_rate) ** idx)
+        discounted_fcf = safe_mul(free_cf, discount_factor)
+        cumulative_discounted = safe_add(cumulative_discounted, discounted_fcf)
+        dcf_rows.append({**row, "free_cash_flow": free_cf, "discount_rate": discount_rate, "discount_factor": discount_factor, "discounted_fcf": discounted_fcf, "cumulative_discounted_fcf": cumulative_discounted})
+
+    discounted_vals = [as_float(r.get("discounted_fcf")) or 0.0 for r in dcf_rows]
+    fcf_vals = [as_float(r.get("free_cash_flow")) or 0.0 for r in dcf_rows]
+    npv_val = sum(discounted_vals)
+    irr_val = compute_irr(fcf_vals)
+    simple_payback = next((str(int(r["year"])) for r in dcf_rows if (as_float(r.get("cumulative_cash")) or 0.0) > 0), "Not reached")
+    discounted_payback = next((str(int(r["year"])) for r in dcf_rows if (as_float(r.get("cumulative_discounted_fcf")) or 0.0) > 0), "Not reached")
+    metrics = {"npv": npv_val, "irr": irr_val, "simple_payback": simple_payback, "discounted_payback": discounted_payback}
+    return dcf_rows, metrics
+
+def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     years = [int(r["year"]) for r in rows]
     blocks = build_report_blocks(rows, years)
     scenario_blocks = build_revenue_scenario_blocks(rows, years)
+    discount_rate = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(2026))
+    discount_rate = 0.20 if discount_rate is None else discount_rate
+    dcf_rows, inv_metrics = build_dcf_metrics(rows, discount_rate)
+
+    scenario_compare = []
+    for sc in ("build_own_dc", "rent_gpu_only", "hybrid"):
+        ass_copy = copy.deepcopy(assumptions)
+        (((ass_copy.get("capex", {}) or {}).get("strategy_scenarios", {}) or {})["active_scenario"]) = sc
+        sc_rows = calculate(ass_copy)
+        _, sc_metrics = build_dcf_metrics(sc_rows, discount_rate)
+        scenario_compare.append((sc, sc_metrics))
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as fh:
         fieldnames = ["scenario", "table", "metric"] + [str(y) for y in years]
@@ -1087,6 +1142,24 @@ def write_csv(rows: list[dict[str, Any]], output: Path) -> None:
                     out = {"scenario": scenario, "table": block["title"], "metric": wide_row["Metric"]}
                     for y in years:
                         out[str(y)] = wide_row[str(y)]
+                    writer.writerow(out)
+            if scenario == "base":
+                dcf_block = to_wide_rows(dcf_rows, ["free_cash_flow", "discount_rate", "discount_factor", "discounted_fcf", "cumulative_discounted_fcf"], years)
+                for wide_row in dcf_block:
+                    out = {"scenario": scenario, "table": "DCF", "metric": wide_row["Metric"]}
+                    for y in years: out[str(y)] = wide_row[str(y)]
+                    writer.writerow(out)
+                for metric in ["npv", "irr", "simple_payback", "discounted_payback"]:
+                    out = {"scenario": scenario, "table": "Investment Metrics", "metric": metric}
+                    for y in years: out[str(y)] = inv_metrics[metric] if y == years[0] else ""
+                    writer.writerow(out)
+                for sc_name, sc_metrics in scenario_compare:
+                    out = {"scenario": sc_name, "table": "Scenario Comparison", "metric": "summary"}
+                    out[str(years[0])] = sc_metrics["npv"]
+                    out[str(years[1])] = sc_metrics["irr"]
+                    out[str(years[2])] = sc_metrics["simple_payback"]
+                    out[str(years[3])] = sc_metrics["discounted_payback"]
+                    out[str(years[4])] = ""
                     writer.writerow(out)
 
 
@@ -1206,6 +1279,9 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         "rental_price_per_gpu_per_year": as_float((gpu_rental_cfg.get("rental_price_per_gpu_per_year", {}) or {}).get("value")),
     }
     infra_json = json.dumps(infra_payload, ensure_ascii=False)
+    inv_cfg = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
+    dr = as_float((((inv_cfg.get("discount_rate", {}) or {}).get("value", {}) or {}).get(2026)) )
+    default_discount_rate = 0.20 if dr is None else dr
 
     return f"""<!doctype html>
 <html lang=\"ru\"><head><meta charset=\"utf-8\"><title>GPS Finmodel</title>
@@ -1244,8 +1320,13 @@ thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;p
   <label for=\"constructionStartYear\" style=\"margin-left:12px;\"><b>construction_start_year:</b></label>
   <input id=\"constructionStartYear\" type=\"number\" step=\"1\" style=\"width:90px;\" />
 </div>
+<div class=\"note\">
+  <label for=\"discountRateInput\"><b>Discount rate (decimal):</b></label>
+  <input id=\"discountRateInput\" type=\"number\" step=\"0.01\" min=\"0\" style=\"width:90px;\" value=\"{default_discount_rate}\" />
+</div>
 <div id=\"scenarioTables\"></div>
 <div id=\"infraTables\"></div>
+<div id=\"dcfTables\"></div>
 {''.join(block_tables)}
 <script>
 const SCENARIO_DATA = {scenario_json};
@@ -1256,6 +1337,8 @@ const selector = document.getElementById('scenarioSelect');
 const infraContainer = document.getElementById('infraTables');
 const infraSelector = document.getElementById('infraScenarioSelect');
 const constructionInput = document.getElementById('constructionStartYear');
+const dcfContainer = document.getElementById('dcfTables');
+const discountRateInput = document.getElementById('discountRateInput');
 
 function fmt(metric, value) {{
   if (value === null || Number.isNaN(value)) return 'NaN';
@@ -1421,6 +1504,12 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
     const grossProfit = revenue - cogs;
     const grossMargin = revenue ? grossProfit / revenue : NaN;
     const ebitda = revenue - totalOpex - totalSga;
+    const netIncome = ebitda;
+    const operatingCashFlow = netIncome + depreciation;
+    const investingCashFlow = -gpuCapex - dcConstructionCapex - totalOfficeCapex;
+    const netCashFlow = operatingCashFlow + investingCashFlow;
+    const prevCumCash = rows.length ? rows[rows.length - 1].cumulativeCash : 0;
+    const cumulativeCash = prevCumCash + netCashFlow;
 
     rows.push({{
       year, selectedScenario, constructionStartYear, constructionFlag,
@@ -1430,7 +1519,8 @@ function calcInfraRows(selectedScenario, constructionStartYear) {{
       totalCapex, depreciation,
       totalDcOpex, teamOpex, gpuRentalOpex, totalOpex,
       annualFixedSga, requiredOfficeArea, annualOfficeRent, totalSga,
-      revenue, cogs, grossProfit, grossMargin, ebitda
+      revenue, cogs, grossProfit, grossMargin, ebitda, netIncome,
+      operatingCashFlow, investingCashFlow, netCashFlow, cumulativeCash
     }});
     prevOwned = ownedGpu;
   }});
@@ -1513,6 +1603,70 @@ function renderInfraTables() {{
     metricRow('ebitda', vals('ebitda')),
   ].join(''));
   infraContainer.innerHTML = html;
+  renderDcfTables(rows);
+}}
+
+
+function computeIrr(cashFlows) {{
+  const hasPos = cashFlows.some(v => v > 0);
+  const hasNeg = cashFlows.some(v => v < 0);
+  if (!hasPos || !hasNeg) return null;
+  const npv = (r) => cashFlows.reduce((a, cf, i) => a + cf / Math.pow(1 + r, i), 0);
+  let low = -0.9999, high = 10.0;
+  let fLow = npv(low), fHigh = npv(high);
+  if (!Number.isFinite(fLow) || !Number.isFinite(fHigh) || fLow * fHigh > 0) return null;
+  for (let i=0;i<200;i++) {{
+    const mid = (low+high)/2; const fMid = npv(mid);
+    if (Math.abs(fMid) < 1e-7) return mid;
+    if (fLow * fMid <= 0) {{ high = mid; fHigh = fMid; }} else {{ low = mid; fLow = fMid; }}
+  }}
+  return (low+high)/2;
+}}
+
+function renderDcfTables(rows) {{
+  const dr = Number(discountRateInput.value);
+  const discountRate = Number.isFinite(dr) ? dr : 0.2;
+  const dcf = rows.map((r, idx) => {{
+    const free = (r.operatingCashFlow || 0) + (r.investingCashFlow || 0);
+    const factor = 1 / Math.pow(1 + discountRate, idx);
+    return {{ year: r.year, free_cash_flow: free, discount_rate: discountRate, discount_factor: factor, discounted_fcf: free * factor }};
+  }});
+  let cum = 0; dcf.forEach(r => {{ cum += r.discounted_fcf; r.cumulative_discounted_fcf = cum; }});
+  const npv = dcf.reduce((a,r)=>a+r.discounted_fcf,0);
+  const irr = computeIrr(dcf.map(r=>r.free_cash_flow));
+  const simplePayback = rows.find(r => (r.cumulativeCash || 0) > 0)?.year || 'Not reached';
+  const discountedPayback = dcf.find(r => r.cumulative_discounted_fcf > 0)?.year || 'Not reached';
+  const vals = (arr,k)=>arr.map(x=>x[k]);
+  let html='';
+  html += infraBlock('DCF', [
+    metricRow('free_cash_flow', vals(dcf,'free_cash_flow')),
+    metricRow('discount_rate', vals(dcf,'discount_rate'), false, true),
+    metricRow('discount_factor', vals(dcf,'discount_factor')),
+    metricRow('discounted_fcf', vals(dcf,'discounted_fcf')),
+    metricRow('cumulative_discounted_fcf', vals(dcf,'cumulative_discounted_fcf'))
+  ].join(''));
+  const scenarioList = ['build_own_dc', 'rent_gpu_only', 'hybrid'];
+  const compareRows = scenarioList.map(sc => {{
+    const scRows = calcInfraRows(sc, sc === 'hybrid' ? (toNum(constructionInput.value) || INFRA_DATA.hybrid_default_start_year) : 2026);
+    const scDcf = scRows.map((r, i) => {{
+      const free = (r.operatingCashFlow || 0) + (r.investingCashFlow || 0);
+      return free / Math.pow(1 + discountRate, i);
+    }});
+    const npvV = scDcf.reduce((a,v)=>a+v,0);
+    const irrV = computeIrr(scRows.map(r => (r.operatingCashFlow || 0) + (r.investingCashFlow || 0)));
+    const sp = scRows.find(r => (r.cumulativeCash || 0) > 0)?.year || 'Not reached';
+    let cum=0; let dp='Not reached';
+    for(let i=0;i<scRows.length;i++){{ cum += scDcf[i]; if(cum>0){{dp=scRows[i].year; break;}}}}
+    return {{sc,npvV,irrV,sp,dp}};
+  }});
+  html += infraBlock('Investment Metrics', [
+    metricRow('npv', [npv, '', '', '', '']),
+    metricRow('irr', [irr, '', '', '', ''], false, true),
+    metricRow('simple_payback', [simplePayback, '', '', '', '']),
+    metricRow('discounted_payback', [discountedPayback, '', '', '', ''])
+  ].join(''));
+  const scHeader = '<h2>Scenario Comparison</h2><table><thead><tr><th>Scenario</th><th>NPV</th><th>IRR</th><th>Simple Payback</th><th>Discounted Payback</th></tr></thead><tbody>' + compareRows.map(r => `<tr><td>${{r.sc}}</td><td>${{fmt('npv',r.npvV)}}</td><td>${{r.irrV===null?'Not available':(r.irrV*100).toFixed(2)+'%'}} </td><td>${{r.sp}}</td><td>${{r.dp}}</td></tr>`).join('') + '</tbody></table>';
+  dcfContainer.innerHTML = html + scHeader;
 }}
 
 function setConstructionInputState() {{
@@ -1532,6 +1686,7 @@ function setConstructionInputState() {{
 
 infraSelector.addEventListener('change', setConstructionInputState);
 constructionInput.addEventListener('input', renderInfraTables);
+discountRateInput.addEventListener('input', renderInfraTables);
 infraSelector.value = INFRA_DATA.active_scenario || 'build_own_dc';
 setConstructionInputState();
 </script>
@@ -1550,7 +1705,7 @@ def main() -> None:
             raise KeyError(f"В assumptions.yaml отсутствует обязательная секция: {section}")
 
     rows = calculate(assumptions)
-    write_csv(rows, OUT_CSV)
+    write_csv(rows, assumptions, OUT_CSV)
     write_html(rows, assumptions, OUT_HTML)
 
     print("year | total_annual_tokens | required_gpu | total_capex | total_opex")
