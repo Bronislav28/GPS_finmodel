@@ -1,1944 +1,2098 @@
-# Цель модели
+# GPS Finmodel — Business Model Description
 
-Построить Python-модель ДЗО по ИИ, которая читает assumptions.yaml и рассчитывает:
+## 1. Цель модели
 
-1. active users по Workplace.ai
-2. daily tokens и annual tokens по Workplace.ai
-3. automated interactions по Contact_Center.ai
-4. daily tokens и annual tokens по Contact_Center.ai
-5. total annual tokens по ДЗО
-6. долю каждого сервиса в токенах
-7. таблицу результатов по годам 2026–2030
-8. required_gpu по годам
-9. owned_gpu по годам
-10. rented_gpu по годам
-11. owned_gpu_increment по годам
-12. gpu_capex по годам
-13. datacenter_construction_capex по годам
-14. total_capex по годам
-15. depreciation по годам
-16. datacenter OPEX по годам
-17. team OPEX по годам
-18. GPU rental OPEX по годам
-19. total OPEX по годам
-20. revenue по сценариям потребления
-21. contribution margin
-22. EBITDA / operating result
+Модель GPS рассчитывает финансовую модель ДЗО по ИИ на горизонте 2026–2030.
+
+Модель читает входные параметры из `assumptions.yaml` и рассчитывает:
+
+1. спрос на токены по продуктам Workplace.ai и Contact_Center.ai;
+2. требуемую GPU-мощность;
+3. инфраструктурные сценарии: собственный ЦОД, аренда GPU, гибрид;
+4. CAPEX по GPU, ЦОДу, офису и разработке IP;
+5. depreciation & amortization;
+6. OPEX, включая datacenter OPEX, team OPEX и GPU rental OPEX;
+7. SG&A;
+8. Revenue через utilization мощности и target contribution margin;
+9. P&L;
+10. Cash Flow Statement;
+11. Funding через equity / revolver / mix;
+12. Balance Sheet;
+13. DCF / Investment Metrics;
+14. Return Metrics;
+15. Sensitivity Analysis;
+16. HTML и CSV output.
+
+Логика модели:
+
+```text
+Usage assumptions
+→ Token load
+→ Compute model
+→ GPU sizing
+→ Infrastructure strategy
+→ CAPEX / OPEX
+→ Revenue
+→ P&L
+→ Cash Flow
+→ Funding
+→ Balance Sheet
+→ DCF / Investment Metrics
+→ Sensitivity Analysis
+```
 
 ---
 
-# Входные данные
+## 2. Основные файлы
 
-Основной файл:
+Основной файл входных параметров:
 
-- assumptions.yaml
+```text
+assumptions.yaml
+```
+
+Основной расчетный файл:
+
+```text
+calc_token_load.py
+```
+
+Основные выходные файлы:
+
+```text
+output/gps_finmodel.html
+output/gps_finmodel_results.csv
+```
+
+`assumptions.yaml` является source of truth для модели.  
+`business_model_description.md` описывает бизнес-логику модели.  
+HTML и CSV являются результатами расчета и не должны редактироваться вручную.
 
 ---
 
-# Infrastructure strategy scenarios
+## 3. Горизонт модели
 
-Модель должна поддерживать 3 сценария инфраструктуры:
+Модель рассчитывается по годам:
 
-## 1. build_own_dc
+```text
+2026, 2027, 2028, 2029, 2030
+```
 
-Собственный ЦОД строится сразу в 2026 году.
+Все основные таблицы отчета должны выводиться в wide format:
+
+```text
+Metric | 2026 | 2027 | 2028 | 2029 | 2030
+```
+
+---
+
+## 4. Global assumptions
+
+### 4.1 FX assumptions
+
+FX используется для пересчета USD-бенчмарков в RUB.
+
+Формулы:
+
+```text
+fx_2026 = base_value
+
+fx_t =
+fx_previous_year × (1 + annual_growth_t)
+```
+
+FX применяется в первую очередь для расчета CAPEX строительства ЦОДа, так как benchmark стоимости ЦОДа задан в USD.
+
+---
+
+### 4.2 Inflation assumptions
+
+Рублевая инфляция используется для индексации:
+
+- SG&A;
+- офисных расходов;
+- прочих рублевых затрат.
+
+Формулы:
+
+```text
+inflation_index_2026 = 1.0
+
+inflation_index_t =
+inflation_index_previous_year × (1 + annual_growth_t)
+```
+
+---
+
+## 5. Products
+
+Модель включает два продукта:
+
+1. Workplace.ai
+2. Contact_Center.ai
+
+### 5.1 Workplace.ai
+
+Workplace.ai — ИИ-платформа для работы сотрудников с корпоративными знаниями, документами и внутренними процессами.
+
+Продукт включает:
+
+- LLM fine-tuning;
+- RAG / knowledge access;
+- document generation;
+- corporate chat assistant;
+- agentic actions;
+- генерацию текста и изображений;
+- поддержку внутренних workflow.
+
+`components` в YAML являются описательной декомпозицией продукта и не используются напрямую в финансовых расчетах.
+
+---
+
+### 5.2 Contact_Center.ai
+
+Contact_Center.ai — ИИ-платформа для автоматизации клиентского взаимодействия.
+
+Продукт включает:
+
+- AI operator;
+- operator assistant;
+- voice layer;
+- conversation analytics;
+- agentic execution layer.
+
+`components` в YAML являются описательной декомпозицией продукта и не используются напрямую в финансовых расчетах.
+
+---
+
+## 6. Usage assumptions
+
+`usage_assumptions` описывает спрос на стороне банка.
+
+### 6.1 Workplace.ai
+
+Для Workplace.ai используются:
+
+```text
+total_employees
+activation_rate
+```
+
+Формула:
+
+```text
+active_users =
+total_employees × activation_rate
+```
+
+`activation_rate` показывает долю сотрудников, которые являются активными пользователями Workplace.ai.
+
+---
+
+### 6.2 Contact_Center.ai
+
+Для Contact_Center.ai используются:
+
+```text
+interactions_per_day
+automation_rate
+```
+
+Формула:
+
+```text
+automated_interactions_per_day =
+interactions_per_day × automation_rate
+```
+
+`automation_rate` показывает долю обращений контакт-центра, которые обрабатываются AI.
+
+---
+
+## 7. Token load model
+
+`token_load_model` переводит usage assumptions в токеновую нагрузку.
+
+### 7.1 Time assumptions
+
+Для Workplace.ai используется:
+
+```text
+working_days_per_year
+```
+
+Для Contact_Center.ai используется:
+
+```text
+calendar_days_per_year
+```
+
+---
+
+### 7.2 Workplace.ai token load
+
+Workplace.ai считается через токены на одного активного пользователя в день:
+
+```text
+tokens_per_active_user_per_day
+```
+
+Рост `tokens_per_active_user_per_day` по годам отражает:
+
+- рост частоты использования;
+- усложнение сценариев;
+- работу с документами;
+- RAG;
+- agentic workflows;
+- увеличение количества LLM calls на одну пользовательскую задачу.
+
+Формулы:
+
+```text
+active_users =
+total_employees × activation_rate
+
+workplace_daily_tokens =
+active_users × tokens_per_active_user_per_day
+
+workplace_annual_tokens =
+workplace_daily_tokens × working_days_per_year
+```
+
+---
+
+### 7.3 Contact_Center.ai token load
+
+Contact_Center.ai считается через blended assumption:
+
+```text
+tokens_per_interaction
+```
+
+Модель не разделяет text / voice token load, так как нет надежного публичного benchmark по российскому банковскому рынку для среднего количества токенов в текстовом и голосовом обращении.
+
+Формулы:
+
+```text
+automated_interactions_per_day =
+interactions_per_day × automation_rate
+
+contact_center_daily_tokens =
+automated_interactions_per_day × tokens_per_interaction
+
+contact_center_annual_tokens =
+contact_center_daily_tokens × calendar_days_per_year
+```
+
+---
+
+### 7.4 Total annual tokens
+
+Общая годовая токеновая нагрузка GPS:
+
+```text
+total_annual_tokens =
+workplace_annual_tokens +
+contact_center_annual_tokens
+```
+
+Эта величина является входом для GPU sizing.
+
+---
+
+## 8. Compute model
+
+`compute_model` описывает перевод токеновой нагрузки в вычислительную нагрузку.
+
+### 8.1 Model mix
+
+`model_mix` показывает распределение токенов между классами моделей:
+
+- frontier;
+- large;
+- medium;
+- small.
 
 Логика:
 
-- все required_gpu = owned_gpu
-- rented_gpu = 0
-- возникает CAPEX на покупку GPU
-- возникает CAPEX на строительство ЦОДа
-- начисляется depreciation
-- datacenter OPEX считается полностью
+- в 2026–2028 годах выше доля frontier / large моделей, так как продукт еще развивается, routing менее оптимизирован, больше сложных универсальных запросов;
+- в 2029–2030 годах часть нагрузки переходит на medium / small модели за счет model routing, кэширования, типизации сценариев и специализированных моделей.
 
 ---
 
-## 2. rent_gpu_only
+### 8.2 Throughput per GPU
+
+`throughput_per_gpu` показывает производительность одной GPU для каждого класса модели:
+
+```text
+tokens per second per GPU
+```
+
+Чем тяжелее модель, тем ниже throughput.
+
+---
+
+### 8.3 Weighted throughput
+
+`weighted_throughput` — средняя производительность GPU с учетом model mix.
+
+Формула:
+
+```text
+weighted_throughput =
+1 / sum(model_share / throughput_per_gpu)
+```
+
+Используется harmonic mean, потому что нагрузка распределяется между моделями с разной производительностью.
+
+---
+
+### 8.4 GPU utilization
+
+`utilization` показывает полезную загрузку GPU.
+
+Она ниже 100%, потому что часть времени уходит на:
+
+- orchestration;
+- routing;
+- переключение моделей;
+- очереди;
+- ошибки;
+- резерв capacity;
+- технические простои.
+
+---
+
+## 9. GPU sizing
+
+`gpu_sizing` рассчитывает требуемое количество GPU.
+
+### 9.1 Tokens per second
+
+Годовая токеновая нагрузка переводится в tokens per second:
+
+```text
+tokens_per_second =
+total_annual_tokens /
+(working_days_per_year × working_hours_per_day × 3600)
+```
+
+---
+
+### 9.2 Required GPU
+
+Формула:
+
+```text
+required_gpu =
+tokens_per_second /
+(weighted_throughput × utilization) × peak_factor
+```
+
+Где:
+
+- `tokens_per_second` — требуемая скорость обработки токенов;
+- `weighted_throughput` — производительность одной GPU с учетом model mix;
+- `utilization` — полезная загрузка GPU;
+- `peak_factor` — запас на пики нагрузки.
+
+Итоговое значение `required_gpu` используется в инфраструктурных сценариях.
+
+---
+
+## 10. Infrastructure strategy scenarios
+
+Модель поддерживает три инфраструктурных сценария:
+
+1. `build_own_dc`
+2. `rent_gpu_only`
+3. `hybrid`
+
+### 10.1 build_own_dc
+
+Собственный ЦОД строится со старта проекта.
+
+Логика:
+
+```text
+owned_gpu = required_gpu
+rented_gpu = 0
+construction_start_year = 2026
+```
+
+Возникают:
+
+- GPU CAPEX;
+- GPU infrastructure CAPEX;
+- datacenter construction CAPEX;
+- datacenter OPEX;
+- depreciation.
+
+---
+
+### 10.2 rent_gpu_only
 
 Собственный ЦОД не строится.
 
 Логика:
 
-- все required_gpu = rented_gpu
-- owned_gpu = 0
-- CAPEX на GPU отсутствует
-- CAPEX на строительство ЦОДа отсутствует
-- depreciation отсутствует
-- возникает только GPU rental OPEX
-- datacenter OPEX = 0
+```text
+owned_gpu = 0
+rented_gpu = required_gpu
+construction_start_year = null
+```
+
+Возникает:
+
+- GPU rental OPEX.
+
+Не возникает:
+
+- GPU CAPEX;
+- datacenter construction CAPEX;
+- datacenter OPEX;
+- depreciation по GPU / ЦОДу.
 
 ---
 
-## 3. hybrid
+### 10.3 hybrid
 
-До года строительства используется аренда GPU,
-после — собственный ЦОД.
+До года строительства используется аренда GPU. Начиная с `construction_start_year` используется собственная инфраструктура.
 
 Логика:
 
-- до construction_start_year:
-  - rented_gpu = required_gpu
-  - owned_gpu = 0
+```text
+if year < construction_start_year:
+  rented_gpu = required_gpu
+  owned_gpu = 0
 
-- начиная с construction_start_year:
-  - owned_gpu = required_gpu
-  - rented_gpu = 0
-
-В год строительства:
-
-- возникает CAPEX на строительство ЦОДа
-- owned_gpu_increment = owned_gpu текущего года
-
-После запуска:
-
-- начисляется depreciation
-- считается datacenter OPEX
+if year >= construction_start_year:
+  rented_gpu = 0
+  owned_gpu = required_gpu
+```
 
 ---
 
-# GPU calculation
+### 10.4 Construction flag
 
-Python-модель рассчитывает:
+`construction_flag` рассчитывается автоматически:
 
-- required_gpu
+```text
+construction_flag =
+1 if year == construction_start_year else 0
+```
 
-required_gpu берётся из GPU sizing model
-на основе annual tokens, utilization assumptions,
-reserve capacity и performance assumptions.
-
----
-
-# CAPEX calculation
-
-Python-модель должна рассчитывать по годам 2026–2030:
-
-1. owned_gpu
-2. rented_gpu
-3. owned_gpu_increment
-4. gpu_capex
-5. gpu_infra_capex
-6. datacenter_construction_capex
-7. total_capex
-8. depreciation
+Для `rent_gpu_only` `construction_start_year = null`, поэтому `construction_flag = 0`.
 
 ---
 
-## GPU ownership logic
+### 10.5 Owned GPU increment
 
-### build_own_dc
+CAPEX возникает только на прирост собственных GPU.
 
-- owned_gpu = required_gpu
-- rented_gpu = 0
+```text
+owned_gpu_increment =
+owned_gpu in first owned year
 
-### rent_gpu_only
-
-- owned_gpu = 0
-- rented_gpu = required_gpu
-
-### hybrid
-
-До строительства:
-
-- owned_gpu = 0
-- rented_gpu = required_gpu
-
-После строительства:
-
-- owned_gpu = required_gpu
-- rented_gpu = 0
+owned_gpu_increment =
+max(owned_gpu_current - owned_gpu_previous, 0)
+in next years
+```
 
 ---
 
-## owned_gpu_increment
+## 11. CAPEX
+
+`capex` рассчитывает инвестиции в активы GPS.
+
+CAPEX включает:
+
+1. GPU infrastructure;
+2. Datacenter construction;
+3. Office CAPEX;
+4. Intangible assets / IP.
+
+---
+
+### 11.1 GPU CAPEX
+
+```text
+gpu_capex =
+owned_gpu_increment × gpu.unit_cost
+```
+
+GPU CAPEX возникает только для owned GPU.
+
+---
+
+### 11.2 GPU Infrastructure CAPEX
+
+`gpu_infra_capex` включает стоимость GPU и сопутствующей инфраструктуры:
+
+- серверы;
+- стойки;
+- сеть;
+- storage;
+- инженерная инфраструктура;
+- резерв.
+
+Формула:
+
+```text
+gpu_infra_capex =
+gpu_capex × infra_multiplier
+```
+
+`gpu_infra_capex` уже включает `gpu_capex`.  
+В Cash Flow и Balance Sheet для GPU-инфраструктуры используется именно `gpu_infra_capex`, чтобы не было двойного учета.
+
+---
+
+### 11.3 Datacenter Construction CAPEX
+
+Размер ЦОДа рассчитывается по пиковой GPU-нагрузке за горизонт модели.
+
+Формулы sizing:
+
+```text
+peak_required_gpu =
+max(required_gpu)
+
+it_load_mw =
+peak_required_gpu × gpu_power_kw / 1000
+
+total_load_mw =
+it_load_mw × pue
+
+target_capacity_mw =
+ceil(total_load_mw)
+```
+
+CAPEX строительства рассчитывается через benchmark 3 MW:
+
+```text
+component_target_usd =
+component_3mw_usd × target_capacity_mw / benchmark_capacity_mw
+
+component_target_rub =
+component_target_usd × fx_usd_rub_t
+
+total_component_rub =
+sum(component_target_rub)
+
+datacenter_construction_capex =
+total_component_rub × construction_flag
+```
+
+CAPEX строительства возникает только в год строительства.
+
+---
+
+### 11.4 Office CAPEX
+
+Office CAPEX — корпоративный CAPEX GPS, не связанный с production AI infrastructure.
+
+Включает:
+
+- office server;
+- employee laptops;
+- executive laptops;
+- MFP / printers;
+- meeting room equipment;
+- office furniture.
+
+Office CAPEX возникает в purchase year.
 
 Формулы:
 
-Для первого года владения:
+```text
+purchase_flag =
+year == purchase_year
 
-- owned_gpu_increment = owned_gpu
+office_server_capex =
+quantity × unit_cost × purchase_flag
 
-Для следующих лет:
+employee_laptops_capex =
+total_fte_in_purchase_year × unit_cost × purchase_flag
 
-- owned_gpu_increment =
-  max(owned_gpu текущего года - owned_gpu предыдущего года, 0)
+executive_laptops_capex =
+quantity × unit_cost × purchase_flag
 
-Для rented GPU CAPEX не возникает.
+mfu_capex =
+quantity × unit_cost × purchase_flag
 
----
+meeting_rooms_capex =
+quantity × unit_cost × purchase_flag
 
-## CAPEX formulas
+office_furniture_capex =
+total_cost × purchase_flag
 
-### GPU CAPEX
-
-- gpu_capex =
-  owned_gpu_increment × capex.gpu.unit_cost
-
-### GPU infrastructure CAPEX
-
-- gpu_infra_capex =
-  gpu_capex × capex.infra_multiplier.value
-
----
-
-## Datacenter construction CAPEX
-
-Размер ЦОДа определяется автоматически:
-
-- peak_required_gpu = max(required_gpu)
-- it_load_mw =
-  peak_required_gpu × gpu_power_kw / 1000
-- total_load_mw =
-  it_load_mw × pue
-- target_capacity_mw =
-  ceil(total_load_mw)
-
-Используются benchmark values:
-
-- benchmark_components_3mw_usd_mln
-- benchmark_capacity_mw
-
-Формулы:
-
-- component_target_usd =
-  component_3mw_usd ×
-  target_capacity_mw /
-  benchmark_capacity_mw
-
-- component_target_rub =
-  component_target_usd × fx_usd_rub_t
-
-- datacenter_construction_capex =
-  total_component_rub × construction_flag
-
-CAPEX строительства возникает только
-в год, где construction_flag = 1.
-
-# Office CAPEX
-
-Дополнительно к GPU и строительству ЦОДа
-модель должна учитывать корпоративный CAPEX GPS,
-не связанный с production AI infrastructure.
-
-Включаются:
-
-- office server
-- employee laptops
-- executive laptops
-- MFP / printers
-- meeting room equipment
-- office furniture
+total_office_capex =
+office_server_capex +
+employee_laptops_capex +
+executive_laptops_capex +
+mfu_capex +
+meeting_rooms_capex +
+office_furniture_capex
+```
 
 ---
 
-## Office server
-
-Корпоративный сервер для:
-
-- AD / access
-- file services
-- backup
-- monitoring
-- internal services
-
-Формула:
-
-- office_server_capex =
-  quantity × unit_cost
-
-Амортизация:
-
-- 5 лет
-
----
-
-## Employee laptops
-
-Ноутбуки для:
-
-- core delivery team
-- SG&A
-
-Логика:
-
-- 1 ноутбук на 1 FTE
-
-Формула:
-
-- employee_laptops_capex =
-  total_fte × unit_cost
-
-Амортизация:
-
-- 3 года
-
----
-
-## Executive laptops
-
-Ноутбуки для:
-
-- CEO
-- CFO
-- COO
-- Head of AI
-- Chief Architect
-
-Формула:
-
-- executive_laptops_capex =
-  quantity × unit_cost
-
-Амортизация:
-
-- 3 года
-
----
-
-## MFP / printers
-
-Логика:
-
-- 1 МФУ на 30–40 сотрудников
-
-Формула:
-
-- mfu_capex =
-  quantity × unit_cost
-
-Амортизация:
-
-- 5 лет
-
----
-
-## Meeting room equipment
-
-Оснащение переговорных:
-
-- VC systems
-- displays
-- conference equipment
-
-Формула:
-
-- meeting_rooms_capex =
-  total_cost
-
-Амортизация:
-
-- 5 лет
-
----
-
-## Office furniture
-
-Стартовый CAPEX:
-
-- мебель
-- базовое оснащение офиса
-
-Формула:
-
-- office_furniture_capex =
-  total_cost
-
-Амортизация:
-
-- 7 лет
-
----
-
-## Total Office CAPEX
-
-Формула:
-
-- total_office_capex =
-  office_server_capex +
-  employee_laptops_capex +
-  executive_laptops_capex +
-  mfu_capex +
-  meeting_rooms_capex +
-  office_furniture_capex
-
----
-
-# Intangible Assets (Capitalized Development Costs)
-
-Модель должна учитывать
-не только PP&E:
-
-- GPU
-- Datacenter
-- Office CAPEX
-
-но и Intangible Assets:
-
-- Workplace.ai IP
-- Contact_Center.ai IP
-
-Это капитализированные затраты
-на разработку собственных AI-продуктов.
-
-Они отражаются в balance sheet
-как intangible assets,
-а не как PP&E.
-
----
-
-# 1. Что капитализируется
-
-Капитализируются только
-конкретные роли core team,
-которые непосредственно
-создают продукт и IP.
-
-Используется explicit inclusion list:
-
-- eligible_core_team_roles
-
-Если роль входит в этот список:
-
-→ payroll капитализируется
-
-Если роли нет в списке:
-
-→ payroll остается в OPEX / SG&A
-
-Это исключает двойной учет
-и упрощает логику модели.
-
----
-
-# 2. Eligible Core Team Roles
-
-Капитализируются только:
-
-- head_of_ai
-
-- genai_lead
-- llm_engineer
-- ml_engineer
-- data_engineer
-
-- platform_lead
-- backend_engineer
-- ai_platform_engineer
-- devops_engineer
-
-- agent_lead
-- agent_engineer
-- business_analyst
-
-- chief_architect
-- solution_architect
-
-- mlops_lead
-- ml_engineer
-- devops_engineer
-
-- qa_lead
-- qa_engineer
-
-- data_lead
-- data_labeling_specialist
-
-Это роли,
-непосредственно создающие
-Workplace.ai и Contact_Center.ai.
-
----
-
-# 3. НЕ капитализируется
+### 11.5 Intangible Assets / IP CAPEX
+
+Модель капитализирует затраты на разработку собственных AI-продуктов:
+
+- Workplace.ai IP;
+- Contact_Center.ai IP.
+
+Эти активы отражаются как intangible assets, а не как PP&E.
+
+Капитализируются только роли core team, которые напрямую создают продукт и IP.
+
+Капитализируются:
+
+- head_of_ai;
+- genai_lead;
+- llm_engineer;
+- ml_engineer;
+- data_engineer;
+- platform_lead;
+- backend_engineer;
+- ai_platform_engineer;
+- devops_engineer;
+- agent_lead;
+- agent_engineer;
+- business_analyst;
+- chief_architect;
+- solution_architect;
+- mlops_lead;
+- qa_lead;
+- qa_engineer;
+- data_lead;
+- data_labeling_specialist.
 
 Не капитализируются:
 
-- implementation_manager
-- sre_engineer
-- datacenter team
-- office / admin roles
-- CEO / CFO
-- HR / Finance
-- Sales / Marketing
-- Customer Success
-- Support / Run team
+- implementation_manager;
+- sre_engineer;
+- datacenter team;
+- office / admin roles;
+- CEO / CFO;
+- HR / Finance;
+- Sales / Marketing;
+- Customer Success;
+- Support / Run team.
 
-Это остается в OPEX / SG&A.
+Капитализация идет только в build phase до go-live.
 
----
-
-# 4. Build Period
-
-## Workplace.ai
-
-- build_period = 6 months
-
-## Contact_Center.ai
-
-- build_period = 6 months
-
-После build phase:
-
-- начинается go-live
-- начинается amortization
+После go-live соответствующие сотрудники возвращаются в OPEX, если они занимаются поддержкой, развитием, эксплуатацией и улучшениями продукта.
 
 ---
 
-# 5. Effort Allocation
+### 11.6 IP build period and go-live
 
-Core team распределяется между продуктами:
+Для обоих продуктов:
 
-## Workplace.ai
+```text
+build_period_months = 6
+go_live_year = 2026
+go_live_month = 7
+```
 
-- 70% effort
+Это означает:
 
-## Contact_Center.ai
-
-- 30% effort
-
-Это отражает:
-
-Workplace.ai = platform product
-
-Contact_Center.ai = vertical solution
+- январь–июнь 2026: build phase;
+- июль 2026: go-live;
+- после go-live: начинается revenue recognition и amortization.
 
 ---
 
-# 6. Additional Capitalized Costs
+### 11.7 IP cost formula
 
-Кроме payroll капитализируются:
+Для каждого продукта:
 
-## SFR
+```text
+capitalized_payroll =
+eligible_core_team_payroll × effort_share_of_core_team
 
-- payroll tax / social contribution
+capitalized_sfr =
+capitalized_payroll × sfr_rate
+
+development_infrastructure_cost =
+capitalized_payroll × development_infrastructure_percent
+
+data_acquisition_cost =
+capitalized_payroll × data_acquisition_percent
+
+total_ip_asset_value =
+capitalized_payroll +
+capitalized_sfr +
+development_infrastructure_cost +
+data_acquisition_cost
+```
+
+Effort allocation:
+
+```text
+Workplace.ai = 70%
+Contact_Center.ai = 30%
+```
 
 ---
 
-## Development Infrastructure
+### 11.8 Total CAPEX
 
-Включает:
+```text
+tangible_capex =
+gpu_infra_capex +
+datacenter_construction_capex +
+office_capex
 
-- development GPU
-- sandbox clusters
-- vector DB
-- experimentation infra
-- fine-tuning environment
+intangible_capex =
+workplace_ai_ip_value +
+contact_center_ai_ip_value
+
+total_capex =
+tangible_capex +
+intangible_capex
+```
+
+---
+
+## 12. Depreciation & Amortization
+
+`depreciation_and_amortization` — единый блок D&A.
+
+Он рассчитывает:
+
+1. depreciation по PP&E;
+2. amortization по intangible assets;
+3. total depreciation and amortization.
+
+---
+
+### 12.1 PP&E depreciation
+
+PP&E включает:
+
+- GPU infrastructure;
+- datacenter construction;
+- office CAPEX.
+
+Формулы:
+
+```text
+gpu_depreciation =
+gpu_infra_capex / gpu_infra_useful_life_years
+
+datacenter_depreciation =
+datacenter_construction_capex / datacenter_useful_life_years
+
+office_capex_depreciation =
+office_capex / asset_specific_useful_life_years
+
+total_ppe_depreciation =
+gpu_depreciation +
+datacenter_depreciation +
+office_capex_depreciation
+```
+
+---
+
+### 12.2 IP amortization
+
+Intangible assets включают:
+
+- Workplace.ai IP;
+- Contact_Center.ai IP.
+
+Формулы:
+
+```text
+workplace_ai_amortization =
+workplace_ai_ip_value / ip_assets_useful_life_years
+
+contact_center_ai_amortization =
+contact_center_ai_ip_value / ip_assets_useful_life_years
+
+total_ip_amortization =
+workplace_ai_amortization +
+contact_center_ai_amortization
+```
+
+---
+
+### 12.3 Total D&A
+
+```text
+total_depreciation_and_amortization =
+total_ppe_depreciation +
+total_ip_amortization
+```
+
+Эта величина используется в P&L, Cash Flow, DCF и Balance Sheet.
+
+---
+
+## 13. OPEX
+
+`opex` включает:
+
+1. GPU rental OPEX;
+2. Datacenter OPEX;
+3. Team OPEX.
+
+---
+
+### 13.1 GPU Rental OPEX
+
+GPU rental возникает только по rented GPU.
 
 Формула:
 
-- development_infrastructure =
-  15% от capitalized payroll
+```text
+annual_gpu_rental_cost =
+rented_gpu × rental_price_per_gpu_per_year
+```
+
+Если GPU арендуются, electricity, cooling, hosting и обслуживание предполагаются включенными в rental price. Поэтому электричество отдельно считается только по owned GPU.
 
 ---
 
-## Data Acquisition / Labeling
+### 13.2 Datacenter OPEX
 
-Включает:
-
-- annotation
-- synthetic datasets
-- domain corpora
-- evaluation datasets
-- dataset preparation
-
-Формула:
-
-- data_acquisition =
-  10% от capitalized payroll
-
----
-
-# 7. Total IP Asset Value
-
-Формула:
-
-- total_ip_asset_value =
-  capitalized_payroll +
-  capitalized_sfr +
-  development_infrastructure +
-  data_acquisition
-
-Для:
-
-- Workplace.ai
-- Contact_Center.ai
-
----
-
-# 8. Amortization
-
-Метод:
-
-- straight-line
-
-Useful life:
-
-- 5 years
-
-Формула:
-
-- annual_ip_amortization =
-  total_ip_asset_value /
-  5
-
-Амортизация начинается
-после go-live.
-
----
-
-# HTML / CSV output
-
-Все таблицы должны быть
-в wide format:
-
-Metric | 2026 | 2027 | 2028 | 2029 | 2030
-
----
-
-# HTML-отчет должен включать
-
-## Intangible Assets
-
-- workplace_ai_ip_value
-- contact_center_ai_ip_value
-- total_intangible_assets
-- annual_ip_amortization
-
----
-
-# Важно
-
-Часть core payroll должна
-перейти из OPEX в balance sheet
-через капитализацию IP.
-
-Это делает:
-
-- EBITDA корректнее
-- EBIT корректнее
-- Balance Sheet полноценным
-- IC намного сильнее
-
----
-
-## Total CAPEX
-
-Общий CAPEX модели:
-
-- total_capex =
-  gpu_infra_capex +
-  datacenter_construction_capex +
-- total_office_capex
-
-GPU rental не входит в CAPEX.
-
-Амортизация начисляется также
-на office CAPEX согласно срокам
-полезного использования.
-
----
-
-# Depreciation
-
-Амортизация начисляется только на:
-
-- owned GPU
-- строительство собственного ЦОДа
-
-Формула:
-
-- depreciable_base =
-  gpu_infra_capex +
-  datacenter_construction_capex
-
-Метод:
-
-- straight-line
-
-Срок:
-
-- capex.depreciation.useful_life_years
-
-GPU rental не амортизируется.
-
----
-
-# OPEX calculation
-
-Python-модель должна рассчитывать OPEX
-по годам 2026–2030.
-
----
-
-# Datacenter OPEX
-
-Расчет производится только
-для owned infrastructure.
+Datacenter OPEX считается только для owned infrastructure.
 
 Если owned_gpu = 0:
 
-- datacenter OPEX = 0
+```text
+total_datacenter_opex = 0
+```
 
 ---
 
-## Datacenter OPEX steps
+### 13.3 Average owned GPU
 
-### 1. Average GPU
-
-- average_gpu =
-  (owned_gpu_beginning_of_year +
-   owned_gpu_end_of_year) / 2
-
----
-
-### 2. Power calculation
-
-- it_load_mw =
-  average_gpu × gpu_power_kw / 1000
-
-- total_load_mw =
-  it_load_mw × pue
+```text
+average_owned_gpu =
+(owned_gpu_beginning_of_year + owned_gpu_end_of_year) / 2
+```
 
 ---
 
-### 3. Electricity consumption
+### 13.4 Power and electricity
 
-- electricity_kwh =
-  total_load_mw × 1000 ×
-  operating_hours_per_day ×
-  calendar_days_per_year
+```text
+it_load_mw =
+average_owned_gpu × gpu_power_kw / 1000
 
----
+total_load_mw =
+it_load_mw × pue
 
-### 4. Electricity price
+electricity_kwh =
+total_load_mw × 1000 × operating_hours_per_day × calendar_days_per_year
 
-- price_2026 =
-  base_price_per_kwh
+electricity_cost =
+electricity_kwh × electricity_price_t
+```
 
-- price_t =
-  price_previous_year ×
-  (1 + annual_growth_t)
+`weighted_throughput` влияет на electricity cost косвенно:
 
----
-
-### 5. Electricity cost
-
-- electricity_cost =
-  electricity_kwh × electricity_price_t
-
----
-
-### 6. Additional costs
-
-- maintenance_cost =
-  total_capex ×
-  maintenance_percent_of_capex
-
-- network_cost =
-  total_load_mw ×
-  network_cost_per_mw_per_year
-
-- land_rent =
-  total_load_mw ×
-  land_rent_per_mw_per_year
+```text
+weighted_throughput
+→ required_gpu
+→ owned_gpu
+→ electricity_kwh
+→ electricity_cost
+```
 
 ---
 
-### 7. Datacenter OPEX
+### 13.5 Datacenter maintenance
 
-- datacenter_opex =
-  electricity_cost +
-  maintenance_cost +
-  network_cost +
-  land_rent
+Maintenance cost считается только от production infrastructure base:
 
-- other_opex =
-  datacenter_opex ×
-  other_opex_percent
+```text
+datacenter_maintenance_base =
+cumulative_gpu_infra_capex +
+cumulative_datacenter_construction_capex
 
-- total_datacenter_opex =
-  datacenter_opex +
-  other_opex
+maintenance_cost =
+datacenter_maintenance_base × maintenance_percent_of_capex
+```
 
----
-
-# Team OPEX
-
-Расчет производится
-на основе блока:
-
-- opex.team
+Office CAPEX и intangible CAPEX не входят в базу maintenance ЦОДа.
 
 ---
 
-## Team calculation
+### 13.6 Other datacenter OPEX
 
-### 1. Monthly hiring
+```text
+network_cost =
+total_load_mw × network_cost_per_mw_per_year
 
-Для каждого месяца:
+land_rent =
+total_load_mw × land_rent_per_mw_per_year
 
-- monthly_fte =
-  core_team_target_fte ×
-  hiring_plan_monthly
+datacenter_base_opex =
+electricity_cost +
+maintenance_cost +
+network_cost +
+land_rent
 
----
+other_datacenter_opex =
+datacenter_base_opex × other_opex_percent
 
-### 2. Gross salary
-
-Для каждой роли:
-
-- monthly_gross_salary
-  из salary_gross_monthly_rub
-
----
-
-### 3. Bonus and payroll taxes
-
-- monthly_bonus =
-  monthly_gross ×
-  bonus_percent_of_gross
-
-- monthly_social =
-  (monthly_gross + monthly_bonus) ×
-  social_contribution_sfr_percent_of_gross
+total_datacenter_opex =
+datacenter_base_opex +
+other_datacenter_opex
+```
 
 ---
 
-### 4. Fully loaded cost
+### 13.7 Team OPEX
 
-- monthly_cost_per_fte =
-  monthly_gross +
-  monthly_bonus +
-  monthly_social
+Team OPEX считается на основе:
 
----
-
-### 5. Monthly team cost
-
-- monthly_team_cost =
-  monthly_fte ×
-  monthly_cost_per_fte
+- target FTE core team;
+- monthly gross salary;
+- hiring plan;
+- annual bonus;
+- SFR social contribution;
+- capitalization of eligible roles during build phase.
 
 ---
 
-### 6. Annual team OPEX
+### 13.8 Team payroll
 
-- annual_team_opex =
-  сумма monthly_team_cost
+```text
+monthly_gross_salary =
+salary_gross_monthly_rub × monthly_fte
 
----
+monthly_bonus_accrual =
+monthly_gross_salary × bonus_percent_of_gross
 
-### 7. Salary growth
+monthly_social_contribution_sfr =
+(monthly_gross_salary + monthly_bonus_accrual) × social_contribution_sfr_percent_of_gross
 
-- salary_t =
-  salary_previous_year ×
-  (1 + salary_growth_t)
+monthly_fully_loaded_team_cost =
+monthly_gross_salary +
+monthly_bonus_accrual +
+monthly_social_contribution_sfr
 
----
-
-# GPU Rental OPEX
-
-Используется блок:
-
-- opex.gpu_rental
-
-Формула:
-
-- annual_gpu_rental_cost =
-  rented_gpu ×
-  rental_price_per_gpu_per_year
-
-Важно:
-
-- если rented_gpu = 0,
-  rental OPEX = 0
-
-- если scenario = rent_gpu_only,
-  весь required_gpu попадает
-  в rental OPEX
+annual_core_team_cash_cost =
+sum(monthly_fully_loaded_cost_by_role_by_month)
+```
 
 ---
 
-# Total OPEX
+### 13.9 Capitalized core team cost
 
-Формула:
+During build phase:
 
-- total_opex =
-  total_datacenter_opex +
-  annual_team_opex +
-  annual_gpu_rental_cost
+```text
+capitalized_core_team_cost =
+sum(
+  monthly_fully_loaded_cost_by_role_by_month
+  where role in eligible_core_team_roles
+  and month < go_live_month
+)
+```
 
----
+After go-live:
 
-# SG&A calculation
-
-Модель должна рассчитывать SG&A по годам 2026–2030.
-
-SG&A — это постоянные административные расходы GPS, не относящиеся к:
-- delivery OPEX
-- datacenter OPEX
-- GPU rental
-- core AI/platform team
-
-## Inflation
-
-SG&A индексируется по рублёвой инфляции:
-
-- inflation_index_2026 = 1.0
-- inflation_index_t = inflation_index_previous_year × (1 + rub_inflation_t)
-
-## Fixed SG&A
-
-Расчёт производится на основе блока:
-
-- sga.monthly_cost_base_2026
-
-Формула:
-
-- monthly_cost_t = monthly_cost_base_2026 × inflation_index_t
-- annual_fixed_sga = сумма monthly_cost_t × 12
-
-## Office rent
-
-Аренда офиса рассчитывается исходя из численности сотрудников GPS:
-
-- total_fte = core_team_fte + sga_team_fte
-- required_office_area_sqm = total_fte × sqm_per_fte
-- rent_rub_per_sqm_per_month_t =
-  rent_rub_per_sqm_per_month_base_2026 × inflation_index_t
-- monthly_office_rent =
-  required_office_area_sqm × rent_rub_per_sqm_per_month_t
-- annual_office_rent =
-  monthly_office_rent × 12
-
-## Total SG&A
-
-Формула:
-
-- total_sga = annual_fixed_sga + annual_office_rent
-
-## HTML / CSV output
-
-Добавить таблицу:
-
-### SG&A
-
-- annual_fixed_sga
-- required_office_area_sqm
-- annual_office_rent
-- total_sga
-
-Все таблицы должны оставаться в wide format:
-
-Metric | 2026 | 2027 | 2028 | 2029 | 2030
+```text
+capitalized_core_team_cost = 0
+for ongoing support / run / minor improvements
+```
 
 ---
 
-# Revenue
+### 13.10 Total team OPEX
 
-Revenue считается через
-реальное потребление мощности
-и contribution margin.
-
-Сценарий revenue определяется
-не через мощность ЦОДа,
-а через utilization уже созданной мощности.
-
-То есть:
-
-CAPEX → задаёт мощность
-
-Revenue scenario →
-задаёт реальное использование мощности
+```text
+total_team_opex =
+annual_core_team_cash_cost -
+capitalized_core_team_cost
+```
 
 ---
 
-# Revenue
+## 14. SG&A
 
-Revenue считается через реальное потребление мощности
-и contribution margin.
+SG&A — постоянные административные расходы GPS, не относящиеся к delivery / production OPEX.
 
-Важно: база для расчета revenue и implied token price
-должна включать:
+SG&A включает:
 
-- total_cogs
-- total_depreciation
+- corporate management;
+- HR;
+- finance and accounting;
+- admin;
+- shared corporate services;
+- office rent.
 
-SG&A не включается в pricing base
-и учитывается ниже в P&L
-при расчете EBITDA.
+---
 
-Формула:
+### 14.1 SG&A payroll
 
-- pricing_base =
-  total_cogs +
-  total_depreciation
+SG&A payroll рассчитывается по target FTE и monthly gross salary.
 
-Revenue по продуктам:
+Формулы:
 
-- pricing_base_by_product =
-  pricing_base × product_token_share
+```text
+total_sga_fte =
+sum(target_fte)
 
-- revenue_by_product =
-  pricing_base_by_product /
-  (1 - target_contribution_margin)
+annual_gross_salary_by_role =
+monthly_gross_salary_by_role × target_fte_by_role × 12 × inflation_index_t
 
-- total_revenue =
-  workplace_ai_revenue +
-  contact_center_ai_revenue
+annual_bonus_by_role =
+annual_gross_salary_by_role × annual_bonus_percent_of_gross × worked_months_ratio
 
-Implied price:
+annual_social_contribution_sfr_by_role =
+(annual_gross_salary_by_role + annual_bonus_by_role) × social_contribution_sfr_percent_of_gross
 
-- implied_price_per_1m_tokens =
-  revenue_by_product /
-  sold_tokens_by_product × 1,000,000
+annual_fully_loaded_cost_by_role =
+annual_gross_salary_by_role +
+annual_bonus_by_role +
+annual_social_contribution_sfr_by_role
 
-Зависимость от сценариев инфраструктуры сохраняется, потому что:
+annual_fixed_sga =
+sum(annual_fully_loaded_cost_by_role)
+```
 
-- build_own_dc меняет CAPEX и depreciation
-- rent_gpu_only меняет GPU rental OPEX и depreciation
-- hybrid меняет rental OPEX и depreciation по годам
+---
 
-Таким образом:
+### 14.2 Office rent
 
-- pricing покрывает delivery cost и возврат инвестиций
-- SG&A оценивается отдельно на уровне EBITDA / EBIT
+Office rent рассчитывается через FTE, площадь и ставку аренды.
 
-## Revenue Start / Go-live logic
+Формулы:
 
-Revenue по каждому продукту начинается только после go-live.
+```text
+total_fte =
+core_team_fte +
+total_sga_fte
+
+required_office_area_sqm =
+total_fte × sqm_per_fte
+
+rent_rub_per_sqm_per_month_t =
+rent_rub_per_sqm_per_month_base_2026 × inflation_index_t
+
+monthly_office_rent =
+required_office_area_sqm × rent_rub_per_sqm_per_month_t
+
+annual_office_rent =
+monthly_office_rent × 12
+```
+
+---
+
+### 14.3 Total SG&A
+
+```text
+total_sga =
+annual_fixed_sga +
+annual_office_rent
+```
+
+---
+
+## 15. Revenue
+
+Revenue рассчитывается не через заранее заданную цену токена, а через:
+
+1. utilization доступной мощности;
+2. pricing base;
+3. target contribution margin;
+4. go-live factor.
+
+---
+
+### 15.1 Revenue scenarios
+
+Модель поддерживает три сценария потребления мощности:
+
+1. conservative;
+2. base;
+3. aggressive.
+
+Каждый сценарий задает:
+
+```text
+utilization_of_token_capacity
+target_contribution_margin
+```
+
+---
+
+### 15.2 Product token allocation
+
+Pricing base распределяется между продуктами пропорционально token share.
+
+```text
+product_token_share =
+product_tokens / total_tokens
+```
+
+---
+
+### 15.3 Revenue go-live logic
+
+Выручка по каждому продукту начинается только после go-live.
 
 Для каждого продукта используются:
 
-- go_live_year
-- go_live_month
+```text
+go_live_year
+go_live_month
+```
 
 Логика:
 
-- если year < go_live_year:
-  - product_revenue = 0
+```text
+if year < go_live_year:
+  revenue_active_months = 0
 
-- если year = go_live_year:
-  - revenue_availability_factor =
-    active_months / 12
+if year == go_live_year:
+  revenue_active_months = 12 - go_live_month + 1
 
-  - active_months =
-    12 - go_live_month + 1
+if year > go_live_year:
+  revenue_active_months = 12
+```
 
-  - product_revenue =
-    annual_product_revenue × revenue_availability_factor
+```text
+revenue_availability_factor =
+revenue_active_months / 12
+```
 
-- если year > go_live_year:
-  - revenue_availability_factor = 1.0
-  - product_revenue считается за полный год
+При `go_live_month = 7`:
 
-Пример:
-
-Если go_live_month = 7:
-
-- active_months = 6
-- revenue_availability_factor = 0.5
+```text
+active_months = 6
+revenue_availability_factor = 0.5
+```
 
 ---
 
-# P&L calculation
+### 15.4 Pricing base
 
-Модель должна рассчитывать полноценный Profit & Loss (P&L)
-по годам 2026–2030.
+Pricing base включает:
+
+```text
+total_cogs +
+total_depreciation_and_amortization
+```
+
+SG&A не включается в pricing base и учитывается ниже в P&L.
+
+```text
+pricing_base =
+total_cogs +
+total_depreciation_and_amortization
+```
+
+---
+
+### 15.5 Revenue formula
+
+```text
+sold_tokens =
+available_token_capacity × utilization_of_token_capacity
+
+sold_tokens_by_product =
+available_tokens_by_product × utilization_of_token_capacity
+
+pricing_base_by_product =
+pricing_base × product_token_share
+
+annual_revenue_before_go_live_adjustment =
+pricing_base_by_product / (1 - target_contribution_margin)
+
+revenue_by_product =
+annual_revenue_before_go_live_adjustment × revenue_availability_factor
+
+total_revenue =
+sum(revenue_by_product)
+
+implied_price_per_1m_tokens =
+revenue_by_product / sold_tokens_by_product × 1,000,000
+```
+
+---
+
+## 16. P&L
 
 P&L строится на основе:
 
-- Revenue
-- COGS (delivery costs)
-- SG&A
-- Depreciation
-- Profit Tax
+- Revenue;
+- COGS;
+- SG&A;
+- Depreciation & Amortization;
+- interest expense;
+- profit tax.
 
 ---
 
-# Revenue
+### 16.1 Revenue
 
-Revenue рассчитывается через utilization scenarios
-и contribution margin logic.
-
-Revenue должен быть раскрыт по продуктам:
-
-- Workplace.ai
-- Contact_Center.ai
-
-Формулы:
-
-- workplace_ai_revenue
-- contact_center_ai_revenue
-
-- total_revenue =
-  workplace_ai_revenue +
-  contact_center_ai_revenue
+```text
+total_revenue =
+workplace_ai_revenue +
+contact_center_ai_revenue
+```
 
 ---
 
-# COGS (Cost of Goods Sold)
+### 16.2 COGS
 
-COGS = delivery costs,
-необходимые для оказания AI-сервисов.
+COGS включает delivery costs:
 
-COGS включает:
-
-## Datacenter OPEX
-
-- electricity_cost
-- maintenance_cost
-- network_cost
-- land_rent
-- other_datacenter_opex
-- total_datacenter_opex
+```text
+total_cogs =
+total_datacenter_opex +
+total_team_opex +
+annual_gpu_rental_cost
+```
 
 ---
 
-## Team OPEX
+### 16.3 Gross Profit
 
-Team payroll должен быть раскрыт отдельно:
-
-- payroll_gross
-- annual_bonus
-- social_contribution_sfr
-- total_team_opex
-
----
-
-## GPU Rental OPEX
-
-- annual_gpu_rental_cost
+```text
+gross_profit =
+total_revenue -
+total_cogs
+```
 
 ---
 
-## Total COGS
+### 16.4 EBITDA
 
-Формула:
-
-- total_cogs =
-  total_datacenter_opex +
-  total_team_opex +
-  annual_gpu_rental_cost
-
----
-
-# Gross Profit
-
-Формула:
-
-- gross_profit =
-  total_revenue -
-  total_cogs
+```text
+ebitda =
+gross_profit -
+total_sga
+```
 
 ---
 
-# SG&A
+### 16.5 EBIT
 
-SG&A = overhead costs,
-не относящиеся к delivery.
-
-## Важно
-
-SG&A payroll считается как fully loaded cost:
-
-- annual gross salary
-- annual bonus
-- social contribution SFR (30%)
-
-Бонус:
-
-- начисляется один раз в декабре
-- пропорционально фактически отработанному времени в году
-
-SFR:
-
-- начисляется на:
-  gross salary + annual bonus
+```text
+ebit =
+ebitda -
+total_depreciation_and_amortization
+```
 
 ---
 
-## SG&A включает:
+### 16.6 EBT
 
-- corporate_management
-- hr
-- finance_and_accounting
-- admin
-- shared_corporate_services
-- office_rent
+Interest expense рассчитывается в funding block и попадает ниже EBIT.
 
----
-
-## Total SG&A
-
-Формула:
-
-- total_sga =
-  annual_fixed_sga +
-  annual_office_rent
+```text
+ebt =
+ebit -
+interest_expense
+```
 
 ---
 
-# EBITDA
+### 16.7 Profit Tax
 
-Формула:
-
-- ebitda =
-  gross_profit -
-  total_sga
-
----
-
-# Depreciation
-
-Амортизация начисляется только
-на собственные активы:
-
-- GPU
-- datacenter construction
-- office CAPEX
-
-Формулы:
-
-- gpu_depreciation
-- datacenter_depreciation
-- office_capex_depreciation
-
-- total_depreciation =
-  сумма всех видов depreciation
-
-GPU rental не амортизируется.
+```text
+profit_tax =
+max(ebt, 0) × profit_tax_rate
+```
 
 ---
 
-# EBIT
+### 16.8 Net Income
 
-Формула:
-
-- ebit =
-  ebitda -
-  total_depreciation
-
----
-
-# Profit Tax
-
-Налог начисляется только
-при положительном EBIT.
-
-Формула:
-
-- profit_tax =
-  max(ebit, 0) ×
-  profit_tax_rate
+```text
+net_income =
+ebt -
+profit_tax
+```
 
 ---
 
-# Net Income
+## 17. Cash Flow Statement
 
-Формула:
-
-- net_income =
-  ebit -
-  profit_tax
+Cash Flow Statement строится на основе P&L, CAPEX и Funding.
 
 ---
 
-# Cash Flow Statement (CFS)
+### 17.1 Operating Cash Flow
 
-Модель должна рассчитывать полноценный
-Cash Flow Statement по годам 2026–2030.
+```text
+operating_cash_flow =
+net_income +
+total_depreciation_and_amortization
+```
 
-CFS строится на основе:
-
-- Net Income
-- Depreciation
-- CAPEX
-- Financing Cash Flow
+На текущем этапе working capital не моделируется.
 
 ---
 
-# 1. Operating Cash Flow (OCF)
+### 17.2 Investing Cash Flow
 
-Operating Cash Flow начинается с:
-
-- net_income
-
-Добавляется non-cash adjustment:
-
-- total_depreciation
-
-Формула:
-
-- operating_cash_flow =
-  net_income +
-  total_depreciation
-
-На текущем этапе
-working capital не учитывается.
-
----
-
-# 2. Investing Cash Flow (ICF)
-
-Investing Cash Flow включает:
-
+```text
+investing_cash_flow =
 - gpu_infra_capex
 - datacenter_construction_capex
 - office_capex
 - intangible_capex
+```
 
 Важно:
 
-- gpu_capex показывает стоимость GPU как оборудования
-- gpu_infra_capex показывает полный денежный outflow на GPU infrastructure и именно он используется в Investing Cash Flow
-
-Формула:
-
-- investing_cash_flow =
-  - gpu_infra_capex
-  - datacenter_construction_capex
-  - office_capex
-  - intangible_capex
-
-Это отражает реальные
-инвестиционные денежные оттоки.
+- `gpu_capex` показывает стоимость GPU как оборудования;
+- `gpu_infra_capex` показывает полный cash outflow на GPU infrastructure и используется в Cash Flow;
+- `gpu_capex` не должен вычитаться дополнительно вместе с `gpu_infra_capex`, чтобы не было двойного учета.
 
 ---
 
-# 3. Financing Cash Flow
+### 17.3 Pre-financing Cash Flow
 
-На первом этапе:
-
-- financing_cash_flow = 0
-
-Позже может быть заменено на:
-
-- equity injection
-- debt funding
-- revolver
-
-для моделирования
-внешнего финансирования.
+```text
+pre_financing_cash_flow =
+operating_cash_flow +
+investing_cash_flow
+```
 
 ---
 
-# 4. Net Cash Flow
+### 17.4 Financing Cash Flow
 
-Формула:
-
-- net_cash_flow =
-  operating_cash_flow +
-  investing_cash_flow +
-  financing_cash_flow
-
----
-
-# 5. Cash Balance
-
-## Opening Cash
-
-Для 2026:
-
-- opening_cash_balance = 0
-
-Для следующих лет:
-
-- opening_cash =
-  previous_year_closing_cash
+```text
+financing_cash_flow =
+equity_injection +
+revolver_drawdown -
+revolver_repayment
+```
 
 ---
 
-## Closing Cash
+### 17.5 Net Cash Flow
 
-Формула:
-
-- closing_cash =
-  opening_cash +
-  net_cash_flow
-
----
-
-## Cumulative Cash
-
-Формула:
-
-- cumulative_cash =
-  cumulative_previous_year +
-  net_cash_flow
-
-Это позволяет видеть
-накопленный cash position
-проекта GPS.
+```text
+net_cash_flow =
+pre_financing_cash_flow +
+financing_cash_flow
+```
 
 ---
 
-# Funding Model
+### 17.6 Cash Balance
 
-Модель должна рассчитывать funding need GPS на основе Cash Flow Statement.
+```text
+opening_cash =
+previous_year_closing_cash
 
-Funding используется, если cash balance становится отрицательным.
+closing_cash =
+opening_cash +
+net_cash_flow
 
----
-
-# Funding Scenarios
-
-Модель должна поддерживать 3 сценария:
-
-## 1. equity_only
-
-- 100% funding need покрывается equity injection
-- revolver не используется
-
-## 2. revolver_only
-
-- 100% funding need покрывается revolver drawdown
-- equity injection не используется
-
-## 3. mix
-
-- funding need покрывается комбинацией equity и revolver
-- equity_share и revolver_share задаются пользователем вручную
-- сумма equity_share + revolver_share должна быть равна 1.0
-
-Baseline:
-
-- equity_share = 50%
-- revolver_share = 50%
+cumulative_cash =
+cumulative_previous_year +
+net_cash_flow
+```
 
 ---
 
-# Funding Need
+## 18. Funding Model
 
-Формула:
+Funding model используется для покрытия отрицательного cash balance через:
 
-- funding_need =
-  max(-closing_cash_before_funding, 0)
-
----
-
-# Equity Injection
-
-Формула:
-
-- equity_injection =
-  funding_need × equity_share
+1. equity;
+2. revolver;
+3. mix equity / revolver.
 
 ---
 
-# Revolver Drawdown
+### 18.1 Funding scenarios
 
-Формула:
+Модель поддерживает три сценария:
 
-- revolver_drawdown =
-  funding_need × revolver_share
-
----
-
-# Revolver Balance
-
-Формула:
-
-- revolver_balance =
-  previous_revolver_balance +
-  revolver_drawdown -
-  revolver_repayment
-
-На первом этапе:
-
-- revolver_repayment = 0
+```text
+equity_only
+revolver_only
+mix
+```
 
 ---
 
----
+### 18.2 equity_only
 
-# Revolver Repayment Logic
-
-Revolver должен автоматически погашаться,
-если после операционного и инвестиционного cash flow
-у компании появляется положительный cash balance.
-
-На текущем этапе минимальный cash buffer не используется:
-
-- minimum_cash_balance = 0
-
-Формулы:
-
-- closing_cash_before_funding =
-  opening_cash +
-  net_cash_flow
-
-- funding_need =
-  max(-closing_cash_before_funding, 0)
-
-- cash_after_drawdown =
-  closing_cash_before_funding +
-  equity_injection +
-  revolver_drawdown
-
-- excess_cash_available_for_repayment =
-  max(cash_after_drawdown - minimum_cash_balance, 0)
-
-- revolver_repayment =
-  min(excess_cash_available_for_repayment, opening_revolver_balance)
-
-- revolver_balance =
-  opening_revolver_balance +
-  revolver_drawdown -
-  revolver_repayment
-
-- closing_cash_after_funding =
-  cash_after_drawdown -
-  revolver_repayment
-
-Если revolver_balance = 0,
-дальнейшее погашение не производится.
+```text
+equity_share = 1.0
+revolver_share = 0.0
+```
 
 ---
 
-# Interest Expense
+### 18.3 revolver_only
 
-Формула:
-
-- interest_expense =
-  average_revolver_balance ×
-  revolver_interest_rate
-
-Interest expense должен попадать в P&L ниже EBIT перед налогом на прибыль.
+```text
+equity_share = 0.0
+revolver_share = 1.0
+```
 
 ---
 
-# Closing Cash After Funding
+### 18.4 mix
 
-Формула:
+```text
+equity_share + revolver_share = 1.0
+```
 
-- closing_cash_after_funding =
-  closing_cash_before_funding +
-  equity_injection +
-  revolver_drawdown
+Доли задаются пользователем вручную.
 
 ---
 
-# Balance Sheet
+### 18.5 Minimum cash balance
 
-Модель должна рассчитывать Balance Sheet GPS по годам 2026–2030.
+Minimum cash balance нужен для операционной устойчивости.
+
+Он рассчитывается как cash buffer на базе фиксированных расходов:
+
+```text
+minimum_cash_balance =
+monthly_fixed_costs × months_of_fixed_costs
+```
+
+Minimum cash balance учитывается при погашении revolver: долг гасится только деньгами сверх cash buffer.
+
+---
+
+### 18.6 Funding need
+
+```text
+closing_cash_before_funding =
+opening_cash +
+pre_financing_cash_flow
+
+funding_need =
+max(-closing_cash_before_funding, 0)
+```
+
+---
+
+### 18.7 Equity injection
+
+```text
+equity_injection =
+funding_need × equity_share
+```
+
+---
+
+### 18.8 Revolver drawdown
+
+```text
+revolver_drawdown =
+funding_need × revolver_share
+```
+
+---
+
+### 18.9 Cash after drawdown
+
+```text
+cash_after_drawdown =
+closing_cash_before_funding +
+equity_injection +
+revolver_drawdown
+```
+
+---
+
+### 18.10 Revolver repayment
+
+Revolver автоматически погашается из excess cash сверх minimum cash balance.
+
+```text
+excess_cash_available_for_repayment =
+max(cash_after_drawdown - minimum_cash_balance, 0)
+
+revolver_repayment =
+min(excess_cash_available_for_repayment, opening_revolver_balance)
+```
+
+---
+
+### 18.11 Revolver balance
+
+```text
+revolver_balance =
+opening_revolver_balance +
+revolver_drawdown -
+revolver_repayment
+```
+
+---
+
+### 18.12 Interest expense
+
+```text
+average_revolver_balance =
+(opening_revolver_balance + revolver_balance) / 2
+
+interest_expense =
+average_revolver_balance × revolver_interest_rate
+```
+
+Interest expense попадает в P&L ниже EBIT.
+
+---
+
+### 18.13 Closing cash after funding
+
+```text
+closing_cash_after_funding =
+cash_after_drawdown -
+revolver_repayment
+```
+
+---
+
+## 19. Balance Sheet
 
 Balance Sheet строится на основе:
 
-- Cash Flow
-- CAPEX
-- Intangible Assets
-- Funding
-- P&L
+- Cash Flow;
+- CAPEX;
+- D&A;
+- Funding;
+- P&L.
 
 ---
 
-# Assets
+### 19.1 Assets
 
-## Current Assets
+#### Cash
 
-### Cash
+```text
+cash =
+closing_cash_after_funding
+```
 
-- cash = closing_cash_after_funding
-
-Cash в Balance Sheet должен браться после funding, а не напрямую из Cash Flow Statement.
+Cash в Balance Sheet берется после funding.
 
 ---
 
-## Non-current Assets
-
-## PP&E
+#### PP&E
 
 PP&E включает:
 
-- GPU infrastructure
-- Datacenter construction
-- Office CAPEX
+- GPU infrastructure;
+- datacenter construction;
+- office CAPEX.
 
-Формулы:
+```text
+gross_ppe =
+cumulative_gpu_infra_capex +
+cumulative_datacenter_construction_capex +
+cumulative_office_capex
 
-- gross_ppe =
-  cumulative_gpu_infra_capex +
-  cumulative_datacenter_construction_capex +
-  cumulative_office_capex
+accumulated_depreciation =
+cumulative_total_ppe_depreciation
 
-- accumulated_depreciation =
-  cumulative_gpu_depreciation +
-  cumulative_datacenter_depreciation +
-  cumulative_office_capex_depreciation
-
-- net_ppe =
-  gross_ppe -
-  accumulated_depreciation
+net_ppe =
+gross_ppe -
+accumulated_depreciation
+```
 
 ---
 
-# Intangible Assets
+#### Intangible Assets
 
 Intangible Assets включают:
 
-- Workplace.ai IP
-- Contact_Center.ai IP
+- Workplace.ai IP;
+- Contact_Center.ai IP.
 
-Формулы:
+```text
+gross_intangible_assets =
+cumulative_workplace_ai_ip_value +
+cumulative_contact_center_ai_ip_value
 
-- gross_intangible_assets =
-  cumulative_workplace_ai_ip_value +
-  cumulative_contact_center_ai_ip_value
+accumulated_amortization =
+cumulative_total_ip_amortization
 
-- accumulated_amortization =
-  cumulative_ip_amortization
-
-- net_intangible_assets =
-  gross_intangible_assets -
-  accumulated_amortization
-
----
-
-# Total Assets
-
-Формула:
-
-- total_assets =
-  cash +
-  net_ppe +
-  net_intangible_assets
+net_intangible_assets =
+gross_intangible_assets -
+accumulated_amortization
+```
 
 ---
 
-# Liabilities
+#### Total Assets
 
-## Revolver Debt
-
-Формула:
-
-- revolver_balance =
-  previous_revolver_balance +
-  revolver_drawdown -
-  revolver_repayment
+```text
+total_assets =
+cash +
+net_ppe +
+net_intangible_assets
+```
 
 ---
 
-# Total Liabilities
+### 19.2 Liabilities
 
-Формула:
-
-- total_liabilities =
-  revolver_balance
-
----
-
-# Equity
-
-## Paid-in Capital
-
-Формула:
-
-- paid_in_capital =
-  cumulative_equity_injection
+```text
+total_liabilities =
+revolver_balance
+```
 
 ---
 
-## Retained Earnings
+### 19.3 Equity
 
-Формула:
+```text
+paid_in_capital =
+cumulative_equity_injection
 
-- retained_earnings =
-  cumulative_net_income
+retained_earnings =
+previous_retained_earnings +
+net_income -
+dividends
+
+total_equity =
+paid_in_capital +
+retained_earnings
+```
+
+На текущем этапе dividends = 0, если не задано отдельно.
 
 ---
 
-## Total Equity
+### 19.4 Balance Check
 
-Формула:
-
-- total_equity =
-  paid_in_capital +
-  retained_earnings
-
----
-
-# Balance Check
-
-Формула:
-
-- balance_check =
-  total_assets -
-  total_liabilities -
-  total_equity
+```text
+balance_check =
+total_assets -
+total_liabilities -
+total_equity
+```
 
 Если модель собрана корректно:
 
-- balance_check = 0
+```text
+balance_check ≈ 0
+```
 
 ---
 
-# DCF / Investment Metrics
+## 20. DCF / Investment Metrics
 
-Модель должна рассчитывать
-инвестиционные метрики GPS
-по годам 2026–2030.
-
-Используется для сравнения сценариев:
-
-- build_own_dc
-- rent_gpu_only
-- hybrid
+DCF используется для оценки инвестиционной привлекательности GPS.
 
 ---
 
-# 1. Free Cash Flow (FCFF)
+### 20.1 Discount Rate
 
-Free Cash Flow строится
-на основе уже рассчитанного
-Cash Flow Statement.
+`discount_rate` используется как WACC proxy / hurdle rate.
 
-Формула:
-
-- free_cash_flow =
-  operating_cash_flow +
-  investing_cash_flow
-
-Так как financing cash flow
-на текущем этапе = 0,
-FCF отражает реальную
-экономику проекта.
+Пользователь может менять discount rate в HTML-отчете.
 
 ---
 
-# 2. Discount Rate (WACC proxy)
+### 20.2 Free Cash Flow
 
-Используется отдельный editable parameter:
-
-- discount_rate
-
-Это proxy для:
-
-- WACC
-- hurdle rate
-- target return for IC
-
-Рекомендуемый baseline:
-
-- 20%
-
-Пользователь должен иметь возможность
-менять discount_rate вручную.
-
----
-
-# 3. Discounted Cash Flow
-
-## Discount Factor
-
-Формула:
-
-- discount_factor =
-  1 / (1 + discount_rate)^year_index
-
----
-
-## Discounted FCF
-
-Формула:
-
-- discounted_fcf =
-  free_cash_flow ×
-  discount_factor
-
----
-
-# 4. NPV
-
-Формула:
-
-- npv =
-  сумма discounted_fcf
-
-NPV показывает:
-
-создает ли проект
-стоимость для акционера.
-
----
-
-# 5. IRR
-
-Формула:
-
-- irr =
-  IRR(free_cash_flow_series)
-
-IRR сравнивается с:
-
-- discount_rate
-- hurdle rate
-
----
-
-# 6. Payback
-
-## Simple Payback
-
-Формула:
-
-- simple_payback =
-  первый год,
-  когда cumulative_cash > 0
-
----
-
-## Discounted Payback
-
-Формула:
-
-- discounted_payback =
-  первый год,
-  когда cumulative_discounted_fcf > 0
-
-Это более корректная
-инвестиционная метрика.
-
----
-
-# 7. Scenario Comparison
-
-Обязательно сравнивать:
-
-- build_own_dc
-- rent_gpu_only
-- hybrid
-
-по следующим метрикам:
-
-- NPV
-- IRR
-- simple_payback
-- discounted_payback
-
-Это ключевой output
-для IC / инвестиционного комитета.
-
-# Return Metrics
-
-Модель должна рассчитывать дополнительные метрики доходности и эффективности капитала.
-
-## ROIC
-
-Формула:
-
-- ROIC = NOPAT / average_invested_capital
-
-Где:
-
-- NOPAT = EBIT × (1 - profit_tax_rate)
-- invested_capital = net_ppe + net_intangible_assets
-- average_invested_capital =
-  (invested_capital_beginning + invested_capital_ending) / 2
-
-## ROE
-
-Формула:
-
-- ROE = net_income / average_equity
-
-## ROA
-
-Формула:
-
-- ROA = net_income / average_total_assets
-
-## Leverage metrics
-
-Модель должна рассчитывать:
-
-- debt_to_equity = revolver_balance / total_equity
-- net_debt = revolver_balance - cash
-- net_debt_to_ebitda = net_debt / ebitda
-- interest_coverage = ebit / interest_expense
-
----
-
-# Sensitivity Analysis
-
-Модель должна рассчитывать sensitivity analysis по ключевым драйверам.
-
-## Cases
-
-- base
-- downside
-- upside
-
-## Sensitivity drivers
-
-- discount_rate
-- target_contribution_margin
-- token_capacity_utilization
-- gpu_unit_cost
-- gpu_rental_price
-- electricity_price
-- fx_usd_rub
-
-## Output metrics
-
-Для каждого sensitivity case модель должна показывать:
-
-- NPV
-- IRR
-- Simple Payback
-- Discounted Payback
-- ROIC
-- ROE
-- Net Debt / EBITDA
-
-## HTML / CSV output
-
-Добавить таблицы:
-
-### Return Metrics
-
-- ROIC
-- ROE
-- ROA
-- Debt / Equity
-- Net Debt
-- Net Debt / EBITDA
-- Interest Coverage
-
-### Sensitivity Analysis
-
-Строки:
-
-- base
-- downside
-- upside
-
-Колонки:
-
-- NPV
-- IRR
-- Simple Payback
-- Discounted Payback
-- ROIC
-- ROE
-- Net Debt / EBITDA
-
----
-
-# HTML и CSV output
-
-Python должен формировать:
-
-- pandas DataFrame
-- CSV
-- HTML-report
-
----
-
-# Формат таблиц
-
-Все таблицы должны быть
-в wide format:
+Для DCF используется pre-financing free cash flow:
 
 ```text
-Metric | 2026 | 2027 | 2028 | 2029 | 2030
+free_cash_flow =
+operating_cash_flow +
+investing_cash_flow
+```
+
+Financing cash flow не должен входить в FCFF.
+
+---
+
+### 20.3 Discount Factor
+
+```text
+discount_factor =
+1 / (1 + discount_rate) ^ year_index
+```
+
+---
+
+### 20.4 Discounted FCF
+
+```text
+discounted_fcf =
+free_cash_flow × discount_factor
+```
+
+---
+
+### 20.5 NPV
+
+```text
+npv =
+sum(discounted_fcf)
+```
+
+---
+
+### 20.6 IRR
+
+```text
+irr =
+IRR(free_cash_flow_series)
+```
+
+Если IRR невозможно посчитать, модель должна возвращать `N/A` или warning, но не падать.
+
+---
+
+### 20.7 Payback
+
+Simple payback:
+
+```text
+first year when cumulative_cash > 0
+```
+
+Discounted payback:
+
+```text
+first year when cumulative_discounted_fcf > 0
+```
+
+Если payback не достигнут:
+
+```text
+Not reached
+```
+
+---
+
+### 20.8 Scenario Comparison
+
+Scenario comparison сравнивает:
+
+- build_own_dc;
+- rent_gpu_only;
+- hybrid.
+
+Метрики:
+
+- NPV;
+- IRR;
+- simple payback;
+- discounted payback.
+
+---
+
+## 21. Return Metrics
+
+Return metrics показывают эффективность капитала и долговую нагрузку.
+
+---
+
+### 21.1 ROIC
+
+```text
+nopat =
+ebit × (1 - profit_tax_rate)
+
+invested_capital =
+net_ppe +
+net_intangible_assets
+
+average_invested_capital =
+(invested_capital_beginning + invested_capital_ending) / 2
+
+roic =
+nopat / average_invested_capital
+```
+
+---
+
+### 21.2 ROE
+
+```text
+roe =
+net_income / average_equity
+```
+
+---
+
+### 21.3 ROA
+
+```text
+roa =
+net_income / average_total_assets
+```
+
+---
+
+### 21.4 Leverage metrics
+
+```text
+debt_to_equity =
+revolver_balance / total_equity
+
+net_debt =
+revolver_balance - cash
+
+net_debt_to_ebitda =
+net_debt / ebitda
+
+interest_coverage =
+ebit / interest_expense
+```
+
+Если знаменатель равен 0 или отрицательный, модель должна возвращать `N/A`, а не падать.
+
+---
+
+## 22. Sensitivity Analysis
+
+Sensitivity analysis показывает влияние ключевых факторов на NPV.
+
+Текущая основная sensitivity table:
+
+```text
+NPV sensitivity:
+weighted_throughput × target_contribution_margin
+```
+
+---
+
+### 22.1 Sensitivity metric
+
+В ячейках таблицы:
+
+```text
+NPV
+```
+
+---
+
+### 22.2 Row factor: weighted throughput
+
+`weighted_throughput` отражает среднюю производительность GPU с учетом model mix.
+
+Изменение weighted throughput влияет на:
+
+```text
+weighted_throughput
+→ required_gpu
+→ CAPEX / OPEX
+→ D&A
+→ Cash Flow
+→ NPV
+```
+
+Sensitivity применяется как multiplier к base weighted throughput.
+
+---
+
+### 22.3 Column factor: target contribution margin
+
+`target_contribution_margin` отражает коммерческую маржинальность.
+
+Изменение contribution margin влияет на:
+
+```text
+target_contribution_margin
+→ revenue
+→ EBITDA
+→ Cash Flow
+→ NPV
+```
+
+Sensitivity применяется как multiplier к base contribution margin curve.
+
+---
+
+### 22.4 Sensitivity calculation logic
+
+```text
+adjusted_weighted_throughput =
+base_weighted_throughput × weighted_throughput_multiplier
+
+adjusted_required_gpu =
+tokens_per_second /
+(adjusted_weighted_throughput × utilization) × peak_factor
+
+adjusted_target_contribution_margin =
+base_target_contribution_margin × contribution_margin_multiplier
+
+adjusted_revenue =
+pricing_base / (1 - adjusted_target_contribution_margin)
+
+adjusted_npv =
+NPV(adjusted_free_cash_flow_series, discount_rate)
+```
+
+---
+
+## 23. Report Output
+
+`report_output` централизует структуру HTML и CSV отчета.
+
+Отдельные блоки модели не должны иметь собственные `html_output`, чтобы не было нескольких источников правды по отчету.
+
+---
+
+### 23.1 Interactive controls
+
+HTML-отчет должен поддерживать:
+
+1. revenue scenario dropdown;
+2. infrastructure scenario dropdown;
+3. construction_start_year input;
+4. funding scenario dropdown;
+5. funding mix inputs;
+6. discount rate input.
+
+---
+
+### 23.2 Report tables
+
+HTML и CSV должны включать таблицы:
+
+1. Token Load;
+2. GPU Sizing;
+3. Infrastructure Scenario;
+4. CAPEX;
+5. Datacenter Construction CAPEX;
+6. Office CAPEX;
+7. Intangible Assets / IP;
+8. Depreciation & Amortization;
+9. Datacenter OPEX;
+10. Team OPEX;
+11. GPU Rental OPEX;
+12. SG&A;
+13. Revenue;
+14. COGS;
+15. P&L Summary;
+16. Cash Flow Statement;
+17. Funding;
+18. Balance Sheet;
+19. DCF;
+20. Investment Metrics;
+21. Return Metrics;
+22. Scenario Comparison;
+23. Sensitivity Analysis.
+
+---
+
+## 24. Key Modelling Principles
+
+### 24.1 One source of truth
+
+`assumptions.yaml` является единственным источником входных параметров.
+
+---
+
+### 24.2 No manual edits in output files
+
+HTML и CSV генерируются Python-моделью и не редактируются вручную.
+
+---
+
+### 24.3 GPU rental and owned infrastructure are mutually exclusive by scenario
+
+Если GPU rented:
+
+```text
+rental OPEX includes hosting / electricity / maintenance
+```
+
+Если GPU owned:
+
+```text
+datacenter OPEX is calculated separately
+```
+
+---
+
+### 24.4 Electricity is calculated only for owned GPU
+
+Electricity не считается по rented GPU, чтобы избежать двойного учета.
+
+---
+
+### 24.5 GPU infrastructure CAPEX includes GPU CAPEX
+
+`gpu_infra_capex` уже включает `gpu_capex`.
+
+В Cash Flow используется:
+
+```text
+gpu_infra_capex
+```
+
+а не:
+
+```text
+gpu_capex + gpu_infra_capex
+```
+
+---
+
+### 24.6 SG&A is excluded from pricing base
+
+Pricing base включает:
+
+```text
+COGS + D&A
+```
+
+SG&A учитывается ниже gross profit при расчете EBITDA.
+
+---
+
+### 24.7 IP capitalization is limited to build phase
+
+Eligible core team roles капитализируются только до go-live.
+
+После go-live команда возвращается в OPEX, если занимается эксплуатацией, поддержкой и развитием продукта.
+
+---
+
+### 24.8 DCF uses pre-financing cash flow
+
+DCF должен использовать FCFF до equity / revolver financing.
+
+Financing влияет на funding, interest expense, Balance Sheet и equity/debt structure, но не должен напрямую увеличивать project FCFF.
+
+---
+
+## 25. Validation Checklist
+
+После изменений в модели нужно запускать:
+
+```bash
+python calc_token_load.py
+```
+
+Проверить:
+
+1. HTML-отчет генерируется без ошибок;
+2. CSV генерируется без ошибок;
+3. Token Load считается по обоим продуктам;
+4. GPU Sizing использует total annual tokens;
+5. Infrastructure scenario dropdown работает;
+6. Revenue scenario dropdown работает;
+7. Funding scenario dropdown работает;
+8. Discount rate input работает;
+9. Cash Flow использует `gpu_infra_capex`, а не только `gpu_capex`;
+10. Intangible CAPEX попадает в Cash Flow и Balance Sheet;
+11. D&A включает PP&E depreciation и IP amortization;
+12. P&L считает tax от EBT, а не от EBIT;
+13. Balance Check близок к 0;
+14. DCF / NPV / IRR пересчитываются;
+15. Sensitivity Analysis отображается корректно.
+```

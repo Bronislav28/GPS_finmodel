@@ -117,7 +117,7 @@ token_load_model:
       automated_interactions_per_day: interactions_per_day * automation_rate
       daily_tokens: automated_interactions_per_day * tokens_per_interaction
       annual_tokens: daily_tokens * calendar_days_per_year
-  total_annual_tokens: Wrkplace.ai.annual_tokens + Contact_Center.ai.annual_tokens
+  total_annual_tokens: Workplace.ai.annual_tokens + Contact_Center.ai.annual_tokens
 
 compute_model: # перевод токенов в нагрузку и GPU
   model_mix:
@@ -180,7 +180,7 @@ gpu_sizing: # считаем количество GPU
   total_annual_tokens_to_tokens_per_second:
     method: total_annual_tokens / (working_days_per_year * working_hours_per_day * 3600)
     source:
-      toal_annual_tokens: token_load_model.total_annual_tokens
+      total_annual_tokens: token_load_model.total_annual_tokens
       working_days_per_year: token_load_model.time_assumptions.working_days_per_year
       working_hours_per_day: compute_model.infra.working_hours_per_day
   required_gpu:
