@@ -1019,45 +1019,304 @@ investment_metrics:
       fallback: N/A if interest_expense <= 0
   sensitivity_analysis:
     description: >
-      Sensitivity analysis для ключевых драйверов инвестиционной модели GPS.
-    active_cases:
-      - base
-      - downside
-      - upside
-    drivers:
-      discount_rate:
-        base: 0.30
-        downside: 0.35
-        upside: 0.25
-      target_contribution_margin:
-        base_multiplier: 1.00
-        downside_multiplier: 0.85
-        upside_multiplier: 1.15
-      token_capacity_utilization:
-        base_multiplier: 1.00
-        downside_multiplier: 0.80
-        upside_multiplier: 1.20
-      gpu_unit_cost:
-        base_multiplier: 1.00
-        downside_multiplier: 1.20
-        upside_multiplier: 0.90
-      gpu_rental_price:
-        base_multiplier: 1.00
-        downside_multiplier: 1.20
-        upside_multiplier: 0.90
-      electricity_price:
-        base_multiplier: 1.00
-        downside_multiplier: 1.20
-        upside_multiplier: 0.90
-      fx_usd_rub:
-        base_multiplier: 1.00
-        downside_multiplier: 1.15
-        upside_multiplier: 0.90
-    output_metrics:
-      - npv
-      - irr
-      - simple_payback
-      - discounted_payback
-      - roic
-      - roe
-      - net_debt_to_ebitda
+      Классический двухфакторный sensitivity analysis для оценки влияния
+      производительности inference и коммерческой маржинальности на NPV.
+    tables:
+      npv_weighted_throughput_vs_contribution_margin:
+        title:
+          NPV sensitivity: weighted throughput vs contribution margin
+        metric:
+          name: npv
+          description: >
+            В ячейках таблицы показывается NPV проекта.
+        row_factor:
+          name: weighted_throughput
+          description: >
+            Изменение weighted_throughput отражает изменение средней производительности
+            GPU с учетом model mix frontier / large / medium / small.
+            Чем ниже weighted_throughput, тем больше GPU требуется для той же
+            токеновой нагрузки.
+          base_source: compute_model.weighted_throughput
+          adjustment_type: multiplier
+          min_multiplier: 0.75
+          max_multiplier: 1.25
+          step: 0.05
+        column_factor:
+          name: target_contribution_margin
+          description: >
+            Изменение target contribution margin отражает изменение целевой
+            коммерческой маржи, которая применяется к pricing base.
+          base_source: revenue.target_contribution_margin
+          adjustment_type: multiplier
+          min_multiplier: 0.80
+          max_multiplier: 1.20
+          step: 0.05
+        calculation_logic:
+          adjusted_weighted_throughput: base_weighted_throughput * weighted_throughput_multiplier
+          adjusted_required_gpu: tokens_per_second / (adjusted_weighted_throughput * utilization) * peak_factor
+          adjusted_target_contribution_margin: base_target_contribution_margin * contribution_margin_multiplier
+          adjusted_revenue: pricing_base / (1 - adjusted_target_contribution_margin)
+          adjusted_npv: NPV(adjusted_free_cash_flow_series, discount_rate)
+        output:
+          layout: matrix
+          rows: weighted_throughput_multiplier
+          columns: contribution_margin_multiplier
+          values: npv
+
+report_output:
+  description: >
+    Централизованная структура HTML и CSV отчета.
+    Все таблицы выводятся в wide format:
+    Metric | 2026 | 2027 | 2028 | 2029 | 2030.
+  wide_format: true
+  interactive_controls:
+    revenue_scenario_dropdown:
+      enabled: true
+      source: revenue.active_scenario
+      options_source: revenue.scenarios
+    infrastructure_scenario_dropdown:
+      enabled: true
+      source: capex.strategy_scenarios.active_scenario
+      options_source: capex.strategy_scenarios.scenarios
+    construction_start_year_input:
+      enabled: true
+      source: capex.strategy_scenarios.scenarios.hybrid.construction_start_year
+    funding_scenario_dropdown:
+      enabled: true
+      source: funding.active_scenario
+      options_source: funding.scenarios
+    funding_mix_inputs:
+      enabled: true
+      sources:
+        equity_share: funding.scenarios.mix.equity_share.value
+        revolver_share: funding.scenarios.mix.revolver_share.value
+    discount_rate_input:
+      enabled: true
+      source: investment_metrics.discount_rate.value.2026
+  tables:
+    token_load:
+      title: Token Load
+      rows:
+        - active_users
+        - workplace_daily_tokens
+        - workplace_annual_tokens
+        - automated_interactions_per_day
+        - contact_center_daily_tokens
+        - contact_center_annual_tokens
+        - total_annual_tokens
+    gpu_sizing:
+      title: GPU Sizing
+      rows:
+        - weighted_throughput
+        - tokens_per_second
+        - required_gpu
+    infrastructure_scenario:
+      title: Infrastructure Scenario
+      rows:
+        - active_scenario
+        - construction_start_year
+        - construction_flag
+        - required_gpu
+        - owned_gpu
+        - rented_gpu
+        - owned_gpu_increment
+    capex:
+      title: CAPEX
+      rows:
+        - gpu_capex
+        - gpu_infra_capex
+        - datacenter_construction_capex
+        - office_capex
+        - intangible_capex
+        - tangible_capex
+        - total_capex
+    datacenter_construction:
+      title: Datacenter Construction CAPEX
+      rows:
+        - peak_required_gpu
+        - target_capacity_mw
+        - total_component_rub
+        - datacenter_construction_capex
+    office_capex:
+      title: Office CAPEX
+      rows:
+        - office_server_capex
+        - employee_laptops_capex
+        - executive_laptops_capex
+        - mfu_capex
+        - meeting_rooms_capex
+        - office_furniture_capex
+        - total_office_capex
+    intangible_assets:
+      title: Intangible Assets / IP
+      rows:
+        - workplace_ai_ip_value
+        - contact_center_ai_ip_value
+        - total_intangible_assets
+    depreciation_and_amortization:
+      title: Depreciation & Amortization
+      rows:
+        - gpu_depreciation
+        - datacenter_depreciation
+        - office_capex_depreciation
+        - total_ppe_depreciation
+        - ip_amortization
+        - total_depreciation_and_amortization
+    datacenter_opex:
+      title: Datacenter OPEX
+      rows:
+        - average_owned_gpu
+        - total_load_mw
+        - electricity_kwh
+        - electricity_price
+        - electricity_cost
+        - maintenance_cost
+        - network_cost
+        - land_rent
+        - other_datacenter_opex
+        - total_datacenter_opex
+    team_opex:
+      title: Team OPEX
+      rows:
+        - total_core_team_fte
+        - payroll_gross
+        - annual_bonus
+        - social_contribution_sfr
+        - annual_core_team_cash_cost
+        - capitalized_core_team_cost
+        - total_team_opex
+    gpu_rental_opex:
+      title: GPU Rental OPEX
+      rows:
+        - rented_gpu
+        - rental_price_per_gpu_per_year
+        - annual_gpu_rental_cost
+    sga:
+      title: SG&A
+      rows:
+        - total_sga_fte
+        - annual_fixed_sga
+        - required_office_area_sqm
+        - annual_office_rent
+        - total_sga
+    revenue:
+      title: Revenue
+      rows:
+        - workplace_ai_revenue
+        - contact_center_ai_revenue
+        - total_revenue
+        - workplace_implied_price_per_1m_tokens
+        - contact_center_implied_price_per_1m_tokens
+    cogs:
+      title: COGS
+      rows:
+        - total_datacenter_opex
+        - total_team_opex
+        - annual_gpu_rental_cost
+        - total_cogs
+    pnl:
+      title: P&L Summary
+      rows:
+        - total_revenue
+        - total_cogs
+        - gross_profit
+        - total_sga
+        - ebitda
+        - total_depreciation_and_amortization
+        - ebit
+        - interest_expense
+        - ebt
+        - profit_tax
+        - net_income
+    cash_flow:
+      title: Cash Flow Statement
+      rows:
+        - net_income
+        - total_depreciation_and_amortization
+        - operating_cash_flow
+        - gpu_capex
+        - gpu_infra_capex
+        - datacenter_construction_capex
+        - office_capex
+        - intangible_capex
+        - investing_cash_flow
+        - equity_injection
+        - revolver_drawdown
+        - revolver_repayment
+        - financing_cash_flow
+        - net_cash_flow
+        - opening_cash
+        - closing_cash
+        - cumulative_cash
+    funding:
+      title: Funding
+      rows:
+        - minimum_cash_balance
+        - funding_need
+        - equity_injection
+        - revolver_drawdown
+        - revolver_repayment
+        - revolver_balance
+        - interest_expense
+        - closing_cash_after_funding
+    balance_sheet:
+      title: Balance Sheet
+      rows:
+        - cash
+        - gross_ppe
+        - accumulated_depreciation
+        - net_ppe
+        - gross_intangible_assets
+        - accumulated_amortization
+        - net_intangible_assets
+        - total_assets
+        - revolver_balance
+        - total_liabilities
+        - paid_in_capital
+        - retained_earnings
+        - total_equity
+        - balance_check
+    dcf:
+      title: DCF
+      rows:
+        - free_cash_flow
+        - discount_rate
+        - discount_factor
+        - discounted_fcf
+        - cumulative_discounted_fcf
+    investment_metrics:
+      title: Investment Metrics
+      rows:
+        - npv
+        - irr
+        - simple_payback
+        - discounted_payback
+    return_metrics:
+      title: Return Metrics
+      rows:
+        - roic
+        - roe
+        - roa
+        - debt_to_equity
+        - net_debt
+        - net_debt_to_ebitda
+        - interest_coverage
+    scenario_comparison:
+      title: Scenario Comparison
+      layout: matrix
+      rows:
+        - build_own_dc
+        - rent_gpu_only
+        - hybrid
+      columns:
+        - npv
+        - irr
+        - simple_payback
+        - discounted_payback
+    sensitivity_analysis:
+      title: Sensitivity Analysis
+      layout: matrix
+      source: investment_metrics.sensitivity_analysis.tables.npv_weighted_throughput_vs_contribution_margin
+      metric: npv
+      row_factor: weighted_throughput_multiplier
+      column_factor: contribution_margin_multiplier
