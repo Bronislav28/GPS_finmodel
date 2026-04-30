@@ -35,7 +35,7 @@ inflation_assumptions:
       2030: 0.05
     calculation_logic:
       index_2026: 1.0
-      index_t: "index_previous_year * (1 + annual_growth_t)"
+      index_t: index_previous_year * (1 + annual_growth_t)
 
 products: # продуктовый портфель и модель реализации
   - name: Workplace.ai
@@ -49,15 +49,12 @@ products: # продуктовый портфель и модель реализ
     consumption_type: # потребление токенов в продукте
       interactive: 0.8
       agentic: 0.2
-    components: # база для затрат на разработку и архитектуру
+    components: # не влияет на модель база для будущей детализации затрат на разработку и архитектуру
       - LLM_fine_tuning
       - RAG_knowledge_access
       - document_generation
       - corporate_chat_assistant
       - agentic_actions # HR, requests, workflows
-    rollout:
-      model: rapid_scaling
-      driver: employee_adoption
   - name: Contact_Center.ai
     type: customer_interaction_ai
     users: contact_center + clients
@@ -70,66 +67,32 @@ products: # продуктовый портфель и модель реализ
       chat_real_time: 0.5
       voice_processing: 0.3
       post_processing: 0.2
-    components: # база для затрат на разработку и архитектуру
+    components: # не влияет на модель база для будущей детализации затрат на разработку и архитектуру
       - AI_operator
       - operator_assistant
       - voice_layer # external STT/TTS
       - conversation_analytics
       - agentic_execution_layer
-    rollout:
-      stages:
-      - operator_assistant
-      - partial_automation
-      - full_ai_operator
-      - voice_enablement
 
-growth_drivers: # определяем драйверы роста реализации продуктов
-  Workplace.ai:
-    - employee_adoption
-    - queries_per_user
-  Contact_Center.ai:
-    - automation_rate
-    - interactions_volume
-    - voice_share_growth
-
-technology:
-  LLM:
-    deployment: on premise
-    ownership: GPS
-  voice:
-    stt_tts: external_solution
-    integration: GPS
-  agent:
-    development: GPS
-    orchestration: GPS
-
-usage_assumptions:
+usage_assumptions: # спрос на стороне банка
   Workplace.ai:
     total_employees: 27000
-    activation_rate:
+    activation_rate: # доля ИИ-активных сотрудников
       2026: 0.15
       2027: 0.25
       2028: 0.40
       2029: 0.75
       2030: 0.90
-    usage_metric: tokens_per_active_user_per_day
+    usage_metric: tokens_per_active_user_per_day # закладываю метрику токенов
   Contact_Center.ai:
-    interactions_per_day: 36870
-    tokens_per_interaction: 25400
-    automation_rate: # сколько обращений обрабатывает AI
+    interactions_per_day: 36870 # всего обращений в день в КЦ
+    automation_rate: # доля обращений, которые обрабатывает AI
       2026: 0.05
       2027: 0.15
       2028: 0.30
       2029: 0.45
       2030: 0.60
-    channels:
-      voice_share: # text_share = 1 - voice_share
-        2026: 0.0
-        2027: 0.1
-        2028: 0.25
-        2029: 0.4
-        2030: 0.5
-    usage_metric: tokens_per_interaction
+    usage_metric: tokens_per_interaction # закладываю метрику токенов
 
 token_load_model:
   time_assumptions:
@@ -137,19 +100,34 @@ token_load_model:
     calendar_days_per_year: 365
   Workplace.ai:
     metric: tokens_per_active_user_per_day
-    formula: active_users * tokens_per_active_user_per_day * working_days_per_year
-    tokens_per_active_user_per_day:
+    tokens_per_active_user_per_day: # увеличивается глубина сценариев использования ИИ
       2026: 25000
       2027: 66000
       2028: 119000
       2029: 182000
       2030: 227000
+    calculation_logic:
+      active_users: total_employees * activation_rate
+      daily_tokens: active_users * tokens_per_active_user_per_day
+      annual_tokens: daily_tokens * working_days_per_year
   Contact_Center.ai:
     metric: tokens_per_interaction
-    formula: interactions_per_day * automation_rate * tokens_per_interaction * calendar_days_per_year
+    tokens_per_interaction: 25400 # предположение по среднему объему токенов на обращение (blend text / voice)
+    calculation_logic:
+      automated_interactions_per_day: interactions_per_day * automation_rate
+      daily_tokens: automated_interactions_per_day * tokens_per_interaction
+      annual_tokens: daily_tokens * calendar_days_per_year
+  total_annual_tokens: Wrkplace.ai.annual_tokens + Contact_Center.ai.annual_tokens
 
 compute_model: # перевод токенов в нагрузку и GPU
   model_mix:
+    description: >
+      распределение токенов по классам моделей;
+      в первые годы большая доля нагрузки идёт на frontier/large модели,
+      потому что продукт ещё незрелый, routing хуже, больше ручных сложных запросов 
+      и меньше оптимизации. Затем по мере развития платформы часть нагрузки уходит на medium/small
+      модели, потому что появляются классификация запросов, model routing, кэширование, 
+      шаблонные сценарии и специализированные модели.
     2026:
       frontier: 0.15
       large: 0.5
@@ -175,15 +153,15 @@ compute_model: # перевод токенов в нагрузку и GPU
       large: 0.22
       medium: 0.32
       small: 0.28
-  throughput_per_gpu: # производительность моделей (токенов в сек на GPU)
+  throughput_per_gpu: # производительность GPU для каждого класса моделей (токенов в сек на GPU)
     frontier: 80
     large: 450
     medium: 2500
     small: 6000
-  weighted_throughput: # средняя производительность всех моделей
+  weighted_throughput: # средневзвешенная производительность GPU для всех моделей
     calculation:
       type: harmonic_mean
-      formula: "1 / sum(share / throughput)"
+      formula: 1 / sum(share / throughput_per_gpu)
       depends_on:
         - compute_model.model.mix
         - compute_model.throughput_per_gpu
@@ -198,26 +176,27 @@ compute_model: # перевод токенов в нагрузку и GPU
     working_hours_per_day: 12
     peak_factor: 1.0
 
-gpu_calculation: # считаем количество GPU
-  annual_tokens_to_tokens_per_second:
-    method: annual_tokens / (working_days_per_year * working_hours_per_day) * 3600
+gpu_sizing: # считаем количество GPU
+  total_annual_tokens_to_tokens_per_second:
+    method: total_annual_tokens / (working_days_per_year * working_hours_per_day * 3600)
     source:
+      toal_annual_tokens: token_load_model.total_annual_tokens
       working_days_per_year: token_load_model.time_assumptions.working_days_per_year
       working_hours_per_day: compute_model.infra.working_hours_per_day
   required_gpu:
     method: tokens_per_second / (weighted_throughput * utilization) * peak_factor
     source:
-      tokens_per_second: gpu_calculation.annual_tokens_to_tokens_per_second
+      tokens_per_second: gpu_sizing.total_annual_tokens_to_tokens_per_second
       weighted_throughput: compute_model.weighted_throughput
       utilization: compute_model.infra.utilization
       peak_factor: compute_model.infra.peak_factor
 
-capex:
+capex: # общие вводные по capex
   currency: RUB
   gpu:
     type: H100
     unit_cost: 3000000
-    purchase_logic: required_gpu_per_year
+    purchase_logic: owned_gpu_increment
     useful_life_years: 5
   infra_multiplier:
     description: >
@@ -232,121 +211,13 @@ capex:
     intangible_capex: workplace_ai_ip_value + contact_center_ai_ip_value
     tangible_capex: gpu_infra_capex + datacenter_construction_capex + office_capex
     total_capex: tangible_capex + intangible_capex
-  depreciation:
-    method: straight_line
-    useful_life_years: 5
-    depreciable_base: gpu_infra_capex + datacenter_construction_capex + office_capex
 
-  strategy_scenarios:
-    description: >
-      Сценарии инфраструктурной стратегии GPS:
-      1. build_own_dc — строим собственный ЦОД сразу
-      2. rent_gpu_only — арендуем GPU весь горизонт
-      3. hybrid — сначала аренда GPU, затем строительство ЦОДа
-    active_scenario: hybrid
-    scenarios:
-      build_own_dc:
-        description: >
-          Строительство собственного ЦОДа со старта проекта.
-          Запуск на собственной инфраструктуре.
-        construction_start_year: 2026
-        construction_flag:
-          2026: 1
-          2027: 0
-          2028: 0
-          2029: 0
-          2030: 0
-      rent_gpu_only:
-        description: >
-          Полная аренда GPU без строительства собственного ЦОДа.
-          Используется при ограничениях по регулированию,
-          скорости запуска или снижении CAPEX-риска.
-        construction_start_year: null
-        construction_flag:
-          2026: 0
-          2027: 0
-          2028: 0
-          2029: 0
-          2030: 0
-      hybrid:
-        description: >
-          Сначала аренда GPU для проверки жизнеспособности модели,
-          затем строительство собственного ЦОДа.
-        construction_start_year: 2028
-        construction_flag:
-          2026: 0
-          2027: 0
-          2028: 1
-          2029: 0
-          2030: 0
-    allocation_logic:
-      description: >
-        Распределение required_gpu между арендой и собственными GPU
-        зависит от активного сценария.
-      rules:
-        build_own_dc:
-          description: >
-            Собственный ЦОД с самого начала, все GPU покупаются.
-          rented_gpu: 0
-          owned_gpu: required_gpu
-        rent_gpu_only:
-          description: >
-            Собственный ЦОД не строится, все GPU арендуются.
-          rented_gpu: required_gpu
-          owned_gpu: 0
-        hybrid:
-          description: >
-            До года строительства используется аренда, после строительства — собственные GPU.
-          before_construction:
-            rented_gpu: required_gpu
-            owned_gpu: 0
-          from_construction_year:
-            rented_gpu: 0
-            owned_gpu: required_gpu
-
-  owned_gpu_increment_logic:
-    description: >
-      Прирост только собственных GPU, для rented GPU CAPEX не возникает.
-    formula:
-      2026: owned_gpu
-      next_years: max(owned_gpu_current - owned_gpu_previous, 0)
-
-  datacenter_construction: # capex
-    description: >
-      CAPEX строительства собственного ЦОДа рассчитывается
-      от максимальной требуемой GPU-нагрузки GPS за горизонт модели.
-    sizing_logic:
-      description: >
-        Размер ЦОДа определяется по пиковой нагрузке GPU:
-        max(required_gpu) → MW → округление вверх
-      calculation_logic:
-        peak_required_gpu: max(required_gpu)
-        it_load_mw: peak_required_gpu * gpu_power_kw / 1000
-        total_load_mw: it_load_mw * pue
-        target_capacity_mw: ceil(total_load_mw)
-    benchmark_capacity_mw: 3
-    benchmark_components_3mw_usd_mln:
-      power_infrastructure: 3.25
-      ups_n_plus_1: 2.70
-      dgu_n_plus_1: 2.65
-      containers: 6.00
-      other: 8.00
-      total: 22.60
-    calculation_logic:
-      component_target_usd: component_3mw_usd * target_capacity_mw / benchmark_capacity_mw
-      component_target_rub: component_target_usd * fx_usd_rub_t
-      datacenter_construction_capex: total_component_rub * construction_flag
-
-  intangible_assets:
+  intangible_assets: # разработка IP на 2 продукта
     currency: RUB
     description: >
       Intangible Assets (capitalized development costs) for proprietary AI products:
-      Workplace.ai and Contact_Center.ai.
-      В balance sheet отражаются как капитализированные затраты на разработку IP,
-      а не как PP&E.
-    amortization:
-      method: straight_line
-      useful_life_years: 5
+      Workplace.ai and Contact_Center.ai. В balance sheet отражаются как 
+      капитализированные затраты на разработку IP, а не как PP&E.
     development_assumptions:
       development_infrastructure_percent:
         description: >
@@ -419,38 +290,54 @@ capex:
           development_infrastructure_cost: capitalized_payroll * development_infrastructure_percent
           data_acquisition_cost: capitalized_payroll * data_acquisition_percent
           total_ip_asset_value: capitalized_payroll + capitalized_sfr + development_infrastructure_cost + data_acquisition_cost
-    html_output:
-      wide_format: true
-      tables:
-        intangible_assets:
-          - workplace_ai_ip_value
-          - contact_center_ai_ip_value
-          - total_intangible_assets
-          - annual_ip_amortization
+
+  datacenter_construction: # строительство ЦОД
+    description: >
+      CAPEX строительства собственного ЦОДа рассчитывается
+      от максимальной требуемой GPU-нагрузки GPS за горизонт модели.
+    sizing_logic:
+      description: >
+        Размер ЦОДа определяется по пиковой нагрузке GPU:
+        max(required_gpu) → MW → округление вверх
+      calculation_logic:
+        peak_required_gpu: max(required_gpu)
+        it_load_mw: peak_required_gpu * gpu_power_kw / 1000
+        total_load_mw: it_load_mw * pue
+        target_capacity_mw: ceil(total_load_mw)
+    benchmark_capacity_mw: 3
+    benchmark_components_3mw_usd_mln:
+      power_infrastructure: 3.25
+      ups_n_plus_1: 2.70
+      dgu_n_plus_1: 2.65
+      containers: 6.00
+      other: 8.00
+      total: 22.60
+    calculation_logic:
+      component_target_usd: component_3mw_usd * target_capacity_mw / benchmark_capacity_mw
+      component_target_rub: component_target_usd * fx_assumptions.usd_rub_t
+      total_component_rub: sum(component_target_rub)
+      datacenter_construction_capex: total_component_rub * construction_flag
 
   office_capex:
     description: >
       Корпоративный CAPEX GPS, не связанный с production AI infrastructure.
       Включает офисное оборудование, рабочие устройства сотрудников
       и базовую офисную инфраструктуру.
+    purchase_year:
+      value: 2026
     office_server:
-      description: >
-        Корпоративный сервер для AD, file services, backup, monitoring и внутренних сервисов.
+      description: Корпоративный сервер для AD, file services, backup, monitoring и внутренних сервисов.
       quantity:
         value: 1
       unit_cost_rub:
         value: 2500000
-      useful_life_years:
-        value: 5
     employee_laptops:
       description: >
         Ноутбуки для core team и SG&A сотрудников. 1 ноутбук на 1 FTE.
       allocation_logic:
-        formula: total_fte
+        formula: total_fte_in_purchase_year
       unit_cost_rub:
         value: 180000
-      useful_life_years:
-        value: 3
     executive_laptops:
       description: >
         Ноутбуки для руководителей: CEO, CFO, COO, Head of AI, Chief Architect.
@@ -458,8 +345,6 @@ capex:
         value: 5
       unit_cost_rub:
         value: 350000
-      useful_life_years:
-        value: 3
     mfu:
       description: >
         МФУ / принтеры. 1 устройство на 30–40 сотрудников.
@@ -467,44 +352,102 @@ capex:
         value: 4
       unit_cost_rub:
         value: 120000
-      useful_life_years:
-        value: 5
     meeting_rooms:
       description: >
         Оснащение переговорных комнат: VC systems, displays, conference equipment.
       quantity:
         value: 3
-      total_cost_rub:
-        value: 1500000
-      useful_life_years:
-        value: 5
+      unit_cost_rub:
+        value: 500000
     office_furniture:
       description: >
         Стартовый CAPEX на мебель и базовое оснащение отдельного офиса GPS.
       total_cost_rub:
         value: 8000000
-      useful_life_years:
-        value: 7
     calculation_logic:
-      office_server_capex: >
-        quantity * unit_cost_rub
-      employee_laptops_capex: >
-        total_fte * unit_cost_rub
-      executive_laptops_capex: >
-        quantity * unit_cost_rub
-      mfu_capex: >
-        quantity * unit_cost_rub
-      meeting_rooms_capex: >
-        total_cost_rub
-      office_furniture_capex: >
-        total_cost_rub
-      total_office_capex: >
-        office_server_capex +
-        employee_laptops_capex +
-        executive_laptops_capex +
-        mfu_capex +
-        meeting_rooms_capex +
-        office_furniture_capex
+      purchase_flag: year == purchase_year
+      office_server_capex: quantity * unit_cost_rub * purchase_flag
+      employee_laptops_capex: total_fte_in_purchase_year * unit_cost_rub * purchase_flag
+      executive_laptops_capex: quantity * unit_cost_rub * purchase_flag
+      mfu_capex: quantity * unit_cost_rub * purchase_flag
+      meeting_rooms_capex: quantity * unit_cost_rub * purchase_flag
+      office_furniture_capex: total_cost_rub * purchase_flag
+      total_office_capex: office_server_capex + employee_laptops_capex + executive_laptops_capex + mfu_capex + meeting_rooms_capex + office_furniture_capex
+
+  strategy_scenarios:
+    description: >
+      Сценарии инфраструктурной стратегии GPS:
+      1. build_own_dc — строим собственный ЦОД сразу
+      2. rent_gpu_only — арендуем GPU весь горизонт
+      3. hybrid — сначала аренда GPU, затем строительство ЦОДа
+    active_scenario: hybrid
+    scenarios:
+      build_own_dc:
+        description: >
+          Строительство собственного ЦОДа со старта проекта.
+          Запуск на собственной инфраструктуре.
+        construction_start_year: 2026
+      rent_gpu_only:
+        description: >
+          Полная аренда GPU без строительства собственного ЦОДа.
+          Используется при ограничениях по регулированию,
+          скорости запуска или снижении CAPEX-риска.
+        construction_start_year: null
+      hybrid:
+        description: >
+          Сначала аренда GPU для проверки жизнеспособности модели,
+          затем строительство собственного ЦОДа.
+        construction_start_year: 2028
+    calculation_logic:
+      construction_flag: 1 if year == construction_start_year else 0
+      owned_gpu:
+        build_own_dc: required_gpu
+        rent_gpu_only: 0
+        hybrid: required_gpu if year >= construction_start_year else 0
+      rented_gpu:
+        build_own_dc: 0
+        rent_gpu_only: required_gpu
+        hybrid: required_gpu if year < construction_start_year else 0
+      owned_gpu_increment:
+        first_owned_year: owned_gpu
+        next_years: max(owned_gpu_current - owned_gpu_previous, 0)
+
+depreciation_and_amortization:
+  description: >
+    Единый блок D&A для расчета depreciation по PP&E
+    и amortization по intangible assets.
+  method: straight_line
+  ppe_depreciation:
+    useful_life_years:
+      gpu_infra: 5
+      datacenter_construction: 5
+      office_server: 5
+      employee_laptops: 3
+      executive_laptops: 3
+      mfu: 5
+      meeting_rooms: 5
+      office_furniture: 7
+    depreciable_base:
+      gpu_infra_capex: gpu_infra_capex
+      datacenter_construction_capex: datacenter_construction_capex
+      office_capex: total_office_capex
+    calculation_logic:
+      gpu_depreciation: gpu_infra_capex / gpu_infra_useful_life_years
+      datacenter_depreciation: datacenter_construction_capex / datacenter_useful_life_years
+      office_capex_depreciation: office_capex / asset_specific_useful_life_years
+      total_ppe_depreciation: gpu_depreciation + datacenter_depreciation + office_capex_depreciation
+  intangible_amortization:
+    useful_life_years:
+      ip_assets: 5
+    amortizable_base:
+      workplace_ai_ip_value: workplace_ai_ip_value
+      contact_center_ai_ip_value: contact_center_ai_ip_value
+    calculation_logic:
+      workplace_ai_amortization: workplace_ai_ip_value / ip_assets_useful_life_years
+      contact_center_ai_amortization: contact_center_ai_ip_value / ip_assets_useful_life_years
+      total_ip_amortization: workplace_ai_amortization + contact_center_ai_amortization
+  total_depreciation_and_amortization:
+    formula: total_ppe_depreciation + total_ip_amortization
 
 opex:
   gpu_rental: # opex
