@@ -458,7 +458,7 @@ opex:
       currency: RUB
       value: 1800000
     calculation_logic:
-      annual_gpu_rental_cost: required_gpu * rental_price_per_gpu_per_year
+      annual_gpu_rental_cost: rented_gpu * rental_price_per_gpu_per_year
   datacenter:
     description: >
       OPEX ЦОДа рассчитывается от нагрузки GPU через установленную мощность (МВт), 
@@ -494,15 +494,18 @@ opex:
       other_opex_percent:
         value: 0.05
     calculation_logic:
-      average_gpu: (gpu_beginning_of_year + gpu_end_of_year) / 2
-      it_load_mw: average_gpu * gpu_power_kw / 1000
+      average_owned_gpu: (owned_gpu_beginning_of_year + owned_gpu_end_of_year) / 2
+      it_load_mw: average_owned_gpu * gpu_power_kw / 1000
       total_load_mw: it_load_mw * pue
       electricity_kwh: total_load_mw * 1000 * operating_hours_per_day * calendar_days_per_year
       electricity_cost: electricity_kwh * electricity_price_t
-      maintenance_cost: capex.total_capex * maintenance_percent_of_capex
+      datacenter_maintenance_base: cumulative_gpu_infra_capex + cumulative_datacenter_construction_capex
+      maintenance_cost: datacenter_maintenance_base * maintenance_percent_of_capex
       network_cost: total_load_mw * network_cost_per_mw_per_year
       land_rent: total_load_mw * land_rent_per_mw_per_year
-      other_opex: base_opex * other_opex_percent
+      datacenter_base_opex: electricity_cost + maintenance_cost + network_cost + land_rent
+      other_datacenter_opex: datacenter_base_opex * other_opex_percent
+      total_datacenter_opex: datacenter_base_opex + other_datacenter_opex
 
   team:
     payroll_assumptions:
@@ -519,11 +522,14 @@ opex:
         2029: 0.08
         2030: 0.06
       calculation_logic:
-        annual_gross_salary: monthly_gross_salary * 12
-        annual_bonus: annual_gross_salary * bonus_percent_of_gross
-        annual_social_contribution_sfr: (annual_gross_salary + annual_bonus) * social_contribution_sfr_percent_of_gross
-        annual_fully_loaded_cost_per_fte: annual_gross_salary + annual_bonus + annual_social_contribution_sfr
-        annual_team_cost: fte * annual_fully_loaded_cost_per_fte
+        monthly_gross_salary: salary_gross_monthly_rub * monthly_fte
+        monthly_bonus_accrual: monthly_gross_salary * bonus_percent_of_gross
+        monthly_social_contribution_sfr: (monthly_gross_salary + monthly_bonus_accrual) * social_contribution_sfr_percent_of_gross
+        monthly_fully_loaded_team_cost: monthly_gross_salary + monthly_bonus_accrual + monthly_social_contribution_sfr
+        annual_core_team_cash_cost: sum(monthly_fully_loaded_cost_by_role_by_month)
+        build_phase_months: go_live_month - 1
+        capitalized_core_team_cost: sum(monthly_fully_loaded_cost_by_role_by_month where role in eligible_core_team_roles and month < go_live_month)
+        total_team_opex: annual_core_team_cash_cost - capitalized_core_team_cost
     core_team_target_fte:
       leadership:
         head_of_ai: 1
@@ -641,6 +647,25 @@ sga:
       value: 0.20
     social_contribution_sfr_percent_of_gross:
       value: 0.30
+  target_fte:
+    corporate_management:
+      ceo_gm: 1
+      cfo_finance_controller: 1
+      coo_operations: 1
+      legal_support: 1
+      compliance_regulatory_support: 1
+    hr:
+      hrbp: 1
+      recruiter: 1
+      learning_and_development: 1
+    finance_and_accounting:
+      accounting: 1
+      fpna: 1
+    admin:
+      office_management: 1
+      procurement_support: 1
+    shared_corporate_services:
+      audit: 1
   salary_gross_monthly_rub:
     corporate_management:
       ceo_gm: 1200000
@@ -661,11 +686,12 @@ sga:
     shared_corporate_services:
       audit: 250000
   calculation_logic:
-    annual_gross_salary: monthly_gross_salary * 12 * inflation_index_t
-    annual_bonus: annual_gross_salary * annual_bonus_percent_of_gross * worked_months_ratio
-    annual_social_contribution_sfr: (annual_gross_salary + annual_bonus) * social_contribution_sfr_percent_of_gross
-    annual_fully_loaded_cost: annual_gross_salary + annual_bonus + annual_social_contribution_sfr
-    annual_fixed_sga: sum(annual_fully_loaded_cost)
+    target_sga_fte: sum(target_fte)
+    annual_gross_salary_by_role: monthly_gross_salary_by_role * target_fte_by_role * 12 * inflation_index_t
+    annual_bonus_by_role: annual_gross_salary_by_role * annual_bonus_percent_of_gross * worked_months_ratio
+    annual_social_contribution_sfr_by_role: (annual_gross_salary_by_role + annual_bonus_by_role) * social_contribution_sfr_percent_of_gross
+    annual_fully_loaded_cost_by_role: annual_gross_salary_by_role + annual_bonus_by_role + annual_social_contribution_sfr_by_role
+    annual_fixed_sga: sum(annual_fully_loaded_cost_by_role)
   office_rent:
     description: >
       Аренда офиса GPS рассчитывается исходя из численности сотрудников,
@@ -677,7 +703,7 @@ sga:
         value: 3500
       inflation_driver: inflation_assumptions.rub_inflation
     calculation_logic:
-      total_fte: core_team_fte + sga_team_fte
+      total_fte: core_team_fte + total_sga_fte
       required_office_area_sqm: total_fte * sqm_per_fte
       rent_rub_per_sqm_per_month_t: rent_rub_per_sqm_per_month_base_2026 * inflation_index_t
       monthly_office_rent: required_office_area_sqm * rent_rub_per_sqm_per_month_t
@@ -689,7 +715,7 @@ revenue:
   currency: RUB
   description: >
     Выручка GPS рассчитывается не через заранее заданную цену токена,
-    а через целевую contribution margin к OPEX. Сценарии отражают
+    а через целевую contribution margin к OPEX и D&A. Сценарии отражают
     фактическую кривую потребления рассчитанной мощности GPS.
   consumption_scenarios:
     conservative:
@@ -740,170 +766,72 @@ revenue:
   calculation_logic:
     sold_tokens: available_token_capacity * utilization_of_token_capacity
     sold_tokens_by_product: available_tokens_by_product * utilization_of_token_capacity
-    pricing_base: total_cogs + total_depreciation
+    revenue_active_months: >
+      if year < go_live_year then 0
+      else if year == go_live_year then 12 - go_live_month + 1
+      else 12
+    revenue_availability_factor: revenue_active_months / 12
+    pricing_base: total_cogs + total_depreciation_and_amortization
     pricing_base_by_product: pricing_base * product_token_share
-    revenue_by_product: pricing_base_by_product / (1 - target_contribution_margin)
+    annual_revenue_before_go_live_adjustment: pricing_base_by_product / (1 - target_contribution_margin)
+    revenue_by_product: annual_revenue_before_go_live_adjustment * revenue_availability_factor
     total_revenue: sum(revenue_by_product)
     implied_price_per_1m_tokens: revenue_by_product / sold_tokens_by_product * 1000000
-    revenue_active_months: max(12 - go_live_month + 1, 0)
-    revenue_availability_factor:
-      2026: revenue_active_months / 12
-      next_years: 1.0
-    product_revenue: >
-      annual_revenue_before_go_live_adjustment * revenue_availability_factor
   pricing_base_description: >
-    База для расчета выручки и implied token price включает COGS и depreciation.
-    SG&A не включается в pricing base и учитывается ниже в P&L при расчете EBITDA.
-    Это сохраняет зависимость от infrastructure scenarios, так как depreciation зависит
-    от owned GPU, строительства ЦОДа и office CAPEX.
+    База для расчета выручки и implied token price включает COGS и depreciation & amortization.
+    SG&A не включается в pricing base и учитывается ниже в P&L.
+
 pnl:
   currency: RUB
   description: >
-    Profit & Loss model GPS. P&L строится на основе Revenue, COGS (delivery OPEX),
-    SG&A, Depreciation и налога на прибыль.
+    Profit & Loss model GPS. P&L строится на основе Revenue, COGS,
+    SG&A, Depreciation & Amortization, interest expense и налога на прибыль.
   tax:
     profit_tax_rate:
       value: 0.25
   revenue_block:
-    description: >
-      Revenue рассчитывается через utilization scenarios
-      и contribution margin logic.
-    lines:
-      workplace_ai_revenue:
-        source: revenue.workplace_ai_revenue
-      contact_center_ai_revenue:
-        source: revenue.contact_center_ai_revenue
-      total_revenue:
-        formula: workplace_ai_revenue + contact_center_ai_revenue
+    total_revenue:
+      formula: workplace_ai_revenue + contact_center_ai_revenue
   cogs_block:
-    description: >
-      COGS = delivery costs, необходимые для оказания AI-сервисов.
-    datacenter_opex:
-      electricity_cost:
-        source: opex.datacenter.electricity_cost
-      maintenance_cost:
-        source: opex.datacenter.maintenance_cost
-      network_cost:
-        source: opex.datacenter.network_cost
-      land_rent:
-        source: opex.datacenter.land_rent
-      other_datacenter_opex:
-        source: opex.datacenter.other_opex
-      total_datacenter_opex:
-        source: opex.datacenter.total_datacenter_opex
-    team_opex:
-      payroll_gross:
-        source: team.payroll_gross
-      annual_bonus:
-        source: team.annual_bonus
-      social_contribution_sfr:
-        source: team.social_contribution_sfr
-      total_team_opex:
-        source: team.annual_team_opex
-    gpu_rental_opex:
-      annual_gpu_rental_cost:
-        source: opex.gpu_rental.annual_gpu_rental_cost
     total_cogs: total_datacenter_opex + total_team_opex + annual_gpu_rental_cost
   gross_profit:
     formula: total_revenue - total_cogs
   sga_block:
-    description: >
-      SG&A = overhead costs, не относящиеся к delivery.
-    corporate_management:
-      source: sga.corporate_management
-    hr:
-      source: sga.hr
-    finance_and_accounting:
-      source: sga.finance_and_accounting
-    admin:
-      source: sga.admin
-    shared_corporate_services:
-      source: sga.shared_corporate_services
-    office_rent:
-      source: sga.office_rent.annual_office_rent
     total_sga:
       source: sga.total_sga
-  ebitda: gross_profit - total_sga
-  depreciation_block:
-    description: >
-      Амортизация только собственных активов.
-    gpu_depreciation:
-      source: capex.gpu_depreciation
-    datacenter_depreciation:
-      source: capex.datacenter_depreciation
-    office_capex_depreciation:
-      source: capex.office_capex_depreciation
-    ip_amortization:
-      source: intangible_assets.annual_ip_amortization
-    total_depreciation: gpu_depreciation + datacenter_depreciation + office_capex_depreciation + ip_amortization
+  ebitda:
+    formula: gross_profit - total_sga
+  depreciation_and_amortization_block:
+    total_ppe_depreciation:
+      source: depreciation_and_amortization.total_ppe_depreciation
+    total_ip_amortization:
+      source: depreciation_and_amortization.total_ip_amortization
+    total_depreciation_and_amortization:
+      source: depreciation_and_amortization.total_depreciation_and_amortization
   ebit:
-    formula: ebitda - total_depreciation
-  profit_tax: max(ebit, 0) * profit_tax_rate
-  net_income: ebit - profit_tax
-  html_output:
-    wide_format: true
-    tables:
-      revenue:
-        - workplace_ai_revenue
-        - contact_center_ai_revenue
-        - total_revenue
-      cogs:
-        - electricity_cost
-        - maintenance_cost
-        - network_cost
-        - land_rent
-        - other_datacenter_opex
-        - total_datacenter_opex
-        - payroll_gross
-        - annual_bonus
-        - social_contribution_sfr
-        - total_team_opex
-        - annual_gpu_rental_cost
-        - total_cogs
-      sga:
-        - corporate_management
-        - hr
-        - finance_and_accounting
-        - admin
-        - shared_corporate_services
-        - office_rent
-        - total_sga
-      pnl_summary:
-        - total_revenue
-        - total_cogs
-        - gross_profit
-        - total_sga
-        - ebitda
-        - total_depreciation
-        - ebit
-        - profit_tax
-        - net_income
+    formula: ebitda - total_depreciation_and_amortization
+  interest_expense:
+    source: funding.interest_expense
+  ebt:
+    formula: ebit - interest_expense
+  profit_tax:
+    formula: max(ebt, 0) * profit_tax_rate
+  net_income:
+    formula: ebt - profit_tax
 
 cash_flow:
   currency: RUB
   description: >
-    Cash Flow Statement (CFS) GPS. Формируется на основе Net Income,
-    Depreciation и инвестиционных расходов CAPEX.
+    Cash Flow Statement GPS. Строится на основе P&L, CAPEX и Funding.
   opening_cash_balance:
     2026: 0
-  financing_cash_flow:
-    description: >
-      На первом этапе financing cash flow = 0.
-      Позже может быть заменено на equity injection
-      или debt funding.
-    value:
-      2026: 0
-      2027: 0
-      2028: 0
-      2029: 0
-      2030: 0
   operating_cash_flow:
     net_income:
       source: pnl.net_income
-    depreciation:
-      source: pnl.depreciation_block.total_depreciation
+    depreciation_and_amortization:
+      source: pnl.depreciation_and_amortization_block.total_depreciation_and_amortization
     operating_cash_flow:
-      formula: net_income + total_depreciation
+      formula: net_income + total_depreciation_and_amortization
   investing_cash_flow:
     gpu_infra_capex:
       source: capex.gpu_infra_capex
@@ -915,36 +843,26 @@ cash_flow:
       source: capex.intangible_capex
     investing_cash_flow:
       formula: -gpu_infra_capex -datacenter_construction_capex -office_capex -intangible_capex
-  financing_section:
+  pre_financing_cash_flow:
+    formula: operating_cash_flow + investing_cash_flow
+  financing_cash_flow:
+    equity_injection:
+      source: funding.equity_injection
+    revolver_drawdown:
+      source: funding.revolver_drawdown
+    revolver_repayment:
+      source: funding.revolver_repayment
     financing_cash_flow:
-      source: cash_flow.financing_cash_flow.value
+      formula: equity_injection + revolver_drawdown - revolver_repayment
   net_cash_flow:
-    formula: operating_cash_flow + investing_cash_flow + financing_cash_flow
+    formula: pre_financing_cash_flow + financing_cash_flow
   cash_balance:
     opening_cash:
       formula: previous_year_closing_cash
-    closing_cash: opening_cash + net_cash_flow
-    cumulative_cash: cumulative_previous_year + net_cash_flow
-  html_output:
-    wide_format: true
-    tables:
-      cash_flow_statement:
-        - net_income
-        - total_depreciation
-        - operating_cash_flow
-        - gpu_infra_capex
-        - datacenter_construction_capex
-        - office_capex
-        - intangible_capex
-        - investing_cash_flow
-
-        - financing_cash_flow
-
-        - net_cash_flow
-
-        - opening_cash
-        - closing_cash
-        - cumulative_cash
+    closing_cash:
+      formula: opening_cash + net_cash_flow
+    cumulative_cash:
+      formula: cumulative_previous_year + net_cash_flow
 
 funding:
   currency: RUB
@@ -980,6 +898,19 @@ funding:
       2028: 0.25
       2029: 0.25
       2030: 0.25
+    repayment_logic:
+      minimum_cash_balance:
+        description: >
+          Минимальный остаток денежных средств для операционной устойчивости.
+          Рассчитывается как 1 месяц фиксированных расходов GPS:
+          team OPEX + SG&A + GPU rental OPEX.
+        months_of_fixed_costs:
+          value: 1
+        calculation_logic:
+          monthly_team_opex: total_team_opex / 12
+          monthly_sga: total_sga / 12
+          monthly_gpu_rental_opex: annual_gpu_rental_cost / 12
+          minimum_cash_balance: (monthly_team_opex + monthly_sga + monthly_gpu_rental_opex) * months_of_fixed_costs
   calculation_logic:
     closing_cash_before_funding: opening_cash + net_cash_flow
     funding_need: max(-closing_cash_before_funding, 0)
@@ -1005,62 +936,24 @@ balance_sheet:
         source: funding.closing_cash_after_funding
     non_current_assets:
       ppe:
-        gross_ppe:
-          formula: >
-            cumulative_gpu_infra_capex + cumulative_datacenter_construction_capex + cumulative_office_capex
-        accumulated_depreciation:
-          formula: cumulative_gpu_depreciation + cumulative_datacenter_depreciation + cumulative_office_capex_depreciation
-        net_ppe:
-          formula: gross_ppe - accumulated_depreciation
+        gross_ppe: cumulative_gpu_infra_capex + cumulative_datacenter_construction_capex + cumulative_office_capex
+        accumulated_depreciation: cumulative_total_ppe_depreciation
+        net_ppe: gross_ppe - accumulated_depreciation
       intangible_assets:
-        gross_intangible_assets:
-          formula: cumulative_workplace_ai_ip_value + cumulative_contact_center_ai_ip_value
-        accumulated_amortization:
-          formula: cumulative_ip_amortization
-        net_intangible_assets:
-          formula: gross_intangible_assets - accumulated_amortization
-    total_assets:
-      formula: cash + net_ppe + net_intangible_assets
+        gross_intangible_assets: cumulative_workplace_ai_ip_value + cumulative_contact_center_ai_ip_value
+        accumulated_amortization: cumulative_total_ip_amortization
+        net_intangible_assets: gross_intangible_assets - accumulated_amortization
+    total_assets: cash + net_ppe + net_intangible_assets
   liabilities:
     debt:
       revolver_balance:
         source: funding.revolver_balance
-    total_liabilities:
-      formula: revolver_balance
+    total_liabilities: revolver_balance
   equity:
-    paid_in_capital:
-      formula: cumulative_equity_injection
-    retained_earnings:
-      formula: cumulative_net_income
-    total_equity:
-      formula: paid_in_capital + retained_earnings
-  balance_check:
-    formula: total_assets - total_liabilities - total_equity
-  html_output:
-    wide_format: true
-    tables:
-      funding:
-        - funding_need
-        - equity_injection
-        - revolver_drawdown
-        - revolver_balance
-        - interest_expense
-        - closing_cash_after_funding
-      balance_sheet:
-        - cash
-        - gross_ppe
-        - accumulated_depreciation
-        - net_ppe
-        - gross_intangible_assets
-        - accumulated_amortization
-        - net_intangible_assets
-        - total_assets
-        - revolver_balance
-        - total_liabilities
-        - paid_in_capital
-        - retained_earnings
-        - total_equity
-        - balance_check
+    paid_in_capital: cumulative_equity_injection
+    retained_earnings: previous_retained_earnings + net_income - dividends
+    total_equity: paid_in_capital + retained_earnings
+  balance_check: total_assets - total_liabilities - total_equity
 
 investment_metrics:
   currency: RUB
@@ -1080,25 +973,16 @@ investment_metrics:
       source: cash_flow.operating_cash_flow.operating_cash_flow
     investing_cash_flow:
       source: cash_flow.investing_cash_flow.investing_cash_flow
-    free_cash_flow:
-      formula: operating_cash_flow + investing_cash_flow
+    free_cash_flow: operating_cash_flow + investing_cash_flow
   discounted_cash_flow:
-    discount_factor:
-      formula: 1 / (1 + discount_rate)^year_index
+    discount_factor: 1 / (1 + discount_rate)^year_index
     discounted_fcf: free_cash_flow * discount_factor
   valuation:
-    npv:
-      formula: sum(discounted_fcf)
+    npv: sum(discounted_fcf)
     irr: IRR(free_cash_flow_series)
   payback:
-    simple_payback:
-      description: >
-        Первый год, когда cumulative_cash > 0
-      formula: first_year(cumulative_cash > 0)
-    discounted_payback:
-      description: >
-        Первый год, когда cumulative_discounted_fcf > 0
-      formula: first_year(cumulative_discounted_fcf > 0)
+    simple_payback: first_year(cumulative_cash > 0)
+    discounted_payback: first_year(cumulative_discounted_fcf > 0)
   scenario_comparison:
     compare_by:
       - build_own_dc
@@ -1127,18 +1011,15 @@ investment_metrics:
       formula: net_income / average_total_assets
       components:
         average_total_assets: (total_assets_beginning + total_assets_ending) / 2
-    debt_to_equity:
-      formula: revolver_balance / total_equity
-    net_debt:
-      formula: revolver_balance - cash
-    net_debt_to_ebitda:
-      formula: net_debt / ebitda
+    debt_to_equity: revolver_balance / total_equity
+    net_debt: revolver_balance - cash
+    net_debt_to_ebitda: net_debt / ebitda
     interest_coverage:
       formula: ebit / interest_expense
+      fallback: N/A if interest_expense <= 0
   sensitivity_analysis:
     description: >
       Sensitivity analysis для ключевых драйверов инвестиционной модели GPS.
-
     active_cases:
       - base
       - downside
@@ -1180,21 +1061,3 @@ investment_metrics:
       - roic
       - roe
       - net_debt_to_ebitda
-    html_output:
-      tables:
-        return_metrics:
-          - roic
-          - roe
-          - roa
-          - debt_to_equity
-          - net_debt
-          - net_debt_to_ebitda
-          - interest_coverage
-        sensitivity_analysis:
-          - npv
-          - irr
-          - simple_payback
-          - discounted_payback
-          - roic
-          - roe
-          - net_debt_to_ebitda
