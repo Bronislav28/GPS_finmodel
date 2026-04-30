@@ -39,7 +39,13 @@ def load_yaml(path: Path) -> dict[str, Any]:
 def to_year_map(src: dict[Any, Any] | None) -> dict[int, Any]:
     if not isinstance(src, dict):
         return {}
-    return {int(k): v for k, v in src.items()}
+    out: dict[int, Any] = {}
+    for k, v in src.items():
+        try:
+            out[int(k)] = v
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def as_float(value: Any) -> float | None:
@@ -403,6 +409,7 @@ def resolve_years(ass: dict[str, Any]) -> list[int]:
     usage = ass["usage_assumptions"]
     token_model = ass["token_load_model"]
     compute = ass["compute_model"]
+    gpu_sizing_cfg = ass.get("gpu_sizing") or ass.get("gpu_calculation", {})
 
     candidate_sets = [
         set(to_year_map(usage["Workplace.ai"].get("activation_rate")).keys()),
@@ -430,6 +437,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     usage = ass["usage_assumptions"]
     token_model = ass["token_load_model"]
     compute = ass["compute_model"]
+    gpu_sizing_cfg = ass.get("gpu_sizing") or ass.get("gpu_calculation", {})
     capex = ass.get("capex", {})
 
     # OPEX-блоки: поддержка как top-level datacenter/team, так и legacy opex.datacenter/team
@@ -449,6 +457,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     wp_activation = to_year_map(wp_usage.get("activation_rate"))
     wp_tokens_per_user = to_year_map(token_model["Workplace.ai"].get("tokens_per_active_user_per_day"))
     cc_automation = to_year_map(cc_usage.get("automation_rate"))
+    cc_tokens_per_interaction = year_value(token_model["Contact_Center.ai"].get("tokens_per_interaction"), years[0], None)
 
     model_mix_by_year = to_year_map(compute.get("model_mix"))
     util_by_year = to_year_map(compute.get("infra", {}).get("utilization"))
@@ -468,8 +477,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
     working_days = float(working_days)
     calendar_days = float(calendar_days)
-    working_hours = float(compute["infra"]["working_hours_per_day"])
-    peak_factor = float(compute["infra"].get("peak_factor", 1.0))
+    working_hours = float(year_value(gpu_sizing_cfg.get("working_hours_per_day"), years[0], compute["infra"].get("working_hours_per_day", 24)))
+    peak_factor = float(year_value(gpu_sizing_cfg.get("peak_factor"), years[0], compute["infra"].get("peak_factor", 1.0)))
 
     gpu_unit_cost = as_float(capex.get("gpu", {}).get("unit_cost"))
     infra_multiplier = as_float(capex.get("infra_multiplier", {}).get("value"))
@@ -636,7 +645,6 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         profit_tax_rate = 0.0
     cash_flow_cfg = ass.get("cash_flow", {}) if isinstance(ass.get("cash_flow"), dict) else {}
     opening_cash_map = to_year_map(cash_flow_cfg.get("opening_cash_balance"))
-    financing_cf_value = ((cash_flow_cfg.get("financing_cash_flow", {}) or {}).get("value", 0.0) if isinstance(cash_flow_cfg.get("financing_cash_flow"), dict) else cash_flow_cfg.get("financing_cash_flow", 0.0))
     funding_cfg = ass.get("funding", {}) if isinstance(ass.get("funding"), dict) else {}
     funding_scenario = funding_cfg.get("active_scenario", "equity_only")
     funding_scenarios = funding_cfg.get("scenarios", {}) if isinstance(funding_cfg.get("scenarios"), dict) else {}
@@ -650,15 +658,16 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     if abs((equity_share + revolver_share) - 1.0) > 1e-9:
         print(f"WARNING: funding shares sum != 1.0 ({equity_share + revolver_share:.4f})", file=sys.stderr)
     revolver_rate_map = to_year_map((funding_cfg.get("revolver", {}) or {}).get("interest_rate"))
+    min_cash_buffer_months = year_value(((funding_cfg.get("minimum_cash_balance", {}) or {}).get("buffer_months")), years[0], 0.0) or 0.0
 
     base_rows: list[dict[str, Any]] = []
     prev_required_gpu = 0
     for year in years:
-        active_users = safe_mul(as_float(wp_usage.get("total_employees")), as_float(wp_activation.get(year)))
+        active_users = safe_mul(year_value(wp_usage.get("total_employees"), year), as_float(wp_activation.get(year)))
         wp_daily_tokens = safe_mul(active_users, as_float(wp_tokens_per_user.get(year)))
         wp_annual_tokens = safe_mul(wp_daily_tokens, working_days)
-        automated_interactions = safe_mul(as_float(cc_usage.get("interactions_per_day")), as_float(cc_automation.get(year)))
-        cc_daily_tokens = safe_mul(automated_interactions, as_float(cc_usage.get("tokens_per_interaction")))
+        automated_interactions = safe_mul(year_value(cc_usage.get("interactions_per_day"), year), as_float(cc_automation.get(year)))
+        cc_daily_tokens = safe_mul(automated_interactions, cc_tokens_per_interaction)
         cc_annual_tokens = safe_mul(cc_daily_tokens, calendar_days)
         total_daily_tokens = safe_add(wp_daily_tokens, cc_daily_tokens)
         total_annual_tokens = safe_add(wp_annual_tokens, cc_annual_tokens)
@@ -672,6 +681,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         mix = {model: float(share) for model, share in model_mix_by_year[year].items()}
         weighted_tp = harmonic_weighted_throughput(mix, throughput)
         utilization = as_float(util_by_year.get(year))
+        if utilization is None:
+            utilization = year_value(gpu_sizing_cfg.get("utilization"), year, year_value(gpu_sizing_cfg.get("utilization"), years[0], None))
         if is_nan(utilization) or float(utilization) <= 0:
             raise ValueError(f"compute_model.infra.utilization[{year}] должен быть > 0")
         tokens_per_second = float(total_annual_tokens) / seconds_per_year
@@ -769,7 +780,14 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             owned_gpu, rented_gpu = required_gpu, 0
 
         owned_gpu_increment = owned_gpu if year == years[0] else max(owned_gpu - prev_owned_gpu, 0)
-        construction_flag = int(as_float(construction_flag_map.get(year)) or 0)
+        construction_flag = 0
+        if scenario_name != "rent_gpu_only":
+            if construction_start_year is not None and year == int(construction_start_year):
+                construction_flag = 1
+            elif not construction_flag_map:
+                construction_flag = 0
+            else:
+                construction_flag = int(as_float(construction_flag_map.get(year)) or 0)
 
         if fx_base_value is None:
             fx_usd_rub_t = float("nan")
@@ -824,7 +842,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                     electricity_price_t = prev_electricity_price * (1 + growth_t)
 
             electricity_cost = safe_mul(electricity_kwh, electricity_price_t)
-            maintenance_cost = safe_mul(depreciable_infra_capex, maintenance_pct)
+            maintenance_base = safe_add(sum(gpu_infra_capex_history), sum(datacenter_capex_history), gpu_infra_capex, datacenter_construction_capex)
+            maintenance_cost = safe_mul(maintenance_base, maintenance_pct)
             network_cost = safe_mul(total_load_mw, network_cost_per_mw)
             land_rent = safe_mul(total_load_mw, land_rent_per_mw)
             datacenter_opex = safe_add(electricity_cost, maintenance_cost, network_cost, land_rent)
@@ -1007,7 +1026,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         datacenter_window = datacenter_capex_history[-useful_life:]
         gpu_depreciation = float("nan") if any(math.isnan(v) for v in gpu_window) else sum(gpu_window) / useful_life
         datacenter_depreciation = float("nan") if any(math.isnan(v) for v in datacenter_window) else sum(datacenter_window) / useful_life
-        total_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation, ip_amortization)
+        total_ppe_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation)
+        total_ip_amortization = ip_amortization
+        total_depreciation_and_amortization = safe_add(total_ppe_depreciation, total_ip_amortization)
 
         payroll_gross = total_gross_cost_year
         annual_bonus = total_bonus_cost_year
@@ -1031,7 +1052,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             sold_wp_tokens = safe_mul(safe_mul(as_float(base.get("workplace_annual_tokens")), utilization), wp_revenue_factor)
             sold_cc_tokens = safe_mul(safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization), cc_revenue_factor)
-            pricing_base = safe_add(total_cogs, total_depreciation)
+            pricing_base = safe_add(total_cogs, total_depreciation_and_amortization)
             pricing_base_wp = safe_mul(pricing_base, as_float(base.get("workplace_token_share")))
             pricing_base_cc = safe_mul(pricing_base, as_float(base.get("contact_center_token_share")))
             workplace_revenue_full_year = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
@@ -1048,19 +1069,19 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
         gross_profit = safe_add(total_revenue, -total_cogs)
         ebitda = safe_add(gross_profit, -total_sga)
-        ebit = safe_add(ebitda, -total_depreciation)
+        ebit = safe_add(ebitda, -total_depreciation_and_amortization)
         office_capex = total_office_capex
         investing_cash_flow = safe_add(-gpu_infra_capex, -datacenter_construction_capex, -office_capex, -intangible_capex)
-        financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
+        financing_cash_flow = 0.0
 
         opening_revolver_balance = prev_revolver_balance
         revolver_interest_rate = float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
-        minimum_cash_balance = 0.0
+        minimum_cash_balance = safe_mul(safe_add(total_datacenter_opex, total_team_opex, total_sga), min_cash_buffer_months / 12.0)
         interest_expense = ((opening_revolver_balance + opening_revolver_balance) / 2.0) * revolver_interest_rate
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
-        operating_cash_flow = safe_add(net_income, total_depreciation)
+        operating_cash_flow = safe_add(net_income, total_depreciation_and_amortization)
         net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
         opening_cash = as_float(opening_cash_map.get(year))
         if opening_cash is None:
@@ -1079,7 +1100,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
-        operating_cash_flow = safe_add(net_income, total_depreciation)
+        operating_cash_flow = safe_add(net_income, total_depreciation_and_amortization)
+        financing_cash_flow = safe_add(equity_injection, revolver_drawdown, -revolver_repayment)
         net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
         closing_cash_before_funding = safe_add(opening_cash, net_cash_flow)
         funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
@@ -1095,10 +1117,10 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         cumulative_equity_injection += equity_injection
         cumulative_net_income += (net_income or 0.0)
         gross_ppe = sum(gpu_infra_capex_history) + sum(datacenter_capex_history) + sum(sum(v) for v in office_capex_history.values())
-        accumulated_depreciation = sum((as_float(r.get("gpu_depreciation")) or 0.0) + (as_float(r.get("datacenter_depreciation")) or 0.0) + (as_float(r.get("office_capex_depreciation")) or 0.0) for r in rows) + gpu_depreciation + datacenter_depreciation + office_capex_depreciation
+        accumulated_depreciation = sum((as_float(r.get("total_ppe_depreciation")) or 0.0) for r in rows) + total_ppe_depreciation
         net_ppe = gross_ppe - accumulated_depreciation
         gross_intangible_assets = sum(intangible_capex_history)
-        accumulated_amortization = sum((as_float(r.get("ip_amortization")) or 0.0) for r in rows) + ip_amortization
+        accumulated_amortization = sum((as_float(r.get("total_ip_amortization")) or 0.0) for r in rows) + total_ip_amortization
         net_intangible_assets = gross_intangible_assets - accumulated_amortization
         cash = closing_cash_after_funding
         total_assets = cash + net_ppe + net_intangible_assets
@@ -1134,8 +1156,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "datacenter_depreciation": datacenter_depreciation,
                 "office_capex_depreciation": office_capex_depreciation,
                 "ip_amortization": ip_amortization,
-                "total_depreciation": total_depreciation,
-                "annual_depreciation": total_depreciation,
+                "total_ppe_depreciation": total_ppe_depreciation,
+                "total_ip_amortization": total_ip_amortization,
+                "total_depreciation_and_amortization": total_depreciation_and_amortization,
+                "total_depreciation": total_depreciation_and_amortization,
+                "annual_depreciation": total_depreciation_and_amortization,
                 "gpu_beginning_of_year": gpu_beginning_of_year,
                 "gpu_end_of_year": gpu_end_of_year,
                 "average_gpu": average_gpu,
