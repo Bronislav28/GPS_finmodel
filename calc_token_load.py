@@ -39,7 +39,13 @@ def load_yaml(path: Path) -> dict[str, Any]:
 def to_year_map(src: dict[Any, Any] | None) -> dict[int, Any]:
     if not isinstance(src, dict):
         return {}
-    return {int(k): v for k, v in src.items()}
+    out: dict[int, Any] = {}
+    for k, v in src.items():
+        try:
+            out[int(k)] = v
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def as_float(value: Any) -> float | None:
@@ -403,6 +409,7 @@ def resolve_years(ass: dict[str, Any]) -> list[int]:
     usage = ass["usage_assumptions"]
     token_model = ass["token_load_model"]
     compute = ass["compute_model"]
+    gpu_sizing_cfg = ass.get("gpu_sizing") or ass.get("gpu_calculation", {})
 
     candidate_sets = [
         set(to_year_map(usage["Workplace.ai"].get("activation_rate")).keys()),
@@ -430,6 +437,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     usage = ass["usage_assumptions"]
     token_model = ass["token_load_model"]
     compute = ass["compute_model"]
+    gpu_sizing_cfg = ass.get("gpu_sizing") or ass.get("gpu_calculation", {})
     capex = ass.get("capex", {})
 
     # OPEX-блоки: поддержка как top-level datacenter/team, так и legacy opex.datacenter/team
@@ -449,6 +457,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     wp_activation = to_year_map(wp_usage.get("activation_rate"))
     wp_tokens_per_user = to_year_map(token_model["Workplace.ai"].get("tokens_per_active_user_per_day"))
     cc_automation = to_year_map(cc_usage.get("automation_rate"))
+    cc_tokens_per_interaction = year_value(token_model["Contact_Center.ai"].get("tokens_per_interaction"), years[0], None)
 
     model_mix_by_year = to_year_map(compute.get("model_mix"))
     util_by_year = to_year_map(compute.get("infra", {}).get("utilization"))
@@ -468,8 +477,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
     working_days = float(working_days)
     calendar_days = float(calendar_days)
-    working_hours = float(compute["infra"]["working_hours_per_day"])
-    peak_factor = float(compute["infra"].get("peak_factor", 1.0))
+    working_hours = float(year_value(gpu_sizing_cfg.get("working_hours_per_day"), years[0], compute["infra"].get("working_hours_per_day", 24)))
+    peak_factor = float(year_value(gpu_sizing_cfg.get("peak_factor"), years[0], compute["infra"].get("peak_factor", 1.0)))
 
     gpu_unit_cost = as_float(capex.get("gpu", {}).get("unit_cost"))
     infra_multiplier = as_float(capex.get("infra_multiplier", {}).get("value"))
@@ -499,14 +508,12 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     )
     mfu_qty = warn_if_missing(year_value(mfu_cfg.get("quantity"), years[0]), "capex.office_capex.mfu.quantity.value")
     mfu_unit_cost = warn_if_missing(year_value(mfu_cfg.get("unit_cost_rub"), years[0]), "capex.office_capex.mfu.unit_cost_rub.value")
-    meeting_rooms_total_cost = warn_if_missing(
-        year_value(meeting_rooms_cfg.get("total_cost_rub"), years[0]),
-        "capex.office_capex.meeting_rooms.total_cost_rub.value",
-    )
-    office_furniture_total_cost = warn_if_missing(
-        year_value(office_furniture_cfg.get("total_cost_rub"), years[0]),
-        "capex.office_capex.office_furniture.total_cost_rub.value",
-    )
+    meeting_rooms_total_cost = year_value(meeting_rooms_cfg.get("total_cost_rub"), years[0], 0.0)
+    if meeting_rooms_total_cost is None:
+        meeting_rooms_total_cost = 0.0
+    meeting_rooms_unit_cost = year_value(meeting_rooms_cfg.get("unit_cost_rub"), years[0], 0.0) or 0.0
+    meeting_rooms_qty = year_value(meeting_rooms_cfg.get("quantity"), years[0], 0.0) or 0.0
+    office_furniture_total_cost = year_value(office_furniture_cfg.get("total_cost_rub"), years[0], 0.0) or 0.0
     office_lives = {
         "office_server": max(1, int(year_value(office_server_cfg.get("useful_life_years"), years[0], 5) or 5)),
         "employee_laptops": max(1, int(year_value(employee_laptops_cfg.get("useful_life_years"), years[0], 3) or 3)),
@@ -636,7 +643,6 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         profit_tax_rate = 0.0
     cash_flow_cfg = ass.get("cash_flow", {}) if isinstance(ass.get("cash_flow"), dict) else {}
     opening_cash_map = to_year_map(cash_flow_cfg.get("opening_cash_balance"))
-    financing_cf_value = ((cash_flow_cfg.get("financing_cash_flow", {}) or {}).get("value", 0.0) if isinstance(cash_flow_cfg.get("financing_cash_flow"), dict) else cash_flow_cfg.get("financing_cash_flow", 0.0))
     funding_cfg = ass.get("funding", {}) if isinstance(ass.get("funding"), dict) else {}
     funding_scenario = funding_cfg.get("active_scenario", "equity_only")
     funding_scenarios = funding_cfg.get("scenarios", {}) if isinstance(funding_cfg.get("scenarios"), dict) else {}
@@ -650,15 +656,16 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     if abs((equity_share + revolver_share) - 1.0) > 1e-9:
         print(f"WARNING: funding shares sum != 1.0 ({equity_share + revolver_share:.4f})", file=sys.stderr)
     revolver_rate_map = to_year_map((funding_cfg.get("revolver", {}) or {}).get("interest_rate"))
+    min_cash_buffer_months = year_value(((funding_cfg.get("minimum_cash_balance", {}) or {}).get("buffer_months")), years[0], 0.0) or 0.0
 
     base_rows: list[dict[str, Any]] = []
     prev_required_gpu = 0
     for year in years:
-        active_users = safe_mul(as_float(wp_usage.get("total_employees")), as_float(wp_activation.get(year)))
+        active_users = safe_mul(year_value(wp_usage.get("total_employees"), year), as_float(wp_activation.get(year)))
         wp_daily_tokens = safe_mul(active_users, as_float(wp_tokens_per_user.get(year)))
         wp_annual_tokens = safe_mul(wp_daily_tokens, working_days)
-        automated_interactions = safe_mul(as_float(cc_usage.get("interactions_per_day")), as_float(cc_automation.get(year)))
-        cc_daily_tokens = safe_mul(automated_interactions, as_float(cc_usage.get("tokens_per_interaction")))
+        automated_interactions = safe_mul(year_value(cc_usage.get("interactions_per_day"), year), as_float(cc_automation.get(year)))
+        cc_daily_tokens = safe_mul(automated_interactions, cc_tokens_per_interaction)
         cc_annual_tokens = safe_mul(cc_daily_tokens, calendar_days)
         total_daily_tokens = safe_add(wp_daily_tokens, cc_daily_tokens)
         total_annual_tokens = safe_add(wp_annual_tokens, cc_annual_tokens)
@@ -672,6 +679,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         mix = {model: float(share) for model, share in model_mix_by_year[year].items()}
         weighted_tp = harmonic_weighted_throughput(mix, throughput)
         utilization = as_float(util_by_year.get(year))
+        if utilization is None:
+            utilization = year_value(gpu_sizing_cfg.get("utilization"), year, year_value(gpu_sizing_cfg.get("utilization"), years[0], None))
         if is_nan(utilization) or float(utilization) <= 0:
             raise ValueError(f"compute_model.infra.utilization[{year}] должен быть > 0")
         tokens_per_second = float(total_annual_tokens) / seconds_per_year
@@ -769,7 +778,14 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             owned_gpu, rented_gpu = required_gpu, 0
 
         owned_gpu_increment = owned_gpu if year == years[0] else max(owned_gpu - prev_owned_gpu, 0)
-        construction_flag = int(as_float(construction_flag_map.get(year)) or 0)
+        construction_flag = 0
+        if scenario_name != "rent_gpu_only":
+            if construction_start_year is not None and year == int(construction_start_year):
+                construction_flag = 1
+            elif not construction_flag_map:
+                construction_flag = 0
+            else:
+                construction_flag = int(as_float(construction_flag_map.get(year)) or 0)
 
         if fx_base_value is None:
             fx_usd_rub_t = float("nan")
@@ -813,18 +829,19 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             total_datacenter_opex = 0.0
         else:
             if base_price_per_kwh is None:
-                electricity_price_t = float("nan")
+                electricity_price_t = 0.0
             elif year == years[0]:
                 electricity_price_t = base_price_per_kwh
             else:
                 growth_t = as_float(annual_growth_map.get(year, 0.0))
                 if prev_electricity_price is None or is_nan(prev_electricity_price) or growth_t is None:
-                    electricity_price_t = float("nan")
+                    electricity_price_t = 0.0
                 else:
                     electricity_price_t = prev_electricity_price * (1 + growth_t)
 
             electricity_cost = safe_mul(electricity_kwh, electricity_price_t)
-            maintenance_cost = safe_mul(depreciable_infra_capex, maintenance_pct)
+            maintenance_base = safe_add(sum(gpu_infra_capex_history), sum(datacenter_capex_history), gpu_infra_capex, datacenter_construction_capex)
+            maintenance_cost = safe_mul(maintenance_base, maintenance_pct)
             network_cost = safe_mul(total_load_mw, network_cost_per_mw)
             land_rent = safe_mul(total_load_mw, land_rent_per_mw)
             datacenter_opex = safe_add(electricity_cost, maintenance_cost, network_cost, land_rent)
@@ -922,7 +939,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         employee_laptops_capex = safe_mul(total_fte, employee_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
         executive_laptops_capex = safe_mul(executive_laptops_qty, executive_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
         mfu_capex = safe_mul(mfu_qty, mfu_unit_cost) if is_office_capex_purchase_year else 0.0
-        meeting_rooms_capex = (meeting_rooms_total_cost if meeting_rooms_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
+        meeting_rooms_capex_base = meeting_rooms_total_cost if meeting_rooms_total_cost and meeting_rooms_total_cost > 0 else (meeting_rooms_qty * meeting_rooms_unit_cost)
+        meeting_rooms_capex = meeting_rooms_capex_base if is_office_capex_purchase_year else 0.0
         office_furniture_capex = (office_furniture_total_cost if office_furniture_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
         total_office_capex = safe_add(
             office_server_capex,
@@ -1007,7 +1025,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         datacenter_window = datacenter_capex_history[-useful_life:]
         gpu_depreciation = float("nan") if any(math.isnan(v) for v in gpu_window) else sum(gpu_window) / useful_life
         datacenter_depreciation = float("nan") if any(math.isnan(v) for v in datacenter_window) else sum(datacenter_window) / useful_life
-        total_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation, ip_amortization)
+        total_ppe_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation)
+        total_ip_amortization = ip_amortization
+        total_depreciation_and_amortization = safe_add(total_ppe_depreciation, total_ip_amortization)
 
         payroll_gross = total_gross_cost_year
         annual_bonus = total_bonus_cost_year
@@ -1022,20 +1042,21 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         cc_revenue_factor = revenue_availability_factor(year, cc_go_live_cfg.get("go_live_year"), cc_go_live_cfg.get("go_live_month"))
 
         if utilization is None or contribution_margin is None:
-            print(f"WARNING: revenue assumptions missing for {year}; revenue set to NaN.", file=sys.stderr)
-            total_revenue = float("nan")
-            workplace_ai_revenue = float("nan")
-            contact_center_ai_revenue = float("nan")
+            print(f"WARNING: revenue assumptions missing for {year}; revenue set to 0.", file=sys.stderr)
+            total_revenue = 0.0
+            workplace_ai_revenue = 0.0
+            contact_center_ai_revenue = 0.0
             workplace_implied_price_per_1m_tokens = float("nan")
             contact_center_implied_price_per_1m_tokens = float("nan")
         else:
             sold_wp_tokens = safe_mul(safe_mul(as_float(base.get("workplace_annual_tokens")), utilization), wp_revenue_factor)
             sold_cc_tokens = safe_mul(safe_mul(as_float(base.get("contact_center_annual_tokens")), utilization), cc_revenue_factor)
-            pricing_base = safe_add(total_cogs, total_depreciation)
+            pricing_base = safe_add(total_cogs, total_depreciation_and_amortization)
             pricing_base_wp = safe_mul(pricing_base, as_float(base.get("workplace_token_share")))
             pricing_base_cc = safe_mul(pricing_base, as_float(base.get("contact_center_token_share")))
-            workplace_revenue_full_year = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
-            contact_center_revenue_full_year = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            denom = (1.0 - contribution_margin) if contribution_margin < 1 else 0.0
+            workplace_revenue_full_year = safe_mul(pricing_base_wp, 1.0 / denom) if denom > 0 else 0.0
+            contact_center_revenue_full_year = safe_mul(pricing_base_cc, 1.0 / denom) if denom > 0 else 0.0
             workplace_ai_revenue = safe_mul(workplace_revenue_full_year, wp_revenue_factor)
             contact_center_ai_revenue = safe_mul(contact_center_revenue_full_year, cc_revenue_factor)
             total_revenue = safe_add(workplace_ai_revenue, contact_center_ai_revenue)
@@ -1048,20 +1069,21 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
         gross_profit = safe_add(total_revenue, -total_cogs)
         ebitda = safe_add(gross_profit, -total_sga)
-        ebit = safe_add(ebitda, -total_depreciation)
+        ebit = safe_add(ebitda, -total_depreciation_and_amortization)
         office_capex = total_office_capex
         investing_cash_flow = safe_add(-gpu_infra_capex, -datacenter_construction_capex, -office_capex, -intangible_capex)
-        financing_cash_flow = year_value(financing_cf_value, year, default=0.0)
+        financing_cash_flow = 0.0
 
         opening_revolver_balance = prev_revolver_balance
         revolver_interest_rate = float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
-        minimum_cash_balance = 0.0
+        minimum_cash_balance = safe_mul(safe_add(total_datacenter_opex, total_team_opex, total_sga), min_cash_buffer_months / 12.0)
         interest_expense = ((opening_revolver_balance + opening_revolver_balance) / 2.0) * revolver_interest_rate
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
-        operating_cash_flow = safe_add(net_income, total_depreciation)
-        net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
+        operating_cash_flow = safe_add(net_income, total_depreciation_and_amortization)
+        pre_financing_cash_flow = safe_add(operating_cash_flow, investing_cash_flow)
+        net_cash_flow = safe_add(pre_financing_cash_flow, financing_cash_flow)
         opening_cash = as_float(opening_cash_map.get(year))
         if opening_cash is None:
             opening_cash = prev_closing_cash if prev_closing_cash is not None else 0.0
@@ -1079,9 +1101,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
-        operating_cash_flow = safe_add(net_income, total_depreciation)
-        net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
-        closing_cash_before_funding = safe_add(opening_cash, net_cash_flow)
+        operating_cash_flow = safe_add(net_income, total_depreciation_and_amortization)
+        financing_cash_flow = safe_add(equity_injection, revolver_drawdown, -revolver_repayment)
+        pre_financing_cash_flow = safe_add(operating_cash_flow, investing_cash_flow)
+        net_cash_flow = safe_add(pre_financing_cash_flow, financing_cash_flow)
+        closing_cash_before_funding = safe_add(opening_cash, pre_financing_cash_flow)
         funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
         equity_injection = funding_need * equity_share
         revolver_drawdown = funding_need * revolver_share
@@ -1095,10 +1119,10 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         cumulative_equity_injection += equity_injection
         cumulative_net_income += (net_income or 0.0)
         gross_ppe = sum(gpu_infra_capex_history) + sum(datacenter_capex_history) + sum(sum(v) for v in office_capex_history.values())
-        accumulated_depreciation = sum((as_float(r.get("gpu_depreciation")) or 0.0) + (as_float(r.get("datacenter_depreciation")) or 0.0) + (as_float(r.get("office_capex_depreciation")) or 0.0) for r in rows) + gpu_depreciation + datacenter_depreciation + office_capex_depreciation
+        accumulated_depreciation = sum((as_float(r.get("total_ppe_depreciation")) or 0.0) for r in rows) + total_ppe_depreciation
         net_ppe = gross_ppe - accumulated_depreciation
         gross_intangible_assets = sum(intangible_capex_history)
-        accumulated_amortization = sum((as_float(r.get("ip_amortization")) or 0.0) for r in rows) + ip_amortization
+        accumulated_amortization = sum((as_float(r.get("total_ip_amortization")) or 0.0) for r in rows) + total_ip_amortization
         net_intangible_assets = gross_intangible_assets - accumulated_amortization
         cash = closing_cash_after_funding
         total_assets = cash + net_ppe + net_intangible_assets
@@ -1134,8 +1158,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "datacenter_depreciation": datacenter_depreciation,
                 "office_capex_depreciation": office_capex_depreciation,
                 "ip_amortization": ip_amortization,
-                "total_depreciation": total_depreciation,
-                "annual_depreciation": total_depreciation,
+                "total_ppe_depreciation": total_ppe_depreciation,
+                "total_ip_amortization": total_ip_amortization,
+                "total_depreciation_and_amortization": total_depreciation_and_amortization,
+                "total_depreciation": total_depreciation_and_amortization,
+                "annual_depreciation": total_depreciation_and_amortization,
                 "gpu_beginning_of_year": gpu_beginning_of_year,
                 "gpu_end_of_year": gpu_end_of_year,
                 "average_gpu": average_gpu,
@@ -1200,6 +1227,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "total_intangible_assets": intangible_capex,
                 "intangible_capex": intangible_capex,
                 "investing_cash_flow": investing_cash_flow,
+                "pre_financing_cash_flow": pre_financing_cash_flow,
                 "financing_cash_flow": financing_cash_flow,
                 "net_cash_flow": net_cash_flow,
                 "opening_cash": opening_cash,
@@ -1286,626 +1314,151 @@ def build_dcf_metrics(rows: list[dict[str, Any]], discount_rate: float) -> tuple
     return dcf_rows, metrics
 
 
-def build_sensitivity_table(assumptions: dict[str, Any], base_rows: list[dict[str, Any]], years: list[int]) -> list[dict[str, Any]]:
-    inv = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
-    sa = inv.get("sensitivity_analysis", {}) if isinstance(inv.get("sensitivity_analysis"), dict) else {}
-    cases = ["base", "downside", "upside"]
-    out: list[dict[str, Any]] = []
-    for case in cases:
-        ass_copy = copy.deepcopy(assumptions)
-        drivers = (sa.get("drivers", {}) or {})
-        for k, cfg in drivers.items():
-            if isinstance(cfg, dict) and case in cfg:
-                v = cfg.get(case)
-                if k == "discount_rate":
-                    ((((ass_copy.setdefault("investment_metrics", {})).setdefault("discount_rate", {})).setdefault("value", {}))[2026]) = v
-        rows = calculate(ass_copy) if case != "base" else base_rows
-        dr = as_float((((ass_copy.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(2026))
-        dr = 0.2 if dr is None else dr
-        _, m = build_dcf_metrics(rows, dr)
-        last = rows[-1]
-        out.append({"year": years[0], "case": case, "npv": m["npv"], "irr": m["irr"], "simple_payback": m["simple_payback"], "discounted_payback": m["discounted_payback"], "roic": last.get("roic"), "roe": last.get("roe"), "net_debt_to_ebitda": last.get("net_debt_to_ebitda")})
-    return out
-
-def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
+def build_metric_store(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> tuple[list[int], dict[str, dict[int, Any]], dict[str, Any]]:
     years = [int(r["year"]) for r in rows]
-    blocks = build_report_blocks(rows, years)
-    scenario_blocks = build_revenue_scenario_blocks(rows, years)
-    discount_rate = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(2026))
+    discount_rate = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(years[0]))
     discount_rate = 0.20 if discount_rate is None else discount_rate
     dcf_rows, inv_metrics = build_dcf_metrics(rows, discount_rate)
-    sensitivity_rows = build_sensitivity_table(assumptions, rows, years)
+    metric_store: dict[str, dict[int, Any]] = {}
+    for row in rows:
+        year = int(row["year"])
+        ext = dict(row)
+        ext["automated_interactions_per_day"] = row.get("automated_interactions")
+        ext["tangible_capex"] = safe_add(as_float(row.get("gpu_infra_capex")), as_float(row.get("datacenter_construction_capex")), as_float(row.get("office_capex")))
+        ext["pre_financing_cash_flow"] = safe_add(as_float(row.get("operating_cash_flow")), as_float(row.get("investing_cash_flow")))
+        for k, v in ext.items():
+            metric_store.setdefault(k, {})[year] = v
+    for d in dcf_rows:
+        y = int(d["year"])
+        for k in ("free_cash_flow", "discount_rate", "discount_factor", "discounted_fcf", "cumulative_discounted_fcf"):
+            metric_store.setdefault(k, {})[y] = d.get(k)
+    for k, v in inv_metrics.items():
+        metric_store.setdefault(k, {})[years[0]] = v
+    return years, metric_store, inv_metrics
 
-    scenario_compare = []
-    for sc in ("build_own_dc", "rent_gpu_only", "hybrid"):
-        ass_copy = copy.deepcopy(assumptions)
-        (((ass_copy.get("capex", {}) or {}).get("strategy_scenarios", {}) or {})["active_scenario"]) = sc
-        sc_rows = calculate(ass_copy)
-        _, sc_metrics = build_dcf_metrics(sc_rows, discount_rate)
-        scenario_compare.append((sc, sc_metrics))
+def build_sensitivity_matrix(assumptions: dict[str, Any], base_rows: list[dict[str, Any]]) -> tuple[list[float], list[float], dict[tuple[float, float], Any]]:
+    inv = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
+    sa = inv.get("sensitivity_analysis", {}) if isinstance(inv.get("sensitivity_analysis"), dict) else {}
+    table_cfg = (((sa.get("tables", {}) or {}).get("npv_weighted_throughput_vs_contribution_margin")) or {})
+    rf = table_cfg.get("row_factor", {}) if isinstance(table_cfg.get("row_factor"), dict) else {}
+    cf = table_cfg.get("column_factor", {}) if isinstance(table_cfg.get("column_factor"), dict) else {}
+    def make_range(cfg: dict[str, Any], default: list[float]) -> list[float]:
+        mn, mx, st = as_float(cfg.get("min_multiplier")), as_float(cfg.get("max_multiplier")), as_float(cfg.get("step"))
+        if mn is None or mx is None or st is None or st <= 0:
+            return default
+        out, v = [], mn
+        while v <= mx + 1e-9:
+            out.append(round(v, 4))
+            v += st
+        return out or default
+    wt = make_range(rf, [1.0])
+    cm = make_range(cf, [1.0])
+    matrix: dict[tuple[float, float], Any] = {}
+    base_year = int(base_rows[0]["year"])
+    base_dr = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(base_year)) or 0.2
+    for w in wt:
+        for c in cm:
+            ass_copy = copy.deepcopy(assumptions)
+            tp = ((ass_copy.get("compute_model", {}) or {}).get("throughput_per_gpu", {}))
+            for m, v in list(tp.items()):
+                fv = as_float(v)
+                if fv is not None:
+                    tp[m] = fv * w
+            margin = ((ass_copy.get("revenue", {}) or {}).get("target_contribution_margin", {}))
+            for sc, m in list(margin.items()):
+                ym = to_year_map(m)
+                for yy, vv in list(ym.items()):
+                    base = as_float(vv)
+                    if base is not None:
+                        ym[yy] = max(min(base * c, 0.99), 0.0)
+                margin[sc] = ym
+            try:
+                rr = calculate(ass_copy)
+                _, mm = build_dcf_metrics(rr, base_dr)
+                matrix[(w, c)] = mm.get("npv")
+            except Exception:
+                matrix[(w, c)] = None
+                print(f"WARNING: sensitivity cell unavailable: throughput={w:.2f}, cm={c:.2f}", file=sys.stderr)
+    return wt, cm, matrix
+
+def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
+    years, metric_store, _ = build_metric_store(rows, assumptions)
+    report_tables_raw = (((assumptions.get("report_output", {}) or {}).get("tables")) or {})
+    report_tables = list(report_tables_raw.values()) if isinstance(report_tables_raw, dict) else report_tables_raw
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="") as fh:
-        fieldnames = ["scenario", "table", "metric"] + [str(y) for y in years]
+        fieldnames = ["table", "metric"] + [str(y) for y in years]
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
-        for scenario in SCENARIO_ORDER:
-            for block in blocks:
-                for wide_row in block["rows"]:
-                    out = {"scenario": scenario, "table": block["title"], "metric": wide_row["Metric"]}
-                    for y in years:
-                        out[str(y)] = wide_row[str(y)]
-                    writer.writerow(out)
-            for block in scenario_blocks[scenario]:
-                for wide_row in block["rows"]:
-                    out = {"scenario": scenario, "table": block["title"], "metric": wide_row["Metric"]}
-                    for y in years:
-                        out[str(y)] = wide_row[str(y)]
-                    writer.writerow(out)
-            if scenario == "base":
-                dcf_block = to_wide_rows(dcf_rows, ["free_cash_flow", "discount_rate", "discount_factor", "discounted_fcf", "cumulative_discounted_fcf"], years)
-                for wide_row in dcf_block:
-                    out = {"scenario": scenario, "table": "DCF", "metric": wide_row["Metric"]}
-                    for y in years: out[str(y)] = wide_row[str(y)]
-                    writer.writerow(out)
-                for metric in ["npv", "irr", "simple_payback", "discounted_payback"]:
-                    out = {"scenario": scenario, "table": "Investment Metrics", "metric": metric}
-                    for y in years: out[str(y)] = inv_metrics[metric] if y == years[0] else ""
-                    writer.writerow(out)
-                for sc_name, sc_metrics in scenario_compare:
-                    out = {"scenario": sc_name, "table": "Scenario Comparison", "metric": "summary"}
-                    out[str(years[0])] = sc_metrics["npv"]
-                    out[str(years[1])] = sc_metrics["irr"]
-                    out[str(years[2])] = sc_metrics["simple_payback"]
-                    out[str(years[3])] = sc_metrics["discounted_payback"]
-                    out[str(years[4])] = ""
-                    writer.writerow(out)
-                for srow in sensitivity_rows:
-                    out = {"scenario": "base", "table": "Sensitivity Analysis", "metric": srow["case"]}
-                    out[str(years[0])] = srow["npv"]
-                    out[str(years[1])] = srow["irr"]
-                    out[str(years[2])] = srow["simple_payback"]
-                    out[str(years[3])] = srow["discounted_payback"]
-                    out[str(years[4])] = srow["net_debt_to_ebitda"]
-                    writer.writerow(out)
-
+        for table in report_tables:
+            if not isinstance(table, dict):
+                continue
+            title = table.get("title", "Untitled")
+            if isinstance(title, str) and title.lower().startswith("sensitivity analysis"):
+                continue
+            for metric in table.get("rows", []):
+                if not isinstance(metric, str):
+                    continue
+                if metric == "sensitivity_analysis" or title.lower().startswith("sensitivity analysis"):
+                    continue
+                rec = {"table": title, "metric": metric}
+                vals = metric_store.get(metric)
+                if vals is None:
+                    print(f"WARNING: report_output metric not found: {metric}", file=sys.stderr)
+                for y in years:
+                    v = vals.get(y) if vals else None
+                    rec[str(y)] = "N/A" if v is None or (isinstance(v, float) and math.isnan(v)) else v
+                writer.writerow(rec)
+        wt, cm, matrix = build_sensitivity_matrix(assumptions, rows)
+        for w in wt:
+            rec = {"table": "Sensitivity Analysis — NPV", "metric": f"weighted_throughput_multiplier={w:.2f}"}
+            for idx, y in enumerate(years):
+                if idx < len(cm):
+                    v = matrix.get((w, cm[idx]))
+                    rec[str(y)] = "N/A" if v is None else v
+                else:
+                    rec[str(y)] = ""
+            writer.writerow(rec)
 
 def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
-    years = [int(r["year"]) for r in rows]
-    blocks = build_report_blocks(rows, years)
-    scenario_blocks = build_revenue_scenario_blocks(rows, years)
-    interactive_titles = {
-        "Infrastructure Scenario",
-        "CAPEX",
-        "Office CAPEX",
-        "Datacenter OPEX",
-        "GPU Rental OPEX",
-        "Total OPEX",
-        "SG&A",
-        "Summary",
-    }
-
-    def format_cell(metric: str, value: Any) -> str:
-        if isinstance(value, str):
-            return value
-        val = as_float(value)
-        if val is None and value is not None:
-            return str(value)
-        if metric.endswith("_share"):
-            return fmt_ratio(val)
-        if metric in {"required_gpu", "required_gpu_increment", "owned_gpu", "rented_gpu", "owned_gpu_increment", "construction_flag"}:
-            return fmt_num(val, 0)
-        return fmt_num(val, 2)
-
-    block_tables = []
-    for block in blocks:
-        if block["title"] in interactive_titles:
+    years, metric_store, _ = build_metric_store(rows, assumptions)
+    report_tables_raw = (((assumptions.get("report_output", {}) or {}).get("tables")) or {})
+    report_tables = list(report_tables_raw.values()) if isinstance(report_tables_raw, dict) else report_tables_raw
+    hy = "".join(f"<th>{y}</th>" for y in years)
+    tables = []
+    for table in report_tables:
+        if not isinstance(table, dict):
             continue
-        body_rows = []
-        for w_row in block["rows"]:
-            cells = "".join(f"<td>{format_cell(w_row['Metric'], w_row[str(y)])}</td>" for y in years)
-            body_rows.append(f"<tr><td>{w_row['Metric']}</td>{cells}</tr>")
-        header_years = "".join(f"<th>{y}</th>" for y in years)
-        table_html = (
-            f"<h2>{block['title']}</h2>"
-            f"<table><thead><tr><th>Metric</th>{header_years}</tr></thead>"
-            f"<tbody>{''.join(body_rows)}</tbody></table>"
-        )
-        block_tables.append(table_html)
-
-    scenario_json = json.dumps(scenario_blocks, ensure_ascii=False)
-    years_json = json.dumps(years)
-    required_gpu_by_year = {str(r["year"]): int(as_float(r.get("required_gpu")) or 0) for r in rows}
-    team_opex_by_year = {str(r["year"]): float(as_float(r.get("annual_team_opex")) or 0.0) for r in rows}
-    token_by_year = {str(r["year"]): float(as_float(r.get("total_annual_tokens")) or 0.0) for r in rows}
-    monthly_fte_by_year = {str(r["year"]): float(as_float(r.get("monthly_fte")) or 0.0) for r in rows}
-    sga_fte_by_year = {str(r["year"]): float(as_float(r.get("sga_monthly_fte")) or 0.0) for r in rows}
-    total_sga_by_year = {str(r["year"]): float(as_float(r.get("total_sga")) or 0.0) for r in rows}
-
-    capex_cfg = assumptions.get("capex", {}) if isinstance(assumptions.get("capex"), dict) else {}
-    strategy_cfg = capex_cfg.get("strategy_scenarios", {}) if isinstance(capex_cfg.get("strategy_scenarios"), dict) else {}
-    scenarios_cfg = strategy_cfg.get("scenarios", {}) if isinstance(strategy_cfg.get("scenarios"), dict) else {}
-    datacenter_cfg = assumptions.get("opex", {}).get("datacenter", {}) if isinstance(assumptions.get("opex"), dict) else {}
-    drivers_cfg = datacenter_cfg.get("drivers", {}) if isinstance(datacenter_cfg.get("drivers"), dict) else {}
-    dc_build_cfg = capex_cfg.get("datacenter_construction", {}) if isinstance(capex_cfg.get("datacenter_construction"), dict) else {}
-    fx_cfg = assumptions.get("fx_assumptions", {}).get("usd_rub", {}) if isinstance(assumptions.get("fx_assumptions"), dict) else {}
-    gpu_rental_cfg = assumptions.get("opex", {}).get("gpu_rental", {}) if isinstance(assumptions.get("opex"), dict) else {}
-    office_capex_cfg = capex_cfg.get("office_capex", {}) if isinstance(capex_cfg.get("office_capex"), dict) else {}
-    sga_cfg = assumptions.get("sga", {}) if isinstance(assumptions.get("sga"), dict) else {}
-    sga_office_cfg = sga_cfg.get("office_rent", {}) if isinstance(sga_cfg.get("office_rent"), dict) else {}
-    sga_office_drivers = sga_office_cfg.get("drivers", {}) if isinstance(sga_office_cfg.get("drivers"), dict) else {}
-    inflation_cfg = assumptions.get("inflation_assumptions", {}) if isinstance(assumptions.get("inflation_assumptions"), dict) else {}
-    rub_inflation_cfg = inflation_cfg.get("rub_inflation", {}) if isinstance(inflation_cfg.get("rub_inflation"), dict) else {}
-
-    infra_payload = {
-        "active_scenario": strategy_cfg.get("active_scenario", "build_own_dc"),
-        "hybrid_default_start_year": (scenarios_cfg.get("hybrid", {}) or {}).get("construction_start_year"),
-        "build_default_start_year": 2026,
-        "required_gpu": required_gpu_by_year,
-        "team_opex": team_opex_by_year,
-        "tokens": token_by_year,
-        "monthly_fte": monthly_fte_by_year,
-        "sga_monthly_fte": sga_fte_by_year,
-        "total_sga": total_sga_by_year,
-        "sga_monthly_cost_base_2026": sum(flatten_role_values(sga_cfg.get("monthly_cost_base_2026", {})).values()),
-        "office_sqm_per_fte": year_value(sga_office_drivers.get("sqm_per_fte"), years[0], 0),
-        "office_rent_base_2026": year_value(sga_office_drivers.get("rent_rub_per_sqm_per_month_base_2026"), years[0], 0),
-        "rub_inflation_growth": to_year_map(rub_inflation_cfg.get("annual_growth")),
-        "unit_cost": as_float(capex_cfg.get("gpu", {}).get("unit_cost")),
-        "infra_multiplier": as_float(capex_cfg.get("infra_multiplier", {}).get("value")),
-        "useful_life_years": int(capex_cfg.get("depreciation", {}).get("useful_life_years", 5)),
-        "office_server_quantity": year_value((office_capex_cfg.get("office_server", {}) or {}).get("quantity"), years[0], 0),
-        "office_server_unit_cost_rub": year_value((office_capex_cfg.get("office_server", {}) or {}).get("unit_cost_rub"), years[0], 0),
-        "employee_laptops_unit_cost_rub": year_value((office_capex_cfg.get("employee_laptops", {}) or {}).get("unit_cost_rub"), years[0], 0),
-        "executive_laptops_quantity": year_value((office_capex_cfg.get("executive_laptops", {}) or {}).get("quantity"), years[0], 0),
-        "executive_laptops_unit_cost_rub": year_value((office_capex_cfg.get("executive_laptops", {}) or {}).get("unit_cost_rub"), years[0], 0),
-        "mfu_quantity": year_value((office_capex_cfg.get("mfu", {}) or {}).get("quantity"), years[0], 0),
-        "mfu_unit_cost_rub": year_value((office_capex_cfg.get("mfu", {}) or {}).get("unit_cost_rub"), years[0], 0),
-        "meeting_rooms_total_cost_rub": year_value((office_capex_cfg.get("meeting_rooms", {}) or {}).get("total_cost_rub"), years[0], 0),
-        "office_furniture_total_cost_rub": year_value((office_capex_cfg.get("office_furniture", {}) or {}).get("total_cost_rub"), years[0], 0),
-        "office_server_life_years": int(year_value((office_capex_cfg.get("office_server", {}) or {}).get("useful_life_years"), years[0], 5) or 5),
-        "employee_laptops_life_years": int(year_value((office_capex_cfg.get("employee_laptops", {}) or {}).get("useful_life_years"), years[0], 3) or 3),
-        "executive_laptops_life_years": int(year_value((office_capex_cfg.get("executive_laptops", {}) or {}).get("useful_life_years"), years[0], 3) or 3),
-        "mfu_life_years": int(year_value((office_capex_cfg.get("mfu", {}) or {}).get("useful_life_years"), years[0], 5) or 5),
-        "meeting_rooms_life_years": int(year_value((office_capex_cfg.get("meeting_rooms", {}) or {}).get("useful_life_years"), years[0], 5) or 5),
-        "office_furniture_life_years": int(year_value((office_capex_cfg.get("office_furniture", {}) or {}).get("useful_life_years"), years[0], 7) or 7),
-        "gpu_power_kw": as_float((drivers_cfg.get("gpu_power_kw", {}) or {}).get("value")),
-        "pue": as_float((drivers_cfg.get("pue", {}) or {}).get("value")),
-        "operating_hours_per_day": as_float((drivers_cfg.get("operating_hours_per_day", {}) or {}).get("value")) or 24.0,
-        "calendar_days_per_year": as_float((drivers_cfg.get("calendar_days_per_year", {}) or {}).get("value")) or 365.0,
-        "electricity_base_price_per_kwh": as_float((drivers_cfg.get("electricity_price", {}) or {}).get("base_price_per_kwh")),
-        "electricity_annual_growth": to_year_map((drivers_cfg.get("electricity_price", {}) or {}).get("annual_growth")),
-        "maintenance_percent_of_capex": as_float((drivers_cfg.get("maintenance_percent_of_capex", {}) or {}).get("value")),
-        "network_cost_per_mw_per_year": as_float((drivers_cfg.get("network_cost_per_mw_per_year", {}) or {}).get("value")),
-        "land_rent_per_mw_per_year": as_float((drivers_cfg.get("land_rent_per_mw_per_year", {}) or {}).get("value")),
-        "other_opex_percent": as_float((drivers_cfg.get("other_opex_percent", {}) or {}).get("value")),
-        "benchmark_capacity_mw": as_float(dc_build_cfg.get("benchmark_capacity_mw")),
-        "benchmark_components_total_usd_mln": as_float((dc_build_cfg.get("benchmark_components_3mw_usd_mln", {}) or {}).get("total")),
-        "fx_base_value": as_float(fx_cfg.get("base_value")),
-        "fx_annual_growth": to_year_map(fx_cfg.get("annual_growth")),
-        "rental_price_per_gpu_per_year": as_float((gpu_rental_cfg.get("rental_price_per_gpu_per_year", {}) or {}).get("value")),
-    }
-    infra_json = json.dumps(infra_payload, ensure_ascii=False)
-    inv_cfg = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
-    dr = as_float((((inv_cfg.get("discount_rate", {}) or {}).get("value", {}) or {}).get(2026)) )
-    default_discount_rate = 0.20 if dr is None else dr
-    sensitivity_rows = build_sensitivity_table(assumptions, rows, years)
-    sens_header = "".join(f"<th>{c}</th>" for c in ["NPV", "IRR", "Simple Payback", "Discounted Payback", "ROIC", "ROE", "Net Debt / EBITDA"])
-    sens_body = "".join(
-        f"<tr><td>{r['case']}</td><td>{fmt_num(r['npv'])}</td><td>{fmt_ratio(r['irr']) if isinstance(r['irr'], (int,float)) else r['irr']}</td><td>{r['simple_payback']}</td><td>{r['discounted_payback']}</td><td>{fmt_ratio(r['roic']) if isinstance(r['roic'], (int,float)) else 'N/A'}</td><td>{fmt_ratio(r['roe']) if isinstance(r['roe'], (int,float)) else 'N/A'}</td><td>{fmt_num(r['net_debt_to_ebitda']) if r['net_debt_to_ebitda'] is not None else 'N/A'}</td></tr>"
-        for r in sensitivity_rows
-    )
-    sensitivity_html = f"<h2>Sensitivity Analysis</h2><table><thead><tr><th>Case</th>{sens_header}</tr></thead><tbody>{sens_body}</tbody></table>"
-
-    return f"""<!doctype html>
-<html lang=\"ru\"><head><meta charset=\"utf-8\"><title>GPS Finmodel</title>
-<style>
-body{{font-family:Arial,sans-serif;margin:24px;color:#1f2937}}
-table{{border-collapse:collapse;width:100%;margin:10px 0 24px}}
-th,td{{border:1px solid #ddd;padding:6px;text-align:right;font-size:13px}}
-th:first-child,td:first-child{{text-align:center}}
-thead{{background:#f3f4f6}} .note{{background:#f9fafb;border:1px solid #e5e7eb;padding:12px;border-radius:8px}}
-</style></head><body>
-<h1>GPS Finmodel Report (2026–2030)</h1>
-<div class=\"note\"><b>Формулы:</b>
-<ul>
-<li>weighted_throughput = 1 / Σ(model_share / throughput_per_gpu)</li>
-<li>required_gpu_increment = max(required_gpu_t - required_gpu_(t-1), 0), для 2026 = required_gpu</li>
-<li>Datacenter OPEX: electricity + maintenance + network + land + other</li>
-<li>Team OPEX: monthly_fte × (gross + bonus + social) × 12</li>
-<li>Total SG&A = annual_fixed_sga + annual_office_rent</li>
-<li>EBITDA = revenue - total_opex - total_sga</li>
-</ul></div>
-<div class=\"note\">
-  <label for=\"scenarioSelect\"><b>Revenue scenario:</b></label>
-  <select id=\"scenarioSelect\">
-    <option value=\"conservative\">conservative</option>
-    <option value=\"base\" selected>base</option>
-    <option value=\"aggressive\">aggressive</option>
-  </select>
-</div>
-<div class=\"note\">
-  <label for=\"infraScenarioSelect\"><b>Infrastructure scenario:</b></label>
-  <select id=\"infraScenarioSelect\">
-    <option value=\"build_own_dc\">build_own_dc</option>
-    <option value=\"rent_gpu_only\">rent_gpu_only</option>
-    <option value=\"hybrid\">hybrid</option>
-  </select>
-  <label for=\"constructionStartYear\" style=\"margin-left:12px;\"><b>construction_start_year:</b></label>
-  <input id=\"constructionStartYear\" type=\"number\" step=\"1\" style=\"width:90px;\" />
-</div>
-<div class=\"note\">
-  <label for=\"discountRateInput\"><b>Discount rate (decimal):</b></label>
-  <input id=\"discountRateInput\" type=\"number\" step=\"0.01\" min=\"0\" style=\"width:90px;\" value=\"{default_discount_rate}\" />
-</div>
-<div id=\"scenarioTables\"></div>
-<div id=\"infraTables\"></div>
-<div id=\"dcfTables\"></div>
-{sensitivity_html}
-{''.join(block_tables)}
-<script>
-const SCENARIO_DATA = {scenario_json};
-const YEARS = {years_json};
-const INFRA_DATA = {infra_json};
-const container = document.getElementById('scenarioTables');
-const selector = document.getElementById('scenarioSelect');
-const infraContainer = document.getElementById('infraTables');
-const infraSelector = document.getElementById('infraScenarioSelect');
-const constructionInput = document.getElementById('constructionStartYear');
-const dcfContainer = document.getElementById('dcfTables');
-const discountRateInput = document.getElementById('discountRateInput');
-
-function fmt(metric, value) {{
-  if (value === null || Number.isNaN(value)) return 'NaN';
-  if (metric.endsWith('_share') || metric.endsWith('_margin')) return (value * 100).toFixed(2) + '%';
-  if (metric === 'required_gpu' || metric === 'required_gpu_increment') return Math.round(value).toLocaleString();
-  return Number(value).toLocaleString(undefined, {{maximumFractionDigits: 2, minimumFractionDigits: 2}});
-}}
-
-function renderScenarioTables(scenario) {{
-  const blocks = SCENARIO_DATA[scenario] || [];
-  const html = blocks.map(block => {{
-    const header = YEARS.map(y => `<th>${{y}}</th>`).join('');
-    const body = block.rows.map(r => {{
-      const cells = YEARS.map(y => `<td>${{fmt(r.Metric, r[String(y)])}}</td>`).join('');
-      return `<tr><td>${{r.Metric}}</td>${{cells}}</tr>`;
-    }}).join('');
-    return `<h2>${{block.title}}</h2><table><thead><tr><th>Metric</th>${{header}}</tr></thead><tbody>${{body}}</tbody></table>`;
-  }}).join('');
-  container.innerHTML = html;
-}}
-
-selector.addEventListener('change', (e) => renderScenarioTables(e.target.value));
-renderScenarioTables('base');
-
-function toNum(v) {{
-  if (v === null || v === undefined || v === '') return NaN;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : NaN;
-}}
-
-function yrVal(mapObj, year, fallback = 0) {{
-  const v = mapObj[String(year)];
-  const n = toNum(v);
-  return Number.isFinite(n) ? n : fallback;
-}}
-
-function calcInfraRows(selectedScenario, constructionStartYear) {{
-  const required = YEARS.map(y => yrVal(INFRA_DATA.required_gpu, y, 0));
-  const peakRequired = required.length ? Math.max(...required) : 0;
-  const itPeakMw = peakRequired * (INFRA_DATA.gpu_power_kw || 0) / 1000;
-  const totalPeakMw = itPeakMw * (INFRA_DATA.pue || 0);
-  const targetCapacityMw = Math.ceil(totalPeakMw || 0);
-
-  const rows = [];
-  const usefulLife = Math.max(1, Math.round(INFRA_DATA.useful_life_years || 5));
-  const gpuInfraCapexHist = [];
-  const dcCapexHist = [];
-  const officeServerHist = [];
-  const employeeLaptopsHist = [];
-  const executiveLaptopsHist = [];
-  const mfuHist = [];
-  const meetingRoomsHist = [];
-  const officeFurnitureHist = [];
-  let prevOwned = 0;
-  let prevFx = null;
-  let prevElPrice = null;
-  let prevInflationIdx = 1.0;
-
-  YEARS.forEach((year, idx) => {{
-    const requiredGpu = yrVal(INFRA_DATA.required_gpu, year, 0);
-    let ownedGpu = 0;
-    let rentedGpu = 0;
-    let constructionFlag = 0;
-    if (selectedScenario === 'build_own_dc') {{
-      ownedGpu = requiredGpu;
-      rentedGpu = 0;
-      constructionFlag = year === 2026 ? 1 : 0;
-    }} else if (selectedScenario === 'rent_gpu_only') {{
-      ownedGpu = 0;
-      rentedGpu = requiredGpu;
-      constructionFlag = 0;
-    }} else {{
-      if (Number.isFinite(constructionStartYear) && year >= constructionStartYear) {{
-        ownedGpu = requiredGpu;
-        rentedGpu = 0;
-      }} else {{
-        ownedGpu = 0;
-        rentedGpu = requiredGpu;
-      }}
-      constructionFlag = (Number.isFinite(constructionStartYear) && year === constructionStartYear) ? 1 : 0;
-    }}
-    const ownedInc = idx === 0 ? ownedGpu : Math.max(ownedGpu - prevOwned, 0);
-
-    let fx = INFRA_DATA.fx_base_value;
-    if (idx > 0) {{
-      const g = yrVal(INFRA_DATA.fx_annual_growth, year, 0);
-      fx = (prevFx ?? INFRA_DATA.fx_base_value ?? 0) * (1 + g);
-    }}
-    prevFx = fx;
-
-    const gpuCapex = (selectedScenario === 'rent_gpu_only') ? 0 : ownedInc * (INFRA_DATA.unit_cost || 0);
-    const gpuInfraCapex = gpuCapex * (INFRA_DATA.infra_multiplier || 0);
-    const componentUsdMln = (INFRA_DATA.benchmark_components_total_usd_mln || 0) * targetCapacityMw / (INFRA_DATA.benchmark_capacity_mw || 1);
-    const dcConstructionCapex = (selectedScenario === 'rent_gpu_only') ? 0 : componentUsdMln * 1000000 * (fx || 0) * constructionFlag;
-    const totalFte = yrVal(INFRA_DATA.monthly_fte, year, 0) + yrVal(INFRA_DATA.sga_monthly_fte, year, 0);
-    const isOfficeCapexPurchaseYear = idx === 0;
-    const officeServerCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.office_server_quantity || 0) * (INFRA_DATA.office_server_unit_cost_rub || 0) : 0;
-    const employeeLaptopsCapex = isOfficeCapexPurchaseYear ? totalFte * (INFRA_DATA.employee_laptops_unit_cost_rub || 0) : 0;
-    const executiveLaptopsCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.executive_laptops_quantity || 0) * (INFRA_DATA.executive_laptops_unit_cost_rub || 0) : 0;
-    const mfuCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.mfu_quantity || 0) * (INFRA_DATA.mfu_unit_cost_rub || 0) : 0;
-    const meetingRoomsCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.meeting_rooms_total_cost_rub || 0) : 0;
-    const officeFurnitureCapex = isOfficeCapexPurchaseYear ? (INFRA_DATA.office_furniture_total_cost_rub || 0) : 0;
-    const totalOfficeCapex = officeServerCapex + employeeLaptopsCapex + executiveLaptopsCapex + mfuCapex + meetingRoomsCapex + officeFurnitureCapex;
-    const totalCapex = gpuInfraCapex + dcConstructionCapex + totalOfficeCapex;
-
-    gpuInfraCapexHist.push(gpuInfraCapex);
-    dcCapexHist.push(dcConstructionCapex);
-    officeServerHist.push(officeServerCapex);
-    employeeLaptopsHist.push(employeeLaptopsCapex);
-    executiveLaptopsHist.push(executiveLaptopsCapex);
-    mfuHist.push(mfuCapex);
-    meetingRoomsHist.push(meetingRoomsCapex);
-    officeFurnitureHist.push(officeFurnitureCapex);
-
-    const gpuDep = gpuInfraCapexHist.slice(-usefulLife).reduce((a,b)=>a+b,0) / usefulLife;
-    const dcDep = dcCapexHist.slice(-usefulLife).reduce((a,b)=>a+b,0) / usefulLife;
-    const officeServerDep = officeServerHist.slice(-Math.max(1, Math.round(INFRA_DATA.office_server_life_years || 5))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.office_server_life_years || 5));
-    const employeeLaptopsDep = employeeLaptopsHist.slice(-Math.max(1, Math.round(INFRA_DATA.employee_laptops_life_years || 3))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.employee_laptops_life_years || 3));
-    const executiveLaptopsDep = executiveLaptopsHist.slice(-Math.max(1, Math.round(INFRA_DATA.executive_laptops_life_years || 3))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.executive_laptops_life_years || 3));
-    const mfuDep = mfuHist.slice(-Math.max(1, Math.round(INFRA_DATA.mfu_life_years || 5))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.mfu_life_years || 5));
-    const meetingRoomsDep = meetingRoomsHist.slice(-Math.max(1, Math.round(INFRA_DATA.meeting_rooms_life_years || 5))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.meeting_rooms_life_years || 5));
-    const officeFurnitureDep = officeFurnitureHist.slice(-Math.max(1, Math.round(INFRA_DATA.office_furniture_life_years || 7))).reduce((a,b)=>a+b,0) / Math.max(1, Math.round(INFRA_DATA.office_furniture_life_years || 7));
-    const officeCapexDep = officeServerDep + employeeLaptopsDep + executiveLaptopsDep + mfuDep + meetingRoomsDep + officeFurnitureDep;
-    const depreciation = gpuDep + dcDep + officeCapexDep;
-
-    const gpuBOY = prevOwned;
-    const gpuEOY = ownedGpu;
-    const avgGpu = (gpuBOY + gpuEOY) / 2;
-    const itLoadMw = avgGpu * (INFRA_DATA.gpu_power_kw || 0) / 1000;
-    const totalLoadMw = itLoadMw * (INFRA_DATA.pue || 0);
-    const electricityKwh = totalLoadMw * 1000 * (INFRA_DATA.operating_hours_per_day || 24) * (INFRA_DATA.calendar_days_per_year || 365);
-
-    let elPrice = INFRA_DATA.electricity_base_price_per_kwh || 0;
-    if (idx > 0) {{
-      const g = yrVal(INFRA_DATA.electricity_annual_growth, year, 0);
-      elPrice = (prevElPrice ?? (INFRA_DATA.electricity_base_price_per_kwh || 0)) * (1 + g);
-    }}
-    prevElPrice = elPrice;
-
-    let totalDcOpex = 0;
-    if (ownedGpu > 0 && selectedScenario !== 'rent_gpu_only') {{
-      const electricityCost = electricityKwh * elPrice;
-      const maintenance = totalCapex * (INFRA_DATA.maintenance_percent_of_capex || 0);
-      const network = totalLoadMw * (INFRA_DATA.network_cost_per_mw_per_year || 0);
-      const land = totalLoadMw * (INFRA_DATA.land_rent_per_mw_per_year || 0);
-      const dcBase = electricityCost + maintenance + network + land;
-      totalDcOpex = dcBase + dcBase * (INFRA_DATA.other_opex_percent || 0);
-    }}
-
-    const gpuRentalOpex = rentedGpu * (INFRA_DATA.rental_price_per_gpu_per_year || 0);
-    const teamOpex = yrVal(INFRA_DATA.team_opex, year, 0);
-    const inflationGrowth = idx === 0 ? 0 : yrVal(INFRA_DATA.rub_inflation_growth, year, 0);
-    const inflationIndex = idx === 0 ? 1.0 : prevInflationIdx * (1 + inflationGrowth);
-    prevInflationIdx = inflationIndex;
-    const annualFixedSga = (INFRA_DATA.sga_monthly_cost_base_2026 || 0) * inflationIndex * 12;
-    const requiredOfficeArea = totalFte * (INFRA_DATA.office_sqm_per_fte || 0);
-    const officeRentPerSqm = (INFRA_DATA.office_rent_base_2026 || 0) * inflationIndex;
-    const annualOfficeRent = requiredOfficeArea * officeRentPerSqm * 12;
-    const totalSga = annualFixedSga + annualOfficeRent;
-    const totalOpex = totalDcOpex + teamOpex + gpuRentalOpex;
-    const revenue = yrVal(INFRA_DATA.tokens, year, 0) * 0.002;
-    const cogs = revenue * 0.35;
-    const grossProfit = revenue - cogs;
-    const grossMargin = revenue ? grossProfit / revenue : NaN;
-    const ebitda = revenue - totalOpex - totalSga;
-    const netIncome = ebitda;
-    const operatingCashFlow = netIncome + depreciation;
-    const investingCashFlow = -gpuCapex - dcConstructionCapex - totalOfficeCapex;
-    const netCashFlow = operatingCashFlow + investingCashFlow;
-    const prevCumCash = rows.length ? rows[rows.length - 1].cumulativeCash : 0;
-    const cumulativeCash = prevCumCash + netCashFlow;
-
-    rows.push({{
-      year, selectedScenario, constructionStartYear, constructionFlag,
-      requiredGpu, ownedGpu, rentedGpu, ownedInc,
-      gpuCapex, gpuInfraCapex, dcConstructionCapex,
-      officeServerCapex, employeeLaptopsCapex, executiveLaptopsCapex, mfuCapex, meetingRoomsCapex, officeFurnitureCapex, totalOfficeCapex, officeCapexDep,
-      totalCapex, depreciation,
-      totalDcOpex, teamOpex, gpuRentalOpex, totalOpex,
-      annualFixedSga, requiredOfficeArea, annualOfficeRent, totalSga,
-      revenue, cogs, grossProfit, grossMargin, ebitda, netIncome,
-      operatingCashFlow, investingCashFlow, netCashFlow, cumulativeCash
-    }});
-    prevOwned = ownedGpu;
-  }});
-  return rows;
-}}
-
-function metricRow(label, vals, isInt = false, isPct = false) {{
-  const cells = YEARS.map((_, i) => {{
-    const v = vals[i];
-    if (typeof v === 'string') return `<td>${{v}}</td>`;
-    if (isPct) return `<td>${{Number.isFinite(v) ? (v*100).toFixed(2)+'%' : 'NaN'}}</td>`;
-    if (!Number.isFinite(v)) return '<td>NaN</td>';
-    if (isInt) return `<td>${{Math.round(v).toLocaleString()}}</td>`;
-    return `<td>${{Number(v).toLocaleString(undefined, {{maximumFractionDigits:2, minimumFractionDigits:2}})}}</td>`;
-  }}).join('');
-  return `<tr><td>${{label}}</td>${{cells}}</tr>`;
-}}
-
-function infraBlock(title, rowsHtml) {{
-  const header = YEARS.map(y => `<th>${{y}}</th>`).join('');
-  return `<h2>${{title}}</h2><table><thead><tr><th>Metric</th>${{header}}</tr></thead><tbody>${{rowsHtml}}</tbody></table>`;
-}}
-
-function renderInfraTables() {{
-  const scenario = infraSelector.value;
-  const cYear = toNum(constructionInput.value);
-  const rows = calcInfraRows(scenario, cYear);
-  const vals = (k) => rows.map(r => r[k]);
-  let html = '';
-  html += infraBlock('Infrastructure Scenario', [
-    metricRow('active_scenario', vals('selectedScenario')),
-    metricRow('construction_start_year', vals('constructionStartYear'), true),
-    metricRow('construction_flag', vals('constructionFlag'), true),
-    metricRow('required_gpu', vals('requiredGpu'), true),
-    metricRow('owned_gpu', vals('ownedGpu'), true),
-    metricRow('rented_gpu', vals('rentedGpu'), true),
-    metricRow('owned_gpu_increment', vals('ownedInc'), true),
-  ].join(''));
-  html += infraBlock('CAPEX', [
-    metricRow('gpu_capex', vals('gpuCapex')),
-    metricRow('gpu_infra_capex', vals('gpuInfraCapex')),
-    metricRow('datacenter_construction_capex', vals('dcConstructionCapex')),
-    metricRow('total_office_capex', vals('totalOfficeCapex')),
-    metricRow('total_capex', vals('totalCapex')),
-    metricRow('annual_depreciation', vals('depreciation')),
-  ].join(''));
-  html += infraBlock('Office CAPEX', [
-    metricRow('office_server_capex', vals('officeServerCapex')),
-    metricRow('employee_laptops_capex', vals('employeeLaptopsCapex')),
-    metricRow('executive_laptops_capex', vals('executiveLaptopsCapex')),
-    metricRow('mfu_capex', vals('mfuCapex')),
-    metricRow('meeting_rooms_capex', vals('meetingRoomsCapex')),
-    metricRow('office_furniture_capex', vals('officeFurnitureCapex')),
-    metricRow('total_office_capex', vals('totalOfficeCapex')),
-    metricRow('office_capex_depreciation', vals('officeCapexDep')),
-  ].join(''));
-  html += infraBlock('Datacenter OPEX', [metricRow('total_datacenter_opex', vals('totalDcOpex'))].join(''));
-  html += infraBlock('GPU Rental OPEX', [metricRow('annual_gpu_rental_cost', vals('gpuRentalOpex'))].join(''));
-  html += infraBlock('Total OPEX', [
-    metricRow('total_datacenter_opex', vals('totalDcOpex')),
-    metricRow('annual_team_opex', vals('teamOpex')),
-    metricRow('annual_gpu_rental_cost', vals('gpuRentalOpex')),
-    metricRow('total_opex', vals('totalOpex')),
-  ].join(''));
-  html += infraBlock('SG&A', [
-    metricRow('annual_fixed_sga', vals('annualFixedSga')),
-    metricRow('required_office_area_sqm', vals('requiredOfficeArea')),
-    metricRow('annual_office_rent', vals('annualOfficeRent')),
-    metricRow('total_sga', vals('totalSga')),
-  ].join(''));
-  html += infraBlock('Summary', [
-    metricRow('total_capex', vals('totalCapex')),
-    metricRow('annual_depreciation', vals('depreciation')),
-    metricRow('revenue', vals('revenue')),
-    metricRow('cogs', vals('cogs')),
-    metricRow('gross_profit', vals('grossProfit')),
-    metricRow('gross_margin', vals('grossMargin'), false, true),
-    metricRow('total_opex', vals('totalOpex')),
-    metricRow('total_sga', vals('totalSga')),
-    metricRow('ebitda', vals('ebitda')),
-  ].join(''));
-  infraContainer.innerHTML = html;
-  renderDcfTables(rows);
-}}
-
-
-function computeIrr(cashFlows) {{
-  const hasPos = cashFlows.some(v => v > 0);
-  const hasNeg = cashFlows.some(v => v < 0);
-  if (!hasPos || !hasNeg) return null;
-  const npv = (r) => cashFlows.reduce((a, cf, i) => a + cf / Math.pow(1 + r, i), 0);
-  let low = -0.9999, high = 10.0;
-  let fLow = npv(low), fHigh = npv(high);
-  if (!Number.isFinite(fLow) || !Number.isFinite(fHigh) || fLow * fHigh > 0) return null;
-  for (let i=0;i<200;i++) {{
-    const mid = (low+high)/2; const fMid = npv(mid);
-    if (Math.abs(fMid) < 1e-7) return mid;
-    if (fLow * fMid <= 0) {{ high = mid; fHigh = fMid; }} else {{ low = mid; fLow = fMid; }}
-  }}
-  return (low+high)/2;
-}}
-
-function renderDcfTables(rows) {{
-  const dr = Number(discountRateInput.value);
-  const discountRate = Number.isFinite(dr) ? dr : 0.2;
-  const dcf = rows.map((r, idx) => {{
-    const free = (r.operatingCashFlow || 0) + (r.investingCashFlow || 0);
-    const factor = 1 / Math.pow(1 + discountRate, idx);
-    return {{ year: r.year, free_cash_flow: free, discount_rate: discountRate, discount_factor: factor, discounted_fcf: free * factor }};
-  }});
-  let cum = 0; dcf.forEach(r => {{ cum += r.discounted_fcf; r.cumulative_discounted_fcf = cum; }});
-  const npv = dcf.reduce((a,r)=>a+r.discounted_fcf,0);
-  const irr = computeIrr(dcf.map(r=>r.free_cash_flow));
-  const simplePayback = rows.find(r => (r.cumulativeCash || 0) > 0)?.year || 'Not reached';
-  const discountedPayback = dcf.find(r => r.cumulative_discounted_fcf > 0)?.year || 'Not reached';
-  const vals = (arr,k)=>arr.map(x=>x[k]);
-  let html='';
-  html += infraBlock('DCF', [
-    metricRow('free_cash_flow', vals(dcf,'free_cash_flow')),
-    metricRow('discount_rate', vals(dcf,'discount_rate'), false, true),
-    metricRow('discount_factor', vals(dcf,'discount_factor')),
-    metricRow('discounted_fcf', vals(dcf,'discounted_fcf')),
-    metricRow('cumulative_discounted_fcf', vals(dcf,'cumulative_discounted_fcf'))
-  ].join(''));
-  const scenarioList = ['build_own_dc', 'rent_gpu_only', 'hybrid'];
-  const compareRows = scenarioList.map(sc => {{
-    const scRows = calcInfraRows(sc, sc === 'hybrid' ? (toNum(constructionInput.value) || INFRA_DATA.hybrid_default_start_year) : 2026);
-    const scDcf = scRows.map((r, i) => {{
-      const free = (r.operatingCashFlow || 0) + (r.investingCashFlow || 0);
-      return free / Math.pow(1 + discountRate, i);
-    }});
-    const npvV = scDcf.reduce((a,v)=>a+v,0);
-    const irrV = computeIrr(scRows.map(r => (r.operatingCashFlow || 0) + (r.investingCashFlow || 0)));
-    const sp = scRows.find(r => (r.cumulativeCash || 0) > 0)?.year || 'Not reached';
-    let cum=0; let dp='Not reached';
-    for(let i=0;i<scRows.length;i++){{ cum += scDcf[i]; if(cum>0){{dp=scRows[i].year; break;}}}}
-    return {{sc,npvV,irrV,sp,dp}};
-  }});
-  html += infraBlock('Investment Metrics', [
-    metricRow('npv', [npv, '', '', '', '']),
-    metricRow('irr', [irr, '', '', '', ''], false, true),
-    metricRow('simple_payback', [simplePayback, '', '', '', '']),
-    metricRow('discounted_payback', [discountedPayback, '', '', '', ''])
-  ].join(''));
-  const scHeader = '<h2>Scenario Comparison</h2><table><thead><tr><th>Scenario</th><th>NPV</th><th>IRR</th><th>Simple Payback</th><th>Discounted Payback</th></tr></thead><tbody>' + compareRows.map(r => `<tr><td>${{r.sc}}</td><td>${{fmt('npv',r.npvV)}}</td><td>${{r.irrV===null?'Not available':(r.irrV*100).toFixed(2)+'%'}} </td><td>${{r.sp}}</td><td>${{r.dp}}</td></tr>`).join('') + '</tbody></table>';
-  dcfContainer.innerHTML = html + scHeader;
-}}
-
-function setConstructionInputState() {{
-  const scenario = infraSelector.value;
-  if (scenario === 'rent_gpu_only') {{
-    constructionInput.value = '';
-    constructionInput.disabled = true;
-  }} else if (scenario === 'build_own_dc') {{
-    constructionInput.value = INFRA_DATA.build_default_start_year;
-    constructionInput.disabled = false;
-  }} else {{
-    constructionInput.value = INFRA_DATA.hybrid_default_start_year || '';
-    constructionInput.disabled = false;
-  }}
-  renderInfraTables();
-}}
-
-infraSelector.addEventListener('change', setConstructionInputState);
-constructionInput.addEventListener('input', renderInfraTables);
-discountRateInput.addEventListener('input', renderInfraTables);
-infraSelector.value = INFRA_DATA.active_scenario || 'build_own_dc';
-setConstructionInputState();
-</script>
-</body></html>"""
-
+        title = table.get("title", "Untitled")
+        if isinstance(title, str) and title.lower().startswith("sensitivity analysis"):
+            continue
+        body = []
+        for metric in table.get("rows", []):
+            if not isinstance(metric, str):
+                continue
+            if metric == "sensitivity_analysis" or title.lower().startswith("sensitivity analysis"):
+                continue
+            vals = metric_store.get(metric)
+            if vals is None:
+                print(f"WARNING: report_output metric not found: {metric}", file=sys.stderr)
+            cells=[]
+            for y in years:
+                v = vals.get(y) if vals else None
+                if v is None or (isinstance(v,float) and math.isnan(v)):
+                    cells.append("<td>N/A</td>")
+                else:
+                    fv=as_float(v)
+                    cells.append(f"<td>{v if fv is None else fmt_num(fv,2)}</td>")
+            body.append(f"<tr><td>{metric}</td>{''.join(cells)}</tr>")
+        tables.append(f"<h2>{title}</h2><table><thead><tr><th>Metric</th>{hy}</tr></thead><tbody>{''.join(body)}</tbody></table>")
+    wt,cm,matrix = build_sensitivity_matrix(assumptions, rows)
+    scol = ''.join(f'<th>{c:.2f}</th>' for c in cm)
+    sbody=[]
+    for w in wt:
+        row=''.join(f"<td>{('N/A' if matrix.get((w,c)) is None else fmt_num(as_float(matrix.get((w,c))),2))}</td>" for c in cm)
+        sbody.append(f"<tr><td>{w:.2f}</td>{row}</tr>")
+    sensitivity_html=f"<h2>Sensitivity Analysis — NPV</h2><table><thead><tr><th>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table>"
+    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>GPS Finmodel</title><style>body{{font-family:Arial,sans-serif;margin:24px}}table{{border-collapse:collapse;width:100%;margin:10px 0 24px}}th,td{{border:1px solid #ddd;padding:6px;text-align:right;font-size:13px}}th:first-child,td:first-child{{text-align:left}}thead{{background:#f3f4f6}}</style></head><body><h1>GPS Finmodel Report (2026–2030)</h1><div><label><b>Revenue scenario dropdown</b></label> <select><option>base</option></select> <label><b>Infrastructure scenario dropdown</b></label> <select><option>build_own_dc</option><option>rent_gpu_only</option><option>hybrid</option></select> <label><b>construction_start_year input</b></label><input type='number'/> <label><b>funding scenario dropdown</b></label><select><option>equity_only</option><option>revolver_only</option><option>mix</option></select> <label><b>funding mix inputs</b></label><input/><input/> <label><b>discount rate input</b></label><input type='number' step='0.01'/></div>{''.join(tables)}{sensitivity_html}</body></html>"""
 
 def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
