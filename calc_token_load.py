@@ -1336,12 +1336,47 @@ def build_metric_store(rows: list[dict[str, Any]], assumptions: dict[str, Any]) 
 def build_sensitivity_matrix(assumptions: dict[str, Any], base_rows: list[dict[str, Any]]) -> tuple[list[float], list[float], dict[tuple[float, float], Any]]:
     inv = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
     sa = inv.get("sensitivity_analysis", {}) if isinstance(inv.get("sensitivity_analysis"), dict) else {}
-    wt = sa.get("weighted_throughput_multiplier", [1.0])
-    cm = sa.get("contribution_margin_multiplier", [1.0])
-    if not isinstance(wt, list) or not isinstance(cm, list):
-        print("WARNING: sensitivity matrix config missing; using N/A.", file=sys.stderr)
-        return [1.0], [1.0], {}
-    return [float(x) for x in wt], [float(x) for x in cm], {}
+    table_cfg = (((sa.get("tables", {}) or {}).get("npv_weighted_throughput_vs_contribution_margin")) or {})
+    rf = table_cfg.get("row_factor", {}) if isinstance(table_cfg.get("row_factor"), dict) else {}
+    cf = table_cfg.get("column_factor", {}) if isinstance(table_cfg.get("column_factor"), dict) else {}
+    def make_range(cfg: dict[str, Any], default: list[float]) -> list[float]:
+        mn, mx, st = as_float(cfg.get("min_multiplier")), as_float(cfg.get("max_multiplier")), as_float(cfg.get("step"))
+        if mn is None or mx is None or st is None or st <= 0:
+            return default
+        out, v = [], mn
+        while v <= mx + 1e-9:
+            out.append(round(v, 4))
+            v += st
+        return out or default
+    wt = make_range(rf, [1.0])
+    cm = make_range(cf, [1.0])
+    matrix: dict[tuple[float, float], Any] = {}
+    base_year = int(base_rows[0]["year"])
+    base_dr = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(base_year)) or 0.2
+    for w in wt:
+        for c in cm:
+            ass_copy = copy.deepcopy(assumptions)
+            tp = ((ass_copy.get("compute_model", {}) or {}).get("throughput_per_gpu", {}))
+            for m, v in list(tp.items()):
+                fv = as_float(v)
+                if fv is not None:
+                    tp[m] = fv * w
+            margin = ((ass_copy.get("revenue", {}) or {}).get("target_contribution_margin", {}))
+            for sc, m in list(margin.items()):
+                ym = to_year_map(m)
+                for yy, vv in list(ym.items()):
+                    base = as_float(vv)
+                    if base is not None:
+                        ym[yy] = max(min(base * c, 0.99), 0.0)
+                margin[sc] = ym
+            try:
+                rr = calculate(ass_copy)
+                _, mm = build_dcf_metrics(rr, base_dr)
+                matrix[(w, c)] = mm.get("npv")
+            except Exception:
+                matrix[(w, c)] = None
+                print(f"WARNING: sensitivity cell unavailable: throughput={w:.2f}, cm={c:.2f}", file=sys.stderr)
+    return wt, cm, matrix
 
 def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     years, metric_store, _ = build_metric_store(rows, assumptions)
@@ -1353,11 +1388,15 @@ def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: P
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
         for table in report_tables:
-            title = table.get("title", "Untitled")
             if not isinstance(table, dict):
+                continue
+            title = table.get("title", "Untitled")
+            if isinstance(title, str) and title.lower().startswith("sensitivity analysis"):
                 continue
             for metric in table.get("rows", []):
                 if not isinstance(metric, str):
+                    continue
+                if metric == "sensitivity_analysis" or title.lower().startswith("sensitivity analysis"):
                     continue
                 rec = {"table": title, "metric": metric}
                 vals = metric_store.get(metric)
@@ -1367,6 +1406,16 @@ def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: P
                     v = vals.get(y) if vals else None
                     rec[str(y)] = "N/A" if v is None or (isinstance(v, float) and math.isnan(v)) else v
                 writer.writerow(rec)
+        wt, cm, matrix = build_sensitivity_matrix(assumptions, rows)
+        for w in wt:
+            rec = {"table": "Sensitivity Analysis — NPV", "metric": f"weighted_throughput_multiplier={w:.2f}"}
+            for idx, y in enumerate(years):
+                if idx < len(cm):
+                    v = matrix.get((w, cm[idx]))
+                    rec[str(y)] = "N/A" if v is None else v
+                else:
+                    rec[str(y)] = ""
+            writer.writerow(rec)
 
 def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     years, metric_store, _ = build_metric_store(rows, assumptions)
@@ -1375,12 +1424,16 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     hy = "".join(f"<th>{y}</th>" for y in years)
     tables = []
     for table in report_tables:
-        title = table.get("title", "Untitled")
-        body = []
         if not isinstance(table, dict):
             continue
+        title = table.get("title", "Untitled")
+        if isinstance(title, str) and title.lower().startswith("sensitivity analysis"):
+            continue
+        body = []
         for metric in table.get("rows", []):
             if not isinstance(metric, str):
+                continue
+            if metric == "sensitivity_analysis" or title.lower().startswith("sensitivity analysis"):
                 continue
             vals = metric_store.get(metric)
             if vals is None:
@@ -1401,7 +1454,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     for w in wt:
         row=''.join(f"<td>{('N/A' if matrix.get((w,c)) is None else fmt_num(as_float(matrix.get((w,c))),2))}</td>" for c in cm)
         sbody.append(f"<tr><td>{w:.2f}</td>{row}</tr>")
-    sensitivity_html=f"<h2>Sensitivity Analysis</h2><table><thead><tr><th>weighted_throughput_multiplier x contribution_margin_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table>"
+    sensitivity_html=f"<h2>Sensitivity Analysis — NPV</h2><table><thead><tr><th>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table>"
     return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>GPS Finmodel</title><style>body{{font-family:Arial,sans-serif;margin:24px}}table{{border-collapse:collapse;width:100%;margin:10px 0 24px}}th,td{{border:1px solid #ddd;padding:6px;text-align:right;font-size:13px}}th:first-child,td:first-child{{text-align:left}}thead{{background:#f3f4f6}}</style></head><body><h1>GPS Finmodel Report (2026–2030)</h1><div><label><b>Revenue scenario dropdown</b></label> <select><option>base</option></select> <label><b>Infrastructure scenario dropdown</b></label> <select><option>build_own_dc</option><option>rent_gpu_only</option><option>hybrid</option></select> <label><b>construction_start_year input</b></label><input type='number'/> <label><b>funding scenario dropdown</b></label><select><option>equity_only</option><option>revolver_only</option><option>mix</option></select> <label><b>funding mix inputs</b></label><input/><input/> <label><b>discount rate input</b></label><input type='number' step='0.01'/></div>{''.join(tables)}{sensitivity_html}</body></html>"""
 
 def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
