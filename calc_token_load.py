@@ -508,14 +508,12 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     )
     mfu_qty = warn_if_missing(year_value(mfu_cfg.get("quantity"), years[0]), "capex.office_capex.mfu.quantity.value")
     mfu_unit_cost = warn_if_missing(year_value(mfu_cfg.get("unit_cost_rub"), years[0]), "capex.office_capex.mfu.unit_cost_rub.value")
-    meeting_rooms_total_cost = warn_if_missing(
-        year_value(meeting_rooms_cfg.get("total_cost_rub"), years[0]),
-        "capex.office_capex.meeting_rooms.total_cost_rub.value",
-    )
-    office_furniture_total_cost = warn_if_missing(
-        year_value(office_furniture_cfg.get("total_cost_rub"), years[0]),
-        "capex.office_capex.office_furniture.total_cost_rub.value",
-    )
+    meeting_rooms_total_cost = year_value(meeting_rooms_cfg.get("total_cost_rub"), years[0], 0.0)
+    if meeting_rooms_total_cost is None:
+        meeting_rooms_total_cost = 0.0
+    meeting_rooms_unit_cost = year_value(meeting_rooms_cfg.get("unit_cost_rub"), years[0], 0.0) or 0.0
+    meeting_rooms_qty = year_value(meeting_rooms_cfg.get("quantity"), years[0], 0.0) or 0.0
+    office_furniture_total_cost = year_value(office_furniture_cfg.get("total_cost_rub"), years[0], 0.0) or 0.0
     office_lives = {
         "office_server": max(1, int(year_value(office_server_cfg.get("useful_life_years"), years[0], 5) or 5)),
         "employee_laptops": max(1, int(year_value(employee_laptops_cfg.get("useful_life_years"), years[0], 3) or 3)),
@@ -831,13 +829,13 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             total_datacenter_opex = 0.0
         else:
             if base_price_per_kwh is None:
-                electricity_price_t = float("nan")
+                electricity_price_t = 0.0
             elif year == years[0]:
                 electricity_price_t = base_price_per_kwh
             else:
                 growth_t = as_float(annual_growth_map.get(year, 0.0))
                 if prev_electricity_price is None or is_nan(prev_electricity_price) or growth_t is None:
-                    electricity_price_t = float("nan")
+                    electricity_price_t = 0.0
                 else:
                     electricity_price_t = prev_electricity_price * (1 + growth_t)
 
@@ -941,7 +939,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         employee_laptops_capex = safe_mul(total_fte, employee_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
         executive_laptops_capex = safe_mul(executive_laptops_qty, executive_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
         mfu_capex = safe_mul(mfu_qty, mfu_unit_cost) if is_office_capex_purchase_year else 0.0
-        meeting_rooms_capex = (meeting_rooms_total_cost if meeting_rooms_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
+        meeting_rooms_capex_base = meeting_rooms_total_cost if meeting_rooms_total_cost and meeting_rooms_total_cost > 0 else (meeting_rooms_qty * meeting_rooms_unit_cost)
+        meeting_rooms_capex = meeting_rooms_capex_base if is_office_capex_purchase_year else 0.0
         office_furniture_capex = (office_furniture_total_cost if office_furniture_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
         total_office_capex = safe_add(
             office_server_capex,
@@ -1043,10 +1042,10 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         cc_revenue_factor = revenue_availability_factor(year, cc_go_live_cfg.get("go_live_year"), cc_go_live_cfg.get("go_live_month"))
 
         if utilization is None or contribution_margin is None:
-            print(f"WARNING: revenue assumptions missing for {year}; revenue set to NaN.", file=sys.stderr)
-            total_revenue = float("nan")
-            workplace_ai_revenue = float("nan")
-            contact_center_ai_revenue = float("nan")
+            print(f"WARNING: revenue assumptions missing for {year}; revenue set to 0.", file=sys.stderr)
+            total_revenue = 0.0
+            workplace_ai_revenue = 0.0
+            contact_center_ai_revenue = 0.0
             workplace_implied_price_per_1m_tokens = float("nan")
             contact_center_implied_price_per_1m_tokens = float("nan")
         else:
@@ -1055,8 +1054,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             pricing_base = safe_add(total_cogs, total_depreciation_and_amortization)
             pricing_base_wp = safe_mul(pricing_base, as_float(base.get("workplace_token_share")))
             pricing_base_cc = safe_mul(pricing_base, as_float(base.get("contact_center_token_share")))
-            workplace_revenue_full_year = safe_mul(pricing_base_wp, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
-            contact_center_revenue_full_year = safe_mul(pricing_base_cc, 1.0 / (1.0 - contribution_margin)) if contribution_margin < 1 else float("nan")
+            denom = (1.0 - contribution_margin) if contribution_margin < 1 else 0.0
+            workplace_revenue_full_year = safe_mul(pricing_base_wp, 1.0 / denom) if denom > 0 else 0.0
+            contact_center_revenue_full_year = safe_mul(pricing_base_cc, 1.0 / denom) if denom > 0 else 0.0
             workplace_ai_revenue = safe_mul(workplace_revenue_full_year, wp_revenue_factor)
             contact_center_ai_revenue = safe_mul(contact_center_revenue_full_year, cc_revenue_factor)
             total_revenue = safe_add(workplace_ai_revenue, contact_center_ai_revenue)
@@ -1082,7 +1082,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
         net_income = safe_add(ebt, -profit_tax)
         operating_cash_flow = safe_add(net_income, total_depreciation_and_amortization)
-        net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
+        pre_financing_cash_flow = safe_add(operating_cash_flow, investing_cash_flow)
+        net_cash_flow = safe_add(pre_financing_cash_flow, financing_cash_flow)
         opening_cash = as_float(opening_cash_map.get(year))
         if opening_cash is None:
             opening_cash = prev_closing_cash if prev_closing_cash is not None else 0.0
@@ -1102,8 +1103,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         net_income = safe_add(ebt, -profit_tax)
         operating_cash_flow = safe_add(net_income, total_depreciation_and_amortization)
         financing_cash_flow = safe_add(equity_injection, revolver_drawdown, -revolver_repayment)
-        net_cash_flow = safe_add(operating_cash_flow, investing_cash_flow, financing_cash_flow)
-        closing_cash_before_funding = safe_add(opening_cash, net_cash_flow)
+        pre_financing_cash_flow = safe_add(operating_cash_flow, investing_cash_flow)
+        net_cash_flow = safe_add(pre_financing_cash_flow, financing_cash_flow)
+        closing_cash_before_funding = safe_add(opening_cash, pre_financing_cash_flow)
         funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
         equity_injection = funding_need * equity_share
         revolver_drawdown = funding_need * revolver_share
@@ -1225,6 +1227,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "total_intangible_assets": intangible_capex,
                 "intangible_capex": intangible_capex,
                 "investing_cash_flow": investing_cash_flow,
+                "pre_financing_cash_flow": pre_financing_cash_flow,
                 "financing_cash_flow": financing_cash_flow,
                 "net_cash_flow": net_cash_flow,
                 "opening_cash": opening_cash,
