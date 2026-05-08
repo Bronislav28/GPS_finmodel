@@ -508,12 +508,10 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     )
     mfu_qty = warn_if_missing(year_value(mfu_cfg.get("quantity"), years[0]), "capex.office_capex.mfu.quantity.value")
     mfu_unit_cost = warn_if_missing(year_value(mfu_cfg.get("unit_cost_rub"), years[0]), "capex.office_capex.mfu.unit_cost_rub.value")
-    meeting_rooms_total_cost = year_value(meeting_rooms_cfg.get("total_cost_rub"), years[0], 0.0)
-    if meeting_rooms_total_cost is None:
-        meeting_rooms_total_cost = 0.0
     meeting_rooms_unit_cost = year_value(meeting_rooms_cfg.get("unit_cost_rub"), years[0], 0.0) or 0.0
     meeting_rooms_qty = year_value(meeting_rooms_cfg.get("quantity"), years[0], 0.0) or 0.0
     office_furniture_total_cost = year_value(office_furniture_cfg.get("total_cost_rub"), years[0], 0.0) or 0.0
+    office_purchase_year = int(year_value(office_capex_cfg.get("purchase_year"), years[0], years[0]) or years[0])
     office_lives = {
         "office_server": max(1, int(year_value(office_server_cfg.get("useful_life_years"), years[0], 5) or 5)),
         "employee_laptops": max(1, int(year_value(employee_laptops_cfg.get("useful_life_years"), years[0], 3) or 3)),
@@ -748,6 +746,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         "office_furniture": [],
     }
     intangible_capex_history: list[float] = []
+    workplace_ip_history: list[float] = []
+    contact_center_ip_history: list[float] = []
     prev_electricity_price: float | None = None
     prev_fx: float | None = None
     prev_owned_gpu = 0
@@ -934,14 +934,14 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         monthly_office_rent = safe_mul(required_office_area_sqm, rent_rub_per_sqm_per_month_t)
         annual_office_rent = safe_mul(monthly_office_rent, 12.0)
         total_sga = safe_add(annual_fixed_sga, annual_office_rent)
-        is_office_capex_purchase_year = year == years[0]
+        purchase_flag = 1.0 if year == office_purchase_year else 0.0
+        is_office_capex_purchase_year = purchase_flag == 1.0
         office_server_capex = safe_mul(office_server_qty, office_server_unit_cost) if is_office_capex_purchase_year else 0.0
         employee_laptops_capex = safe_mul(total_fte, employee_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
         executive_laptops_capex = safe_mul(executive_laptops_qty, executive_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
         mfu_capex = safe_mul(mfu_qty, mfu_unit_cost) if is_office_capex_purchase_year else 0.0
-        meeting_rooms_capex_base = meeting_rooms_total_cost if meeting_rooms_total_cost and meeting_rooms_total_cost > 0 else (meeting_rooms_qty * meeting_rooms_unit_cost)
-        meeting_rooms_capex = meeting_rooms_capex_base if is_office_capex_purchase_year else 0.0
-        office_furniture_capex = (office_furniture_total_cost if office_furniture_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
+        meeting_rooms_capex = safe_mul(meeting_rooms_qty, meeting_rooms_unit_cost, purchase_flag)
+        office_furniture_capex = safe_mul(office_furniture_total_cost, purchase_flag)
         total_office_capex = safe_add(
             office_server_capex,
             employee_laptops_capex,
@@ -1013,10 +1013,16 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         workplace_ai_ip_value = safe_mul(annual_team_opex, wp_effort_share, wp_build_factor, capitalization_multiplier)
         contact_center_ai_ip_value = safe_mul(annual_team_opex, cc_effort_share, cc_build_factor, capitalization_multiplier)
         intangible_capex = safe_add(workplace_ai_ip_value, contact_center_ai_ip_value)
+        workplace_ip_history.append(workplace_ai_ip_value)
+        contact_center_ip_history.append(contact_center_ai_ip_value)
         intangible_capex_history.append(intangible_capex)
-        ip_life = max(1, int(((ass.get("capex", {}).get("intangible_assets", {}) or {}).get("amortization", {}) or {}).get("useful_life_years", 5)))
-        ip_window = intangible_capex_history[-ip_life:]
-        ip_amortization = float("nan") if any(math.isnan(v) for v in ip_window) else sum(ip_window) / ip_life
+        ip_life = max(1, int((((ass.get("depreciation_and_amortization", {}) or {}).get("intangible_amortization", {}) or {}).get("useful_life_years", {}) or {}).get("ip_assets", 5)))
+        wp_ip_window = workplace_ip_history[-ip_life:]
+        cc_ip_window = contact_center_ip_history[-ip_life:]
+        workplace_ai_amortization = float("nan") if any(math.isnan(v) for v in wp_ip_window) else sum(wp_ip_window) / ip_life
+        contact_center_ai_amortization = float("nan") if any(math.isnan(v) for v in cc_ip_window) else sum(cc_ip_window) / ip_life
+        total_ip_amortization = safe_add(workplace_ai_amortization, contact_center_ai_amortization)
+        ip_amortization = total_ip_amortization
 
         total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex, total_office_capex, intangible_capex)
         gpu_infra_capex_history.append(gpu_infra_capex)
@@ -1026,7 +1032,6 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         gpu_depreciation = float("nan") if any(math.isnan(v) for v in gpu_window) else sum(gpu_window) / useful_life
         datacenter_depreciation = float("nan") if any(math.isnan(v) for v in datacenter_window) else sum(datacenter_window) / useful_life
         total_ppe_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation)
-        total_ip_amortization = ip_amortization
         total_depreciation_and_amortization = safe_add(total_ppe_depreciation, total_ip_amortization)
 
         payroll_gross = total_gross_cost_year
@@ -1132,6 +1137,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         total_equity = paid_in_capital + retained_earnings
         balance_check = total_assets - total_liabilities - total_equity
 
+        free_cash_flow = safe_add(operating_cash_flow, investing_cash_flow)
         rows.append(
             {
                 **base,
@@ -1233,6 +1239,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "opening_cash": opening_cash,
                 "closing_cash": closing_cash,
                 "cumulative_cash": cumulative_cash,
+                "free_cash_flow": free_cash_flow,
                 "funding_need": funding_need,
                 "equity_injection": equity_injection,
                 "revolver_drawdown": revolver_drawdown,
@@ -1267,6 +1274,13 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         cumulative_cash_prev = cumulative_cash
         prev_revolver_balance = revolver_balance
 
+    discount_rate = as_float((((ass.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(years[0]))
+    discount_rate = 0.20 if discount_rate is None else discount_rate
+    dcf_rows, inv_metrics = build_dcf_metrics(rows, discount_rate)
+    npv_value = inv_metrics.get("npv")
+    for i, row in enumerate(rows):
+        row["free_cash_flow"] = dcf_rows[i].get("free_cash_flow")
+        row["npv"] = npv_value
     return rows
 
 
