@@ -506,7 +506,7 @@ opex:
       it_load_mw: average_owned_gpu * gpu_power_kw / 1000
       total_load_mw: it_load_mw * pue
       electricity_kwh: total_load_mw * 1000 * operating_hours_per_day * calendar_days_per_year
-      electricity_cost: electricity_kwh * electricity_price
+      electricity_cost: electricity_kwh * electricity_price_t
       datacenter_maintenance_base: cumulative_gpu_infra_capex + cumulative_datacenter_construction_capex
       maintenance_cost: datacenter_maintenance_base * maintenance_percent_of_capex
       network_cost: total_load_mw * network_cost_per_mw_per_year
