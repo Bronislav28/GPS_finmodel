@@ -163,7 +163,7 @@ compute_model: # перевод токенов в нагрузку и GPU
       type: harmonic_mean
       formula: 1 / sum(share / throughput_per_gpu)
       depends_on:
-        - compute_model.model.mix
+        - compute_model.model_mix
         - compute_model.throughput_per_gpu
   infra:
     gpu_type: H100
@@ -373,6 +373,7 @@ capex: # общие вводные по capex
       meeting_rooms_capex: quantity * unit_cost_rub * purchase_flag
       office_furniture_capex: total_cost_rub * purchase_flag
       total_office_capex: office_server_capex + employee_laptops_capex + executive_laptops_capex + mfu_capex + meeting_rooms_capex + office_furniture_capex
+      office_capex: total_office_capex
 
   strategy_scenarios:
     description: >
@@ -452,6 +453,7 @@ depreciation_and_amortization:
       workplace_ai_amortization: workplace_ai_ip_value / ip_assets_useful_life_years
       contact_center_ai_amortization: contact_center_ai_ip_value / ip_assets_useful_life_years
       total_ip_amortization: workplace_ai_amortization + contact_center_ai_amortization
+      ip_amortization: total_ip_amortization
   total_depreciation_and_amortization:
     formula: total_ppe_depreciation + total_ip_amortization
 
@@ -504,7 +506,7 @@ opex:
       it_load_mw: average_owned_gpu * gpu_power_kw / 1000
       total_load_mw: it_load_mw * pue
       electricity_kwh: total_load_mw * 1000 * operating_hours_per_day * calendar_days_per_year
-      electricity_cost: electricity_kwh * electricity_price_t
+      electricity_cost: electricity_kwh * electricity_price
       datacenter_maintenance_base: cumulative_gpu_infra_capex + cumulative_datacenter_construction_capex
       maintenance_cost: datacenter_maintenance_base * maintenance_percent_of_capex
       network_cost: total_load_mw * network_cost_per_mw_per_year
@@ -512,6 +514,7 @@ opex:
       datacenter_base_opex: electricity_cost + maintenance_cost + network_cost + land_rent
       other_datacenter_opex: datacenter_base_opex * other_opex_percent
       total_datacenter_opex: datacenter_base_opex + other_datacenter_opex
+      electricity_price: electricity_price_t
 
   team:
     payroll_assumptions:
@@ -719,7 +722,6 @@ sga:
 
 revenue:
   currency: RUB
-  active_scenario: base
   description: >
     Выручка GPS рассчитывается не через заранее заданную цену токена,
     а через целевую contribution margin к OPEX и D&A. Сценарии отражают
@@ -770,6 +772,15 @@ revenue:
     description: >
       OPEX распределяется между продуктами пропорционально фактическому
       потреблению токенов по каждому продукту.
+  active_scenario: base
+  go_live_sources:
+    workplace_go_live_year: capex.intangible_assets.products.workplace_ai.go_live_year
+    workplace_go_live_month: capex.intangible_assets.products.workplace_ai.go_live_month
+    contact_center_go_live_year: capex.intangible_assets.products.contact_center_ai.go_live_year
+    contact_center_go_live_month: capex.intangible_assets.products.contact_center_ai.go_live_month
+  pricing_base_description: >
+    База для расчета выручки и implied token price включает COGS и depreciation & amortization.
+    SG&A не включается в pricing base и учитывается ниже в P&L.
   calculation_logic:
     available_token_capacity: total_annual_tokens
     workplace_available_tokens: workplace_annual_tokens
@@ -797,14 +808,6 @@ revenue:
     total_revenue: workplace_ai_revenue + contact_center_ai_revenue
     workplace_implied_price_per_1m_tokens: workplace_ai_revenue / workplace_sold_tokens * 1000000
     contact_center_implied_price_per_1m_tokens: contact_center_ai_revenue / contact_center_sold_tokens * 1000000
-  go_live_sources:
-    workplace_go_live_year: capex.intangible_assets.products.workplace_ai.go_live_year
-    workplace_go_live_month: capex.intangible_assets.products.workplace_ai.go_live_month
-    contact_center_go_live_year: capex.intangible_assets.products.contact_center_ai.go_live_year
-    contact_center_go_live_month: capex.intangible_assets.products.contact_center_ai.go_live_month
-  pricing_base_description: >
-    База для расчета выручки и implied token price включает COGS и depreciation & amortization.
-    SG&A не включается в pricing base и учитывается ниже в P&L.
 
 pnl:
   currency: RUB
@@ -1098,7 +1101,7 @@ report_output:
     revenue_scenario_dropdown:
       enabled: true
       source: revenue.active_scenario
-      options_source: revenue.scenarios
+      options_source: revenue.consumption_scenarios
     infrastructure_scenario_dropdown:
       enabled: true
       source: capex.strategy_scenarios.active_scenario
