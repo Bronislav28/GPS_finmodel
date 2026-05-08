@@ -1350,6 +1350,40 @@ def build_metric_store(rows: list[dict[str, Any]], assumptions: dict[str, Any]) 
         metric_store.setdefault(k, {})[years[0]] = v
     return years, metric_store, inv_metrics
 
+
+def run_model(
+    assumptions: dict[str, Any],
+    weighted_throughput_multiplier: float = 1.0,
+    contribution_margin_multiplier: float = 1.0,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    ass_copy = copy.deepcopy(assumptions)
+
+    throughput_cfg = ((ass_copy.get("compute_model", {}) or {}).get("throughput_per_gpu", {}))
+    for model_name, value in list(throughput_cfg.items()):
+        fv = as_float(value)
+        if fv is not None:
+            throughput_cfg[model_name] = fv * weighted_throughput_multiplier
+
+    revenue_cfg = ass_copy.get("revenue", {}) if isinstance(ass_copy.get("revenue"), dict) else {}
+    active_revenue_scenario = str(revenue_cfg.get("active_scenario", "base"))
+    target_margin_cfg = revenue_cfg.get("target_contribution_margin", {})
+    if isinstance(target_margin_cfg, dict) and active_revenue_scenario in target_margin_cfg:
+        scenario_margin_map = to_year_map(target_margin_cfg.get(active_revenue_scenario))
+        adjusted_margin_map: dict[int, float] = {}
+        for y, m in scenario_margin_map.items():
+            mv = as_float(m)
+            if mv is None:
+                continue
+            adjusted_margin_map[y] = max(min(mv * contribution_margin_multiplier, 0.99), 0.0)
+        target_margin_cfg[active_revenue_scenario] = adjusted_margin_map
+
+    rows = calculate(ass_copy)
+    base_year = int(rows[0]["year"])
+    discount_rate = as_float((((ass_copy.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(base_year))
+    discount_rate = 0.20 if discount_rate is None else discount_rate
+    _, inv_metrics = build_dcf_metrics(rows, discount_rate)
+    return rows, inv_metrics
+
 def build_sensitivity_matrix(assumptions: dict[str, Any], base_rows: list[dict[str, Any]]) -> tuple[list[float], list[float], dict[tuple[float, float], Any]]:
     inv = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
     sa = inv.get("sensitivity_analysis", {}) if isinstance(inv.get("sensitivity_analysis"), dict) else {}
@@ -1368,27 +1402,14 @@ def build_sensitivity_matrix(assumptions: dict[str, Any], base_rows: list[dict[s
     wt = make_range(rf, [1.0])
     cm = make_range(cf, [1.0])
     matrix: dict[tuple[float, float], Any] = {}
-    base_year = int(base_rows[0]["year"])
-    base_dr = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(base_year)) or 0.2
     for w in wt:
         for c in cm:
-            ass_copy = copy.deepcopy(assumptions)
-            tp = ((ass_copy.get("compute_model", {}) or {}).get("throughput_per_gpu", {}))
-            for m, v in list(tp.items()):
-                fv = as_float(v)
-                if fv is not None:
-                    tp[m] = fv * w
-            margin = ((ass_copy.get("revenue", {}) or {}).get("target_contribution_margin", {}))
-            for sc, m in list(margin.items()):
-                ym = to_year_map(m)
-                for yy, vv in list(ym.items()):
-                    base = as_float(vv)
-                    if base is not None:
-                        ym[yy] = max(min(base * c, 0.99), 0.0)
-                margin[sc] = ym
             try:
-                rr = calculate(ass_copy)
-                _, mm = build_dcf_metrics(rr, base_dr)
+                _, mm = run_model(
+                    assumptions,
+                    weighted_throughput_multiplier=w,
+                    contribution_margin_multiplier=c,
+                )
                 matrix[(w, c)] = mm.get("npv")
             except Exception:
                 matrix[(w, c)] = None
@@ -1469,7 +1490,10 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     scol = ''.join(f'<th>{c:.2f}</th>' for c in cm)
     sbody=[]
     for w in wt:
-        row=''.join(f"<td>{('N/A' if matrix.get((w,c)) is None else fmt_num(as_float(matrix.get((w,c))),2))}</td>" for c in cm)
+        row = "".join(
+            f"<td>{('N/A' if matrix.get((w,c)) is None else f'{float(matrix.get((w,c))):.10f}')}</td>"
+            for c in cm
+        )
         sbody.append(f"<tr><td>{w:.2f}</td>{row}</tr>")
     sensitivity_html=f"<h2>Sensitivity Analysis — NPV</h2><table><thead><tr><th>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table>"
     return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>GPS Finmodel</title><style>body{{font-family:Arial,sans-serif;margin:24px}}table{{border-collapse:collapse;width:100%;margin:10px 0 24px}}th,td{{border:1px solid #ddd;padding:6px;text-align:right;font-size:13px}}th:first-child,td:first-child{{text-align:left}}thead{{background:#f3f4f6}}</style></head><body><h1>GPS Finmodel Report (2026–2030)</h1><div><label><b>Revenue scenario dropdown</b></label> <select><option>base</option></select> <label><b>Infrastructure scenario dropdown</b></label> <select><option>build_own_dc</option><option>rent_gpu_only</option><option>hybrid</option></select> <label><b>construction_start_year input</b></label><input type='number'/> <label><b>funding scenario dropdown</b></label><select><option>equity_only</option><option>revolver_only</option><option>mix</option></select> <label><b>funding mix inputs</b></label><input/><input/> <label><b>discount rate input</b></label><input type='number' step='0.01'/></div>{''.join(tables)}{sensitivity_html}</body></html>"""
