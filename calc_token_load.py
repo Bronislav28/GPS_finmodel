@@ -508,12 +508,10 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     )
     mfu_qty = warn_if_missing(year_value(mfu_cfg.get("quantity"), years[0]), "capex.office_capex.mfu.quantity.value")
     mfu_unit_cost = warn_if_missing(year_value(mfu_cfg.get("unit_cost_rub"), years[0]), "capex.office_capex.mfu.unit_cost_rub.value")
-    meeting_rooms_total_cost = year_value(meeting_rooms_cfg.get("total_cost_rub"), years[0], 0.0)
-    if meeting_rooms_total_cost is None:
-        meeting_rooms_total_cost = 0.0
     meeting_rooms_unit_cost = year_value(meeting_rooms_cfg.get("unit_cost_rub"), years[0], 0.0) or 0.0
     meeting_rooms_qty = year_value(meeting_rooms_cfg.get("quantity"), years[0], 0.0) or 0.0
     office_furniture_total_cost = year_value(office_furniture_cfg.get("total_cost_rub"), years[0], 0.0) or 0.0
+    office_purchase_year = int(year_value(office_capex_cfg.get("purchase_year"), years[0], years[0]) or years[0])
     office_lives = {
         "office_server": max(1, int(year_value(office_server_cfg.get("useful_life_years"), years[0], 5) or 5)),
         "employee_laptops": max(1, int(year_value(employee_laptops_cfg.get("useful_life_years"), years[0], 3) or 3)),
@@ -585,9 +583,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 break
         if isinstance(sga.get("hiring_plan_monthly"), (dict, list, tuple, int, float)):
             sga_hiring_plan_cfg = sga.get("hiring_plan_monthly")
-    sga_monthly_cost_base = sum(flatten_role_values(sga.get("monthly_cost_base_2026", {})).values()) if isinstance(sga, dict) else 0.0
-    if sga_monthly_cost_base == 0.0:
-        print("WARNING: sga.monthly_cost_base_2026 отсутствует или равен 0.", file=sys.stderr)
+    sga_target_fte_map = flatten_role_values(sga.get("target_fte", {})) if isinstance(sga, dict) else {}
+    sga_salary_map = flatten_role_values(sga.get("salary_gross_monthly_rub", {})) if isinstance(sga, dict) else {}
+    sga_payroll = sga.get("payroll_assumptions", {}) if isinstance(sga.get("payroll_assumptions"), dict) else {}
     office_rent_cfg = sga.get("office_rent", {}) if isinstance(sga.get("office_rent"), dict) else {}
     office_rent_drivers = office_rent_cfg.get("drivers", {}) if isinstance(office_rent_cfg.get("drivers"), dict) else {}
     sqm_per_fte = warn_if_missing(
@@ -748,6 +746,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         "office_furniture": [],
     }
     intangible_capex_history: list[float] = []
+    workplace_ip_history: list[float] = []
+    contact_center_ip_history: list[float] = []
     prev_electricity_price: float | None = None
     prev_fx: float | None = None
     prev_owned_gpu = 0
@@ -925,23 +925,31 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             sga_monthly_fte = 0.0
 
-        total_fte = safe_add(monthly_fte, sga_monthly_fte)
+        total_core_team_fte = monthly_fte
+        total_sga_fte = sga_monthly_fte
+        total_fte = safe_add(total_core_team_fte, total_sga_fte)
         inflation_index_t = inflation_index_by_year.get(year, float("nan"))
-        monthly_cost_t = safe_mul(sga_monthly_cost_base, inflation_index_t)
-        annual_fixed_sga = safe_mul(monthly_cost_t, 12.0)
+        sga_bonus_pct = year_value(sga_payroll.get("annual_bonus_percent_of_gross"), year, 0.0) or 0.0
+        sga_social_pct = year_value(sga_payroll.get("social_contribution_sfr_percent_of_gross"), year, 0.0) or 0.0
+        annual_fixed_sga = 0.0
+        for role_path, role_fte in sga_target_fte_map.items():
+            role_salary = sga_salary_map.get(role_path, 0.0)
+            salary_idx = safe_mul(role_salary, inflation_index_t)
+            role_monthly_total = safe_mul(salary_idx, 1.0 + float(sga_bonus_pct), 1.0 + float(sga_social_pct))
+            annual_fixed_sga += role_fte * role_monthly_total * 12.0
         required_office_area_sqm = safe_mul(total_fte, sqm_per_fte)
         rent_rub_per_sqm_per_month_t = safe_mul(rent_base_2026, inflation_index_t)
         monthly_office_rent = safe_mul(required_office_area_sqm, rent_rub_per_sqm_per_month_t)
         annual_office_rent = safe_mul(monthly_office_rent, 12.0)
         total_sga = safe_add(annual_fixed_sga, annual_office_rent)
-        is_office_capex_purchase_year = year == years[0]
+        purchase_flag = 1.0 if year == office_purchase_year else 0.0
+        is_office_capex_purchase_year = purchase_flag == 1.0
         office_server_capex = safe_mul(office_server_qty, office_server_unit_cost) if is_office_capex_purchase_year else 0.0
         employee_laptops_capex = safe_mul(total_fte, employee_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
         executive_laptops_capex = safe_mul(executive_laptops_qty, executive_laptops_unit_cost) if is_office_capex_purchase_year else 0.0
         mfu_capex = safe_mul(mfu_qty, mfu_unit_cost) if is_office_capex_purchase_year else 0.0
-        meeting_rooms_capex_base = meeting_rooms_total_cost if meeting_rooms_total_cost and meeting_rooms_total_cost > 0 else (meeting_rooms_qty * meeting_rooms_unit_cost)
-        meeting_rooms_capex = meeting_rooms_capex_base if is_office_capex_purchase_year else 0.0
-        office_furniture_capex = (office_furniture_total_cost if office_furniture_total_cost is not None else float("nan")) if is_office_capex_purchase_year else 0.0
+        meeting_rooms_capex = safe_mul(meeting_rooms_qty, meeting_rooms_unit_cost, purchase_flag)
+        office_furniture_capex = safe_mul(office_furniture_total_cost, purchase_flag)
         total_office_capex = safe_add(
             office_server_capex,
             employee_laptops_capex,
@@ -1010,13 +1018,22 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         wp_build_factor = build_phase_factor(year, wp_go_live_cfg)
         cc_build_factor = build_phase_factor(year, cc_go_live_cfg)
         capitalization_multiplier = 1.0 + dev_infra_pct + data_acq_pct
-        workplace_ai_ip_value = safe_mul(annual_team_opex, wp_effort_share, wp_build_factor, capitalization_multiplier)
-        contact_center_ai_ip_value = safe_mul(annual_team_opex, cc_effort_share, cc_build_factor, capitalization_multiplier)
+        capitalized_core_team_cost = safe_mul(annual_team_opex, safe_add(wp_effort_share, cc_effort_share), max(wp_build_factor, cc_build_factor))
+        annual_core_team_cash_cost = annual_team_opex
+        total_team_opex = safe_add(annual_core_team_cash_cost, -capitalized_core_team_cost)
+        workplace_ai_ip_value = safe_mul(annual_core_team_cash_cost, wp_effort_share, wp_build_factor, capitalization_multiplier)
+        contact_center_ai_ip_value = safe_mul(annual_core_team_cash_cost, cc_effort_share, cc_build_factor, capitalization_multiplier)
         intangible_capex = safe_add(workplace_ai_ip_value, contact_center_ai_ip_value)
+        workplace_ip_history.append(workplace_ai_ip_value)
+        contact_center_ip_history.append(contact_center_ai_ip_value)
         intangible_capex_history.append(intangible_capex)
-        ip_life = max(1, int(((ass.get("capex", {}).get("intangible_assets", {}) or {}).get("amortization", {}) or {}).get("useful_life_years", 5)))
-        ip_window = intangible_capex_history[-ip_life:]
-        ip_amortization = float("nan") if any(math.isnan(v) for v in ip_window) else sum(ip_window) / ip_life
+        ip_life = max(1, int((((ass.get("depreciation_and_amortization", {}) or {}).get("intangible_amortization", {}) or {}).get("useful_life_years", {}) or {}).get("ip_assets", 5)))
+        wp_ip_window = workplace_ip_history[-ip_life:]
+        cc_ip_window = contact_center_ip_history[-ip_life:]
+        workplace_ai_amortization = float("nan") if any(math.isnan(v) for v in wp_ip_window) else sum(wp_ip_window) / ip_life
+        contact_center_ai_amortization = float("nan") if any(math.isnan(v) for v in cc_ip_window) else sum(cc_ip_window) / ip_life
+        total_ip_amortization = safe_add(workplace_ai_amortization, contact_center_ai_amortization)
+        ip_amortization = total_ip_amortization
 
         total_capex = safe_add(gpu_infra_capex, datacenter_construction_capex, total_office_capex, intangible_capex)
         gpu_infra_capex_history.append(gpu_infra_capex)
@@ -1026,13 +1043,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         gpu_depreciation = float("nan") if any(math.isnan(v) for v in gpu_window) else sum(gpu_window) / useful_life
         datacenter_depreciation = float("nan") if any(math.isnan(v) for v in datacenter_window) else sum(datacenter_window) / useful_life
         total_ppe_depreciation = safe_add(gpu_depreciation, datacenter_depreciation, office_capex_depreciation)
-        total_ip_amortization = ip_amortization
         total_depreciation_and_amortization = safe_add(total_ppe_depreciation, total_ip_amortization)
 
         payroll_gross = total_gross_cost_year
         annual_bonus = total_bonus_cost_year
         social_contribution_sfr = total_social_cost_year
-        total_team_opex = annual_team_opex
         total_opex = safe_add(total_datacenter_opex, annual_team_opex, annual_gpu_rental_cost)
         total_cogs = safe_add(total_datacenter_opex, total_team_opex, annual_gpu_rental_cost)
 
@@ -1087,8 +1102,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         opening_cash = as_float(opening_cash_map.get(year))
         if opening_cash is None:
             opening_cash = prev_closing_cash if prev_closing_cash is not None else 0.0
-        closing_cash = safe_add(opening_cash, net_cash_flow)
-        closing_cash_before_funding = closing_cash
+        closing_cash_before_funding = safe_add(opening_cash, pre_financing_cash_flow)
         funding_need = max(-(closing_cash_before_funding or 0.0), 0.0)
         equity_injection = funding_need * equity_share
         revolver_drawdown = funding_need * revolver_share
@@ -1132,6 +1146,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         total_equity = paid_in_capital + retained_earnings
         balance_check = total_assets - total_liabilities - total_equity
 
+        free_cash_flow = safe_add(operating_cash_flow, investing_cash_flow)
         rows.append(
             {
                 **base,
@@ -1142,6 +1157,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "rented_gpu": rented_gpu,
                 "owned_gpu_increment": owned_gpu_increment,
                 "target_capacity_mw": target_capacity_mw,
+                "peak_required_gpu": peak_required_gpu,
                 "gpu_capex": gpu_capex,
                 "gpu_infra_capex": gpu_infra_capex,
                 "datacenter_construction_capex": datacenter_construction_capex,
@@ -1166,6 +1182,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "gpu_beginning_of_year": gpu_beginning_of_year,
                 "gpu_end_of_year": gpu_end_of_year,
                 "average_gpu": average_gpu,
+                "average_owned_gpu": average_gpu,
                 "it_load_mw": it_load_mw,
                 "total_load_mw": total_load_mw,
                 "electricity_kwh": electricity_kwh,
@@ -1185,7 +1202,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "monthly_social": monthly_social,
                 "monthly_cost_per_fte": monthly_cost_per_fte,
                 "monthly_team_cost": monthly_team_cost,
+                "total_core_team_fte": total_core_team_fte,
+                "annual_core_team_cash_cost": annual_core_team_cash_cost,
+                "capitalized_core_team_cost": capitalized_core_team_cost,
                 "sga_monthly_fte": sga_monthly_fte,
+                "total_sga_fte": total_sga_fte,
                 "total_fte": total_fte,
                 "payroll_gross": payroll_gross,
                 "annual_bonus": annual_bonus,
@@ -1224,6 +1245,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "office_capex": office_capex,
                 "workplace_ai_ip_value": workplace_ai_ip_value,
                 "contact_center_ai_ip_value": contact_center_ai_ip_value,
+                "total_component_rub": total_component_rub if 'total_component_rub' in locals() else float("nan"),
                 "total_intangible_assets": intangible_capex,
                 "intangible_capex": intangible_capex,
                 "investing_cash_flow": investing_cash_flow,
@@ -1232,7 +1254,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "net_cash_flow": net_cash_flow,
                 "opening_cash": opening_cash,
                 "closing_cash": closing_cash,
+                "minimum_cash_balance": minimum_cash_balance,
                 "cumulative_cash": cumulative_cash,
+                "free_cash_flow": free_cash_flow,
                 "funding_need": funding_need,
                 "equity_injection": equity_injection,
                 "revolver_drawdown": revolver_drawdown,
@@ -1267,6 +1291,13 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         cumulative_cash_prev = cumulative_cash
         prev_revolver_balance = revolver_balance
 
+    discount_rate = as_float((((ass.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(years[0]))
+    discount_rate = 0.20 if discount_rate is None else discount_rate
+    dcf_rows, inv_metrics = build_dcf_metrics(rows, discount_rate)
+    npv_value = inv_metrics.get("npv")
+    for i, row in enumerate(rows):
+        row["free_cash_flow"] = dcf_rows[i].get("free_cash_flow")
+        row["npv"] = npv_value
     return rows
 
 
@@ -1336,6 +1367,40 @@ def build_metric_store(rows: list[dict[str, Any]], assumptions: dict[str, Any]) 
         metric_store.setdefault(k, {})[years[0]] = v
     return years, metric_store, inv_metrics
 
+
+def run_model(
+    assumptions: dict[str, Any],
+    weighted_throughput_multiplier: float = 1.0,
+    contribution_margin_multiplier: float = 1.0,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    ass_copy = copy.deepcopy(assumptions)
+
+    throughput_cfg = ((ass_copy.get("compute_model", {}) or {}).get("throughput_per_gpu", {}))
+    for model_name, value in list(throughput_cfg.items()):
+        fv = as_float(value)
+        if fv is not None:
+            throughput_cfg[model_name] = fv * weighted_throughput_multiplier
+
+    revenue_cfg = ass_copy.get("revenue", {}) if isinstance(ass_copy.get("revenue"), dict) else {}
+    active_revenue_scenario = str(revenue_cfg.get("active_scenario", "base"))
+    target_margin_cfg = revenue_cfg.get("target_contribution_margin", {})
+    if isinstance(target_margin_cfg, dict) and active_revenue_scenario in target_margin_cfg:
+        scenario_margin_map = to_year_map(target_margin_cfg.get(active_revenue_scenario))
+        adjusted_margin_map: dict[int, float] = {}
+        for y, m in scenario_margin_map.items():
+            mv = as_float(m)
+            if mv is None:
+                continue
+            adjusted_margin_map[y] = max(min(mv * contribution_margin_multiplier, 0.99), 0.0)
+        target_margin_cfg[active_revenue_scenario] = adjusted_margin_map
+
+    rows = calculate(ass_copy)
+    base_year = int(rows[0]["year"])
+    discount_rate = as_float((((ass_copy.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(base_year))
+    discount_rate = 0.20 if discount_rate is None else discount_rate
+    _, inv_metrics = build_dcf_metrics(rows, discount_rate)
+    return rows, inv_metrics
+
 def build_sensitivity_matrix(assumptions: dict[str, Any], base_rows: list[dict[str, Any]]) -> tuple[list[float], list[float], dict[tuple[float, float], Any]]:
     inv = assumptions.get("investment_metrics", {}) if isinstance(assumptions.get("investment_metrics"), dict) else {}
     sa = inv.get("sensitivity_analysis", {}) if isinstance(inv.get("sensitivity_analysis"), dict) else {}
@@ -1354,32 +1419,36 @@ def build_sensitivity_matrix(assumptions: dict[str, Any], base_rows: list[dict[s
     wt = make_range(rf, [1.0])
     cm = make_range(cf, [1.0])
     matrix: dict[tuple[float, float], Any] = {}
-    base_year = int(base_rows[0]["year"])
-    base_dr = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}) or {}).get(base_year)) or 0.2
     for w in wt:
         for c in cm:
-            ass_copy = copy.deepcopy(assumptions)
-            tp = ((ass_copy.get("compute_model", {}) or {}).get("throughput_per_gpu", {}))
-            for m, v in list(tp.items()):
-                fv = as_float(v)
-                if fv is not None:
-                    tp[m] = fv * w
-            margin = ((ass_copy.get("revenue", {}) or {}).get("target_contribution_margin", {}))
-            for sc, m in list(margin.items()):
-                ym = to_year_map(m)
-                for yy, vv in list(ym.items()):
-                    base = as_float(vv)
-                    if base is not None:
-                        ym[yy] = max(min(base * c, 0.99), 0.0)
-                margin[sc] = ym
             try:
-                rr = calculate(ass_copy)
-                _, mm = build_dcf_metrics(rr, base_dr)
+                _, mm = run_model(
+                    assumptions,
+                    weighted_throughput_multiplier=w,
+                    contribution_margin_multiplier=c,
+                )
                 matrix[(w, c)] = mm.get("npv")
             except Exception:
                 matrix[(w, c)] = None
                 print(f"WARNING: sensitivity cell unavailable: throughput={w:.2f}, cm={c:.2f}", file=sys.stderr)
     return wt, cm, matrix
+
+
+def build_scenario_comparison(assumptions: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for sc in ("build_own_dc", "rent_gpu_only", "hybrid"):
+        ass_copy = copy.deepcopy(assumptions)
+        capex_sc = ((ass_copy.get("capex", {}) or {}).get("strategy_scenarios", {}))
+        if isinstance(capex_sc, dict):
+            capex_sc["active_scenario"] = sc
+        _, metrics = run_model(ass_copy)
+        out[sc] = {
+            "npv": metrics.get("npv"),
+            "irr": metrics.get("irr"),
+            "simple_payback": metrics.get("simple_payback"),
+            "discounted_payback": metrics.get("discounted_payback"),
+        }
+    return out
 
 def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     years, metric_store, _ = build_metric_store(rows, assumptions)
@@ -1390,11 +1459,21 @@ def write_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: P
         fieldnames = ["table", "metric"] + [str(y) for y in years]
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
+        scenario_cmp = build_scenario_comparison(assumptions)
         for table in report_tables:
             if not isinstance(table, dict):
                 continue
             title = table.get("title", "Untitled")
             if isinstance(title, str) and title.lower().startswith("sensitivity analysis"):
+                continue
+            if table.get("layout") == "matrix" and title == "Scenario Comparison":
+                for row_name in table.get("rows", []):
+                    rec = {"table": title, "metric": row_name}
+                    values = scenario_cmp.get(str(row_name), {})
+                    cols = table.get("columns", [])
+                    for i, y in enumerate(years):
+                        rec[str(y)] = values.get(cols[i]) if i < len(cols) else ""
+                    writer.writerow(rec)
                 continue
             for metric in table.get("rows", []):
                 if not isinstance(metric, str):
@@ -1426,11 +1505,31 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     report_tables = list(report_tables_raw.values()) if isinstance(report_tables_raw, dict) else report_tables_raw
     hy = "".join(f"<th>{y}</th>" for y in years)
     tables = []
+    scenario_cmp = build_scenario_comparison(assumptions)
     for table in report_tables:
         if not isinstance(table, dict):
             continue
         title = table.get("title", "Untitled")
         if isinstance(title, str) and title.lower().startswith("sensitivity analysis"):
+            continue
+        if table.get("layout") == "matrix" and title == "Scenario Comparison":
+            cols = [str(c) for c in table.get("columns", [])]
+            head = "".join(f"<th>{c}</th>" for c in cols)
+            body_rows: list[str] = []
+            for row_name in table.get("rows", []):
+                vals = scenario_cmp.get(str(row_name), {})
+                cells = []
+                for c in cols:
+                    v = vals.get(c)
+                    fv = as_float(v)
+                    if v is None or (isinstance(v, float) and math.isnan(v)):
+                        cells.append("<td>N/A</td>")
+                    elif fv is None:
+                        cells.append(f"<td>{v}</td>")
+                    else:
+                        cells.append(f"<td>{fmt_num(fv,2)}</td>")
+                body_rows.append(f"<tr><td>{row_name}</td>{''.join(cells)}</tr>")
+            tables.append(f"<h2>{title}</h2><table><thead><tr><th>Scenario</th>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>")
             continue
         body = []
         for metric in table.get("rows", []):
@@ -1455,7 +1554,10 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     scol = ''.join(f'<th>{c:.2f}</th>' for c in cm)
     sbody=[]
     for w in wt:
-        row=''.join(f"<td>{('N/A' if matrix.get((w,c)) is None else fmt_num(as_float(matrix.get((w,c))),2))}</td>" for c in cm)
+        row = "".join(
+            f"<td>{('N/A' if matrix.get((w,c)) is None else fmt_num(float(matrix.get((w,c))),2))}</td>"
+            for c in cm
+        )
         sbody.append(f"<tr><td>{w:.2f}</td>{row}</tr>")
     sensitivity_html=f"<h2>Sensitivity Analysis — NPV</h2><table><thead><tr><th>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table>"
     return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>GPS Finmodel</title><style>body{{font-family:Arial,sans-serif;margin:24px}}table{{border-collapse:collapse;width:100%;margin:10px 0 24px}}th,td{{border:1px solid #ddd;padding:6px;text-align:right;font-size:13px}}th:first-child,td:first-child{{text-align:left}}thead{{background:#f3f4f6}}</style></head><body><h1>GPS Finmodel Report (2026–2030)</h1><div><label><b>Revenue scenario dropdown</b></label> <select><option>base</option></select> <label><b>Infrastructure scenario dropdown</b></label> <select><option>build_own_dc</option><option>rent_gpu_only</option><option>hybrid</option></select> <label><b>construction_start_year input</b></label><input type='number'/> <label><b>funding scenario dropdown</b></label><select><option>equity_only</option><option>revolver_only</option><option>mix</option></select> <label><b>funding mix inputs</b></label><input/><input/> <label><b>discount rate input</b></label><input type='number' step='0.01'/></div>{''.join(tables)}{sensitivity_html}</body></html>"""
