@@ -442,8 +442,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
     # OPEX-блоки: поддержка как top-level datacenter/team, так и legacy opex.datacenter/team
     opex_root = ass.get("opex", {}) if isinstance(ass.get("opex"), dict) else {}
-    datacenter = ass.get("datacenter", opex_root.get("datacenter", {}))
-    team = ass.get("team", opex_root.get("team", {}))
+    datacenter = opex_root.get("datacenter", ass.get("datacenter", {}))
+    team = opex_root.get("team", ass.get("team", {}))
     sga = ass.get("sga", {})
     drivers = datacenter.get("drivers", {}) if isinstance(datacenter.get("drivers"), dict) else {}
     inflation = ass.get("inflation_assumptions", {}) if isinstance(ass.get("inflation_assumptions"), dict) else {}
@@ -532,23 +532,17 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         year_value(electricity_price_cfg.get("base_price_per_kwh"), years[0]),
         "opex.datacenter.drivers.electricity_price.base_price_per_kwh",
     )
-    annual_growth_cfg = electricity_price_cfg.get("annual_growth")
-    annual_growth_map: dict[int, float] = {}
-    if isinstance(annual_growth_cfg, dict) and "value" in annual_growth_cfg:
-        growth_val = as_float(annual_growth_cfg.get("value"))
-        if growth_val is not None:
-            annual_growth_map = {y: growth_val for y in years}
-    elif isinstance(annual_growth_cfg, dict):
-        for y_key, y_val in annual_growth_cfg.items():
-            try:
-                y_int = int(y_key)
-            except (TypeError, ValueError):
-                continue
-            if isinstance(y_val, dict) and "value" in y_val:
-                growth = as_float(y_val.get("value"))
-            else:
-                growth = as_float(y_val)
-            annual_growth_map[y_int] = 0.0 if growth is None else float(growth)
+    annual_growth_map = to_year_map(electricity_price_cfg.get("annual_growth"))
+    electricity_price_by_year: dict[int, float] = {}
+    prev_price = float(base_price_per_kwh or 0.0)
+    for i, y in enumerate(years):
+        if i == 0:
+            electricity_price_by_year[y] = prev_price
+        else:
+            growth_t = as_float(annual_growth_map.get(y, 0.0))
+            growth_t = 0.0 if growth_t is None else float(growth_t)
+            prev_price = prev_price * (1.0 + growth_t)
+            electricity_price_by_year[y] = prev_price
     maintenance_pct = warn_if_missing(
         driver_value(drivers, "maintenance_percent_of_capex"),
         "datacenter.drivers.maintenance_percent_of_capex.value",
@@ -654,7 +648,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     if abs((equity_share + revolver_share) - 1.0) > 1e-9:
         print(f"WARNING: funding shares sum != 1.0 ({equity_share + revolver_share:.4f})", file=sys.stderr)
     revolver_rate_map = to_year_map((funding_cfg.get("revolver", {}) or {}).get("interest_rate"))
-    min_cash_buffer_months = year_value(((funding_cfg.get("minimum_cash_balance", {}) or {}).get("buffer_months")), years[0], 0.0) or 0.0
+    min_cash_cfg = ((funding_cfg.get("revolver", {}) or {}).get("repayment_logic", {}) or {}).get("minimum_cash_balance", {}) or {}
+    min_cash_buffer_months = as_float((min_cash_cfg.get("months_of_fixed_costs", {}) or {}).get("value")) or 0.0
 
     base_rows: list[dict[str, Any]] = []
     prev_required_gpu = 0
@@ -818,8 +813,9 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         total_load_mw = safe_mul(it_load_mw, pue)
         electricity_kwh = safe_mul(total_load_mw, 1000, operating_hours_per_day, calendar_days)
 
+        electricity_price_t = float(electricity_price_by_year.get(year, 0.0))
+        electricity_price = electricity_price_t
         if owned_gpu <= 0:
-            electricity_price_t = 0.0 if prev_electricity_price is None else prev_electricity_price
             electricity_cost = 0.0
             maintenance_cost = 0.0
             network_cost = 0.0
@@ -828,17 +824,6 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
             other_opex = 0.0
             total_datacenter_opex = 0.0
         else:
-            if base_price_per_kwh is None:
-                electricity_price_t = 0.0
-            elif year == years[0]:
-                electricity_price_t = base_price_per_kwh
-            else:
-                growth_t = as_float(annual_growth_map.get(year, 0.0))
-                if prev_electricity_price is None or is_nan(prev_electricity_price) or growth_t is None:
-                    electricity_price_t = 0.0
-                else:
-                    electricity_price_t = prev_electricity_price * (1 + growth_t)
-
             electricity_cost = safe_mul(electricity_kwh, electricity_price_t)
             maintenance_base = safe_add(sum(gpu_infra_capex_history), sum(datacenter_capex_history), gpu_infra_capex, datacenter_construction_capex)
             maintenance_cost = safe_mul(maintenance_base, maintenance_pct)
@@ -1091,7 +1076,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
 
         opening_revolver_balance = prev_revolver_balance
         revolver_interest_rate = float(as_float(revolver_rate_map.get(year, 0.0)) or 0.0)
-        minimum_cash_balance = safe_mul(safe_add(total_datacenter_opex, total_team_opex, total_sga), min_cash_buffer_months / 12.0)
+        monthly_team_opex = safe_mul(total_team_opex, 1 / 12.0)
+        monthly_sga = safe_mul(total_sga, 1 / 12.0)
+        monthly_gpu_rental_opex = safe_mul(annual_gpu_rental_cost, 1 / 12.0)
+        monthly_fixed_costs = safe_add(monthly_team_opex, monthly_sga, monthly_gpu_rental_opex)
+        minimum_cash_balance = safe_mul(monthly_fixed_costs, min_cash_buffer_months)
         interest_expense = ((opening_revolver_balance + opening_revolver_balance) / 2.0) * revolver_interest_rate
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
@@ -1187,6 +1176,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "total_load_mw": total_load_mw,
                 "electricity_kwh": electricity_kwh,
                 "electricity_price_t": electricity_price_t,
+                "electricity_price": electricity_price,
                 "electricity_cost": electricity_cost,
                 "maintenance_cost": maintenance_cost,
                 "network_cost": network_cost,
