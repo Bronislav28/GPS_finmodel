@@ -434,7 +434,13 @@ depreciation_and_amortization:
     calculation_logic:
       gpu_depreciation: gpu_infra_capex / gpu_infra_useful_life_years
       datacenter_depreciation: datacenter_construction_capex / datacenter_useful_life_years
-      office_capex_depreciation: office_capex / asset_specific_useful_life_years
+      office_server_depreciation: office_server_capex / office_server_useful_life_years
+      employee_laptops_depreciation: employee_laptops_capex / employee_laptops_useful_life_years
+      executive_laptops_depreciation: executive_laptops_capex / executive_laptops_useful_life_years
+      mfu_depreciation: mfu_capex / mfu_useful_life_years
+      meeting_rooms_depreciation: meeting_rooms_capex / meeting_rooms_useful_life_years
+      office_furniture_depreciation: office_furniture_capex / office_furniture_useful_life_years
+      office_capex_depreciation: office_server_depreciation + employee_laptops_depreciation + executive_laptops_depreciation + mfu_depreciation + meeting_rooms_depreciation + office_furniture_depreciation
       total_ppe_depreciation: gpu_depreciation + datacenter_depreciation + office_capex_depreciation
   intangible_amortization:
     useful_life_years:
@@ -686,7 +692,7 @@ sga:
     shared_corporate_services:
       audit: 250000
   calculation_logic:
-    target_sga_fte: sum(target_fte)
+    total_sga_fte: sum(target_fte)
     annual_gross_salary_by_role: monthly_gross_salary_by_role * target_fte_by_role * 12 * inflation_index_t
     annual_bonus_by_role: annual_gross_salary_by_role * annual_bonus_percent_of_gross * worked_months_ratio
     annual_social_contribution_sfr_by_role: (annual_gross_salary_by_role + annual_bonus_by_role) * social_contribution_sfr_percent_of_gross
@@ -713,6 +719,7 @@ sga:
 
 revenue:
   currency: RUB
+  active_scenario: base
   description: >
     Выручка GPS рассчитывается не через заранее заданную цену токена,
     а через целевую contribution margin к OPEX и D&A. Сценарии отражают
@@ -764,19 +771,37 @@ revenue:
       OPEX распределяется между продуктами пропорционально фактическому
       потреблению токенов по каждому продукту.
   calculation_logic:
+    available_token_capacity: total_annual_tokens
+    workplace_available_tokens: workplace_annual_tokens
+    contact_center_available_tokens: contact_center_annual_tokens
     sold_tokens: available_token_capacity * utilization_of_token_capacity
-    sold_tokens_by_product: available_tokens_by_product * utilization_of_token_capacity
-    revenue_active_months: >
-      if year < go_live_year then 0
-      else if year == go_live_year then 12 - go_live_month + 1
+    workplace_sold_tokens: workplace_available_tokens * utilization_of_token_capacity
+    contact_center_sold_tokens: contact_center_available_tokens * utilization_of_token_capacity
+    workplace_token_share: workplace_annual_tokens / total_annual_tokens
+    contact_center_token_share: contact_center_annual_tokens / total_annual_tokens
+    workplace_revenue_active_months: >
+      if year < workplace_go_live_year then 0
+      else if year == workplace_go_live_year then 12 - workplace_go_live_month + 1
       else 12
-    revenue_availability_factor: revenue_active_months / 12
+    contact_center_revenue_active_months: >
+      if year < contact_center_go_live_year then 0
+      else if year == contact_center_go_live_year then 12 - contact_center_go_live_month + 1
+      else 12
+    workplace_revenue_availability_factor: workplace_revenue_active_months / 12
+    contact_center_revenue_availability_factor: contact_center_revenue_active_months / 12
     pricing_base: total_cogs + total_depreciation_and_amortization
-    pricing_base_by_product: pricing_base * product_token_share
-    annual_revenue_before_go_live_adjustment: pricing_base_by_product / (1 - target_contribution_margin)
-    revenue_by_product: annual_revenue_before_go_live_adjustment * revenue_availability_factor
-    total_revenue: sum(revenue_by_product)
-    implied_price_per_1m_tokens: revenue_by_product / sold_tokens_by_product * 1000000
+    workplace_pricing_base: pricing_base * workplace_token_share
+    contact_center_pricing_base: pricing_base * contact_center_token_share
+    workplace_ai_revenue: workplace_pricing_base / (1 - target_contribution_margin) * workplace_revenue_availability_factor
+    contact_center_ai_revenue: contact_center_pricing_base / (1 - target_contribution_margin) * contact_center_revenue_availability_factor
+    total_revenue: workplace_ai_revenue + contact_center_ai_revenue
+    workplace_implied_price_per_1m_tokens: workplace_ai_revenue / workplace_sold_tokens * 1000000
+    contact_center_implied_price_per_1m_tokens: contact_center_ai_revenue / contact_center_sold_tokens * 1000000
+  go_live_sources:
+    workplace_go_live_year: capex.intangible_assets.products.workplace_ai.go_live_year
+    workplace_go_live_month: capex.intangible_assets.products.workplace_ai.go_live_month
+    contact_center_go_live_year: capex.intangible_assets.products.contact_center_ai.go_live_year
+    contact_center_go_live_month: capex.intangible_assets.products.contact_center_ai.go_live_month
   pricing_base_description: >
     База для расчета выручки и implied token price включает COGS и depreciation & amortization.
     SG&A не включается в pricing base и учитывается ниже в P&L.
@@ -1168,7 +1193,7 @@ report_output:
         - average_owned_gpu
         - total_load_mw
         - electricity_kwh
-        - electricity_price
+        - electricity_price_t
         - electricity_cost
         - maintenance_cost
         - network_cost
