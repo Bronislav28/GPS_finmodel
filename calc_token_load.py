@@ -1135,6 +1135,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         excess_cash_available_for_repayment = max((cash_after_drawdown or 0.0) - minimum_cash_balance, 0.0)
         revolver_repayment = min(excess_cash_available_for_repayment, opening_revolver_balance)
         revolver_balance = opening_revolver_balance + revolver_drawdown - revolver_repayment
+        financing_cash_flow = safe_add(equity_injection, revolver_drawdown, -revolver_repayment)
+        net_cash_flow = safe_add(pre_financing_cash_flow, financing_cash_flow)
         closing_cash_after_funding = safe_add(cash_after_drawdown, -revolver_repayment)
         closing_cash = closing_cash_after_funding
         cumulative_cash = safe_add(cumulative_cash_prev, net_cash_flow)
@@ -1181,6 +1183,14 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "gpu_depreciation": gpu_depreciation,
                 "datacenter_depreciation": datacenter_depreciation,
                 "office_capex_depreciation": office_capex_depreciation,
+                "office_server_depreciation": office_server_depreciation,
+                "employee_laptops_depreciation": employee_laptops_depreciation,
+                "executive_laptops_depreciation": executive_laptops_depreciation,
+                "mfu_depreciation": mfu_depreciation,
+                "meeting_rooms_depreciation": meeting_rooms_depreciation,
+                "office_furniture_depreciation": office_furniture_depreciation,
+                "workplace_ai_amortization": workplace_ai_amortization,
+                "contact_center_ai_amortization": contact_center_ai_amortization,
                 "ip_amortization": ip_amortization,
                 "total_ppe_depreciation": total_ppe_depreciation,
                 "total_ip_amortization": total_ip_amortization,
@@ -1202,6 +1212,7 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "land_rent": land_rent,
                 "datacenter_opex": datacenter_opex,
                 "other_opex": other_opex,
+                "datacenter_maintenance_base": maintenance_base if 'maintenance_base' in locals() else float("nan"),
                 "total_datacenter_opex": total_datacenter_opex,
                 "rental_price_per_gpu_per_year": rental_price_per_gpu_per_year,
                 "annual_gpu_rental_cost": annual_gpu_rental_cost,
@@ -1238,11 +1249,18 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "total_opex": total_opex,
                 "workplace_ai_revenue": workplace_ai_revenue,
                 "contact_center_ai_revenue": contact_center_ai_revenue,
+                "pricing_base": pricing_base if 'pricing_base' in locals() else float("nan"),
+                "workplace_pricing_base": pricing_base_wp if 'pricing_base_wp' in locals() else float("nan"),
+                "contact_center_pricing_base": pricing_base_cc if 'pricing_base_cc' in locals() else float("nan"),
+                "target_contribution_margin": contribution_margin,
+                "workplace_revenue_availability_factor": wp_revenue_factor,
+                "contact_center_revenue_availability_factor": cc_revenue_factor,
                 "total_revenue": total_revenue,
                 "workplace_implied_price_per_1m_tokens": workplace_implied_price_per_1m_tokens,
                 "contact_center_implied_price_per_1m_tokens": contact_center_implied_price_per_1m_tokens,
                 "other_datacenter_opex": other_opex,
                 "total_cogs": total_cogs,
+                "tangible_capex": safe_add(gpu_infra_capex, datacenter_construction_capex, office_capex),
                 "gross_profit": gross_profit,
                 "ebitda": ebitda,
                 "ebit": ebit,
@@ -1267,6 +1285,11 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
                 "cumulative_cash": cumulative_cash,
                 "free_cash_flow": free_cash_flow,
                 "funding_need": funding_need,
+                "opening_revolver_balance": opening_revolver_balance,
+                "average_revolver_balance": avg_revolver_balance,
+                "revolver_interest_rate": revolver_interest_rate,
+                "closing_cash_before_funding": closing_cash_before_funding,
+                "cash_after_drawdown": cash_after_drawdown,
                 "equity_injection": equity_injection,
                 "revolver_drawdown": revolver_drawdown,
                 "revolver_repayment": revolver_repayment,
