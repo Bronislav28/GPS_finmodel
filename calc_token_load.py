@@ -1866,7 +1866,19 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     active_scenario = latest.get("active_scenario", "N/A")
     dt = __import__("datetime")
     ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
+    sl_margin_default = (as_float(metric_store.get("target_contribution_margin", {}).get(years[0])) or 0.30)
+    sl_gpu_cost_default = float(as_float((assumptions.get("capex", {}).get("gpu", {}) or {}).get("unit_cost")) or 0.0)
+    sl_rent_default = float(as_float(((assumptions.get("opex", {}).get("gpu_rental", {}) or {}).get("rental_price_per_gpu_per_year")) or 0.0)
+        or as_float((assumptions.get("opex", {}).get("gpu_rental", {}) or {}).get("rental_price_per_gpu_per_year", {}).get("value"))
+        or 0.0)
+    sl_dr_default = float(as_float(metric_store.get("discount_rate", {}).get(years[0])) or 0.30)
+    scenario_lab_data = {
+        "base_npv": as_float(metric_store.get("npv", {}).get(years[0])) or 0.0,
+        "rows": [{k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in r.items()} for r in rows],
+        "infra_multiplier": as_float((assumptions.get("capex", {}).get("infra_multiplier", {}) or {}).get("value")) or 0.0,
+        "profit_tax_rate": as_float((((assumptions.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}) or {}).get("value")) or 0.0,
+    }
+    html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
 body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
 .nav{{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid #e5e7eb;padding:10px 24px}}
@@ -1918,6 +1930,20 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'>Discount rate updates DCF / NPV only. It does not change operating model, P&L, funding, or balance sheet.</div>
 </div>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
+<section><h2>Scenario Lab — NPV What-if</h2>
+<div class='card'>
+  <div class='note'>Scenario Lab is an indicative browser-side what-if tool. The official report tables remain the Python-calculated base case.</div>
+  <div class='note'>Scenario Lab v1 holds datacenter construction CAPEX and some funding mechanics constant.</div>
+  <div class='grid'>
+    <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin</label><input id='sl_margin' type='number' step='0.01' value='{sl_margin_default:.2f}'/></div></div>
+    <div class='card'><h3>Compute & GPU</h3><div class='ctrl'><label>weighted_throughput_multiplier</label><input id='sl_wt' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>utilization_multiplier</label><input id='sl_util' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>gpu_unit_cost</label><input id='sl_gpu_cost' type='number' step='1' value='{sl_gpu_cost_default:.0f}'/></div><div class='ctrl'><label>gpu_rental_price_per_gpu_per_year</label><input id='sl_rent' type='number' step='1' value='{sl_rent_default:.0f}'/></div></div>
+    <div class='card'><h3>Team & OPEX</h3><div class='ctrl'><label>core_team_fte_multiplier</label><input id='sl_fte' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>core_team_salary_multiplier</label><input id='sl_salary' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>sga_salary_multiplier</label><input id='sl_sga' type='number' step='0.01' value='1.00'/></div></div>
+    <div class='card'><h3>Finance</h3><div class='ctrl'><label>discount_rate</label><input id='sl_dr' type='number' step='0.01' value='{sl_dr_default:.2f}'/></div></div>
+  </div>
+  <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button></div>
+  <div class='grid' id='sl_kpis' style='margin-top:10px'></div>
+  <div id='sl_warn' class='note'></div>
+</div></section>
 <section><h2>Charts Overview</h2><div class='grid charts'>{charts_html}</div></section>
 {''.join(sections_html)}
 </div>
@@ -1996,9 +2022,55 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   }};
   input.addEventListener('input', recalc);
   recalc();
+
+  __SCENARIO_LAB_JS__
 }})();
 </script>
 </body></html>"""
+    scenario_lab_js = """
+const SL_BASE = __SCENARIO_LAB_DATA__;
+(function initScenarioLab(){
+  try {
+    const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_fte','sl_salary','sl_sga','sl_dr'];
+    const read=()=>Object.fromEntries(slIds.map(id=>[id,Number(document.getElementById(id).value)]));
+    const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+    const fi=(v)=>String(Math.round(v));
+    const render=(out)=>{ const d=out.npv-SL_BASE.base_npv; const cls=d>=0?'ok':'neg';
+      document.getElementById('sl_kpis').innerHTML=
+      "<div class='kpi'><div class='k'>Base NPV</div><div class='v'>"+fm(SL_BASE.base_npv)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Scenario NPV</div><div class='v'>"+fm(out.npv)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Delta NPV</div><div class='v "+cls+"'>"+fm(d)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Revenue 2030</div><div class='v'>"+fm(out.rev2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>EBITDA 2030</div><div class='v'>"+fm(out.ebitda2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Total CAPEX</div><div class='v'>"+fm(out.totalCapex)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Required GPU 2030</div><div class='v'>"+fi(out.req2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Revolver Balance 2030</div><div class='v'>"+fm(out.revBal2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Payback</div><div class='v'>N/A</div></div>";
+    };
+    const calc=()=>{ const p=read(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
+      SL_BASE.rows.forEach((r,idx)=>{ const wp=(r.workplace_annual_tokens||0)*p.sl_wp_tok*p.sl_wp_act; const cc=(r.contact_center_annual_tokens||0)*p.sl_cc_tok*p.sl_cc_auto;
+        const tps=(wp+cc)/(((r.total_annual_tokens||1)/(r.tokens_per_second||1))||1);
+        const req=Math.ceil(tps/(((r.weighted_throughput||1)*p.sl_wt)*((r.utilization||0.5)*p.sl_util))*(r.peak_factor||1));
+        const s=(r.required_gpu||0)>0?req/(r.required_gpu||1):1;
+        const team=(r.annual_core_team_cash_cost||0)*p.sl_fte*p.sl_salary-(r.capitalized_core_team_cost||0);
+        const sga=(r.annual_fixed_sga||0)*p.sl_sga+(r.annual_office_rent||0);
+        const cogs=(r.total_datacenter_opex||0)*s+team+(r.rented_gpu||0)*p.sl_rent; const da=(r.total_depreciation_and_amortization||0);
+        const rev=(cogs+da)/(1-Math.min(Math.max(p.sl_margin,0),0.99)); const ebitda=(rev-cogs)-sga;
+        const ni=(ebitda-da-(r.interest_expense||0))*(1-(SL_BASE.profit_tax_rate||0)); const ocf=ni+da;
+        const gi=(r.owned_gpu_increment||0)*s*p.sl_gpu_cost*(SL_BASE.infra_multiplier||0);
+        const invest=-(gi+(r.datacenter_construction_capex||0)+(r.office_capex||0)+(r.intangible_capex||0));
+        npv+=(ocf+invest)/Math.pow(1+p.sl_dr,idx); totalCapex+=(gi+(r.datacenter_construction_capex||0)+(r.office_capex||0)+(r.intangible_capex||0));
+        if(idx===SL_BASE.rows.length-1){rev2030=rev;ebitda2030=ebitda;req2030=req;revBal2030=r.revolver_balance||0;}
+      }); render({npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030}); };
+    document.getElementById('sl_recalc').addEventListener('click',calc);
+    document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); e.value=e.defaultValue;}); calc();});
+    calc();
+  } catch(e){ console.warn('Scenario Lab initialization failed',e); const w=document.getElementById('sl_warn'); if(w) w.textContent='Scenario Lab failed to initialize.'; }
+})();
+"""
+    html = html.replace("__SCENARIO_LAB_DATA__", json.dumps(scenario_lab_data, ensure_ascii=False))
+    html = html.replace("__SCENARIO_LAB_JS__", scenario_lab_js)
+    return html
 
 def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
