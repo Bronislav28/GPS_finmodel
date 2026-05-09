@@ -1493,9 +1493,19 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     years, metric_store, _ = build_metric_store(rows, assumptions)
     report_tables_raw = (((assumptions.get("report_output", {}) or {}).get("tables")) or {})
     report_tables = list(report_tables_raw.values()) if isinstance(report_tables_raw, dict) else report_tables_raw
-    hy = "".join(f"<th>{y}</th>" for y in years)
-    tables = []
+    hy = "".join(f"<th class='yr'>{y}</th>" for y in years)
+    tables_by_title: dict[str, str] = {}
     scenario_cmp = build_scenario_comparison(assumptions)
+
+    def render_value(v: Any) -> str:
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "<span class='na'>N/A</span>"
+        fv = as_float(v)
+        if fv is None:
+            return str(v)
+        cls = "neg" if fv < 0 else ("zero" if abs(fv) < 1e-12 else "")
+        return f"<span class='{cls}'>{fmt_num(fv,2)}</span>"
+
     for table in report_tables:
         if not isinstance(table, dict):
             continue
@@ -1519,7 +1529,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                     else:
                         cells.append(f"<td>{fmt_num(fv,2)}</td>")
                 body_rows.append(f"<tr><td>{row_name}</td>{''.join(cells)}</tr>")
-            tables.append(f"<h2>{title}</h2><table><thead><tr><th>Scenario</th>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>")
+            tables_by_title[title] = f"<div class='card'><h3>{title}</h3><table><thead><tr><th>Scenario</th>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>"
             continue
         body = []
         for metric in table.get("rows", []):
@@ -1533,13 +1543,9 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
             cells=[]
             for y in years:
                 v = vals.get(y) if vals else None
-                if v is None or (isinstance(v,float) and math.isnan(v)):
-                    cells.append("<td>N/A</td>")
-                else:
-                    fv=as_float(v)
-                    cells.append(f"<td>{v if fv is None else fmt_num(fv,2)}</td>")
-            body.append(f"<tr><td>{metric}</td>{''.join(cells)}</tr>")
-        tables.append(f"<h2>{title}</h2><table><thead><tr><th>Metric</th>{hy}</tr></thead><tbody>{''.join(body)}</tbody></table>")
+                cells.append(f"<td class='num'>{render_value(v)}</td>")
+            body.append(f"<tr><td class='metric'>{metric}</td>{''.join(cells)}</tr>")
+        tables_by_title[title] = f"<div class='card'><h3>{title}</h3><table><thead><tr><th>Metric</th>{hy}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
     wt,cm,matrix = build_sensitivity_matrix(assumptions, rows)
     scol = ''.join(f'<th>{c:.2f}</th>' for c in cm)
     sbody=[]
@@ -1549,8 +1555,59 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
             for c in cm
         )
         sbody.append(f"<tr><td>{w:.2f}</td>{row}</tr>")
-    sensitivity_html=f"<h2>Sensitivity Analysis — NPV</h2><table><thead><tr><th>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table>"
-    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>GPS Finmodel</title><style>body{{font-family:Arial,sans-serif;margin:24px}}table{{border-collapse:collapse;width:100%;margin:10px 0 24px}}th,td{{border:1px solid #ddd;padding:6px;text-align:right;font-size:13px}}th:first-child,td:first-child{{text-align:left}}thead{{background:#f3f4f6}}</style></head><body><h1>GPS Finmodel Report (2026–2030)</h1><div><label><b>Revenue scenario dropdown</b></label> <select><option>base</option></select> <label><b>Infrastructure scenario dropdown</b></label> <select><option>build_own_dc</option><option>rent_gpu_only</option><option>hybrid</option></select> <label><b>construction_start_year input</b></label><input type='number'/> <label><b>funding scenario dropdown</b></label><select><option>equity_only</option><option>revolver_only</option><option>mix</option></select> <label><b>funding mix inputs</b></label><input/><input/> <label><b>discount rate input</b></label><input type='number' step='0.01'/></div>{''.join(tables)}{sensitivity_html}</body></html>"""
+    sensitivity_html = f"<div class='card'><h3>Sensitivity Analysis — NPV</h3><div class='table-wrap'><table class='sensitivity'><thead><tr><th class='sticky'>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table></div></div>"
+    tables_by_title["Sensitivity Analysis"] = sensitivity_html
+
+    section_map = {
+        "Operating Model": ["Token Load", "GPU Calculation", "Infrastructure Scenario"],
+        "Investment Plan": ["CAPEX", "Datacenter Construction CAPEX", "Office CAPEX", "Intangible Assets", "Depreciation & Amortization"],
+        "Operating Costs": ["Datacenter OPEX", "Team OPEX", "GPU Rental OPEX", "SG&A"],
+        "Financial Statements": ["Revenue", "COGS", "P&L Summary", "Cash Flow Statement", "Funding", "Balance Sheet"],
+        "Investment Case": ["DCF", "Investment Metrics", "Return Metrics", "Scenario Comparison", "Sensitivity Analysis"],
+    }
+    sections_html = []
+    for sec, names in section_map.items():
+        blocks = "".join(tables_by_title.get(n, "") for n in names if n in tables_by_title)
+        if blocks:
+            sections_html.append(f"<section><h2>{sec}</h2>{blocks}</section>")
+
+    latest = rows[-1]
+    kpis = [
+        ("NPV", metric_store.get("npv", {}).get(years[0])),
+        ("IRR", metric_store.get("irr", {}).get(years[0])),
+        ("Revenue 2030", metric_store.get("total_revenue", {}).get(years[-1])),
+        ("EBITDA 2030", metric_store.get("ebitda", {}).get(years[-1])),
+        ("Net Income 2030", metric_store.get("net_income", {}).get(years[-1])),
+        ("Total CAPEX", sum((as_float(r.get("total_capex")) or 0.0) for r in rows)),
+        ("Peak Required GPU", max((as_float(r.get("required_gpu")) or 0.0) for r in rows)),
+        ("Revolver Balance 2030", metric_store.get("revolver_balance", {}).get(years[-1])),
+        ("Payback", metric_store.get("simple_payback", {}).get(years[0])),
+    ]
+    kpi_html = "".join(f"<div class='kpi'><div class='k'>{k}</div><div class='v'>{render_value(v)}</div></div>" for k, v in kpis)
+    active_scenario = latest.get("active_scenario", "N/A")
+    dt = __import__("datetime")
+    ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
+body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
+.nav{{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid #e5e7eb;padding:10px 24px}}
+.container{{max-width:1280px;margin:0 auto;padding:20px}}
+h1{{margin:0;font-size:28px}} .sub{{color:#6b7280;margin-top:4px}}
+.meta{{margin-top:8px;color:#4b5563;font-size:12px}}
+section h2{{margin:24px 0 12px;font-size:18px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}}
+.kpi{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px}}
+.kpi .k{{font-size:12px;color:#6b7280}} .kpi .v{{font-size:18px;font-weight:600;margin-top:6px}}
+.card{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}}
+.card h3{{margin:4px 0 10px;font-size:15px}}
+table{{width:100%;border-collapse:collapse;font-size:12px}} th,td{{padding:6px 8px;border-bottom:1px solid #edf1f5}} th{{background:#f8fafc;color:#374151}}
+th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{text-align:right}}
+.neg{{color:#b91c1c}} .zero{{color:#9ca3af}} .na{{color:#9ca3af}} .kpi .v span{{color:inherit}}
+.table-wrap{{overflow:auto;max-width:100%}} .sticky{{position:sticky;left:0;background:#f8fafc}}
+</style></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
+<header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
+<section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
+{''.join(sections_html)}
+</div></body></html>"""
 
 def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
