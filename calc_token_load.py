@@ -657,8 +657,15 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
     if abs((equity_share + revolver_share) - 1.0) > 1e-9:
         print(f"WARNING: funding shares sum != 1.0 ({equity_share + revolver_share:.4f})", file=sys.stderr)
     revolver_rate_map = to_year_map((funding_cfg.get("revolver", {}) or {}).get("interest_rate"))
-    min_cash_cfg = ((funding_cfg.get("revolver", {}) or {}).get("repayment_logic", {}) or {}).get("minimum_cash_balance", {}) or {}
-    min_cash_buffer_months = as_float((min_cash_cfg.get("months_of_fixed_costs", {}) or {}).get("value")) or 0.0
+    min_cash_cfg_new = (funding_cfg.get("minimum_cash_balance", {}) or {}) if isinstance(funding_cfg.get("minimum_cash_balance", {}), dict) else {}
+    min_cash_cfg_old = ((funding_cfg.get("revolver", {}) or {}).get("repayment_logic", {}) or {}).get("minimum_cash_balance", {}) or {}
+    min_cash_months = as_float((min_cash_cfg_new.get("months_of_fixed_costs", {}) or {}).get("value"))
+    if min_cash_months is None:
+        min_cash_months = as_float((min_cash_cfg_old.get("months_of_fixed_costs", {}) or {}).get("value"))
+    if min_cash_months is None:
+        print("WARNING: funding.minimum_cash_balance.months_of_fixed_costs.value отсутствует; используется 0.", file=sys.stderr)
+        min_cash_months = 0.0
+    min_cash_buffer_months = float(min_cash_months)
 
     base_rows: list[dict[str, Any]] = []
     prev_required_gpu = 0
@@ -1090,6 +1097,8 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         monthly_gpu_rental_opex = safe_mul(annual_gpu_rental_cost, 1 / 12.0)
         monthly_fixed_costs = safe_add(monthly_team_opex, monthly_sga, monthly_gpu_rental_opex)
         minimum_cash_balance = safe_mul(monthly_fixed_costs, min_cash_buffer_months)
+        if math.isnan(minimum_cash_balance):
+            minimum_cash_balance = 0.0
         interest_expense = ((opening_revolver_balance + opening_revolver_balance) / 2.0) * revolver_interest_rate
         ebt = safe_add(ebit, -interest_expense)
         profit_tax = max(ebt, 0.0) * float(profit_tax_rate) if not math.isnan(ebt) else float("nan")
