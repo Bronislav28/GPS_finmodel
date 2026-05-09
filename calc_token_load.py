@@ -1515,12 +1515,29 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     tables_by_title: dict[str, str] = {}
     scenario_cmp = build_scenario_comparison(assumptions)
 
-    def render_value(v: Any) -> str:
+    pct_metrics = {"discount_rate", "irr", "roic", "roe", "roa", "utilization", "target_contribution_margin", "contribution_margin"}
+    x_metrics = {"debt_to_equity", "net_debt_to_ebitda", "interest_coverage"}
+
+    def render_value(v: Any, metric: str | None = None) -> str:
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return "<span class='na'>N/A</span>"
         fv = as_float(v)
         if fv is None:
             return str(v)
+        metric_name = metric or ""
+        if metric_name == "construction_start_year" or metric_name.endswith("_year"):
+            cls = "neg" if fv < 0 else ("zero" if abs(fv) < 1e-12 else "")
+            return f"<span class='{cls}'>{int(round(fv))}</span>"
+        if metric_name in {"simple_payback", "discounted_payback"}:
+            if abs(fv - round(fv)) < 1e-9:
+                cls = "neg" if fv < 0 else ("zero" if abs(fv) < 1e-12 else "")
+                return f"<span class='{cls}'>{int(round(fv))}</span>"
+        if metric_name in pct_metrics:
+            cls = "neg" if fv < 0 else ("zero" if abs(fv) < 1e-12 else "")
+            return f"<span class='{cls}'>{fv * 100:.1f}%</span>"
+        if metric_name in x_metrics:
+            cls = "neg" if fv < 0 else ("zero" if abs(fv) < 1e-12 else "")
+            return f"<span class='{cls}'>{fv:.2f}x</span>"
         cls = "neg" if fv < 0 else ("zero" if abs(fv) < 1e-12 else "")
         return f"<span class='{cls}'>{fmt_num(fv,2)}</span>"
 
@@ -1609,11 +1626,12 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                     v = vals.get(c)
                     fv = as_float(v)
                     if v is None or (isinstance(v, float) and math.isnan(v)):
-                        cells.append("<td>N/A</td>")
+                        cells.append("<td><span class='na'>N/A</span></td>")
                     elif fv is None:
                         cells.append(f"<td>{v}</td>")
                     else:
-                        cells.append(f"<td>{fmt_num(fv,2)}</td>")
+                        display = render_value(fv, c if c in pct_metrics or c in x_metrics else None)
+                        cells.append(f"<td>{display}</td>")
                 body_rows.append(f"<tr><td>{row_name}</td>{''.join(cells)}</tr>")
             tables_by_title[title] = f"<div class='card'><h3>{title}</h3><table><thead><tr><th>Scenario</th>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>"
             continue
@@ -1629,11 +1647,11 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
             cells=[]
             for y in years:
                 v = vals.get(y) if vals else None
-                cells.append(f"<td class='num'>{render_value(v)}</td>")
+                cells.append(f"<td class='num'>{render_value(v, metric)}</td>")
             body.append(f"<tr><td class='metric'>{metric}</td>{''.join(cells)}</tr>")
         tables_by_title[title] = f"<div class='card'><h3>{title}</h3><table><thead><tr><th>Metric</th>{hy}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
     wt,cm,matrix = build_sensitivity_matrix(assumptions, rows)
-    scol = ''.join(f'<th>{c:.2f}</th>' for c in cm)
+    scol = ''.join(f'<th>{c:.2f}x</th>' for c in cm)
     sbody=[]
     npv_vals = [float(v) for v in matrix.values() if v is not None]
     npv_min = min(npv_vals) if npv_vals else 0.0
@@ -1656,7 +1674,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         row = "".join(
             cells
         )
-        sbody.append(f"<tr><td class='sticky'>{w:.2f}</td>{row}</tr>")
+        sbody.append(f"<tr><td class='sticky'>{w:.2f}x</td>{row}</tr>")
     sensitivity_html = f"<div class='card'><h3>Sensitivity Analysis — NPV</h3><div class='table-wrap'><table class='sensitivity'><thead><tr><th class='sticky'>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table></div></div>"
     tables_by_title["Sensitivity Analysis"] = sensitivity_html
 
@@ -1768,6 +1786,15 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .base-cell{{outline:2px solid #111827;outline-offset:-2px}}
 </style></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
+<div class='card'>
+  <h3>Model Status</h3>
+  <div class='meta'>Active infrastructure scenario: {active_scenario}</div>
+  <div class='meta'>Active revenue scenario: {assumptions.get("revenue",{}).get("active_scenario","base")}</div>
+  <div class='meta'>Active funding scenario: {assumptions.get("funding",{}).get("active_scenario","mix")}</div>
+  <div class='meta'>Discount rate: {render_value(metric_store.get("discount_rate", {}).get(years[0]), "discount_rate")}</div>
+  <div class='meta'>Generated timestamp: {ts}</div>
+  <div class='note'>Scenario switching is disabled in this version.</div>
+</div>
 <div class='card'>
   <h3>Controls</h3>
   <div class='controls'>
