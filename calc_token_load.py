@@ -2031,6 +2031,9 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 const SL_BASE = __SCENARIO_LAB_DATA__;
 (function initScenarioLab(){
   try {
+    if (!SL_BASE || !Array.isArray(SL_BASE.rows)) {
+      throw new Error("Scenario Lab data missing");
+    }
     const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_fte','sl_salary','sl_sga','sl_dr'];
     const read=()=>Object.fromEntries(slIds.map(id=>[id,Number(document.getElementById(id).value)]));
     const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -2068,8 +2071,9 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
   } catch(e){ console.warn('Scenario Lab initialization failed',e); const w=document.getElementById('sl_warn'); if(w) w.textContent='Scenario Lab failed to initialize.'; }
 })();
 """
-    html = html.replace("__SCENARIO_LAB_DATA__", json.dumps(scenario_lab_data, ensure_ascii=False))
+    scenario_lab_json = json.dumps(scenario_lab_data, ensure_ascii=False)
     html = html.replace("__SCENARIO_LAB_JS__", scenario_lab_js)
+    html = html.replace("__SCENARIO_LAB_DATA__", scenario_lab_json)
     return html
 
 def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
