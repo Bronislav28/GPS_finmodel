@@ -1877,6 +1877,18 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         "base_discount_rate": sl_dr_default,
         "base_gpu_unit_cost": sl_gpu_cost_default,
         "base_rental_price": sl_rent_default,
+        "active_infrastructure_scenario": str((assumptions.get("capex", {}).get("strategy_scenarios", {}) or {}).get("active_scenario", "hybrid")),
+        "active_funding_scenario": str((assumptions.get("funding", {}) or {}).get("active_scenario", "mix")),
+        "construction_start_year": as_float(rows[-1].get("construction_start_year")) if rows else 2028,
+        "funding_scenarios": {
+            "equity_only": {"equity_share": 1.0, "revolver_share": 0.0},
+            "revolver_only": {"equity_share": 0.0, "revolver_share": 1.0},
+            "mix": {
+                "equity_share": as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5),
+                "revolver_share": as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("revolver_share", {}) or {}).get("value")) or 0.5),
+            },
+        },
+        "infra_scenarios": ["build_own_dc", "rent_gpu_only", "hybrid"],
         "rows": [{k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in r.items()} for r in rows],
         "infra_multiplier": as_float((assumptions.get("capex", {}).get("infra_multiplier", {}) or {}).get("value")) or 0.0,
         "profit_tax_rate": as_float((((assumptions.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}) or {}).get("value")) or 0.0,
@@ -2039,6 +2051,17 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     if (!SL_BASE || !Array.isArray(SL_BASE.rows)) {
       throw new Error("Scenario Lab data missing");
     }
+    const host=document.getElementById('sl_warn');
+    if(host){
+      const wrap=document.createElement('div');
+      wrap.className='controls';
+      wrap.innerHTML="<div class='ctrl'><label>infrastructure_scenario</label><select id='sl_infra_scenario'></select></div><div class='ctrl'><label>funding_scenario</label><select id='sl_funding_scenario'><option>equity_only</option><option>revolver_only</option><option>mix</option></select></div><div class='note'>Scenario switches affect Scenario Lab only. The official report remains the YAML base case.</div>";
+      host.parentNode.insertBefore(wrap, host);
+      const infraSel=wrap.querySelector('#sl_infra_scenario');
+      (SL_BASE.infra_scenarios||['build_own_dc','rent_gpu_only','hybrid']).forEach(s=>{ const o=document.createElement('option'); o.value=s;o.textContent=s; infraSel.appendChild(o); });
+      infraSel.value=SL_BASE.active_infrastructure_scenario||'hybrid';
+      wrap.querySelector('#sl_funding_scenario').value=SL_BASE.active_funding_scenario||'mix';
+    }
     const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_fte','sl_salary','sl_sga','sl_dr'];
     const read=()=>Object.fromEntries(slIds.map(id=>[id,Number(document.getElementById(id).value)]));
     const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -2050,35 +2073,56 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       "<div class='kpi'><div class='k'>Base NPV</div><div class='v'>"+fm(SL_BASE.base_npv)+"</div></div>"+
       "<div class='kpi'><div class='k'>Scenario NPV</div><div class='v'>"+fm(out.npv)+"</div></div>"+
       "<div class='kpi'><div class='k'>Delta NPV</div><div class='v "+cls+"'>"+fm(d)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Infrastructure Scenario</div><div class='v'>"+out.infra+"</div></div>"+
+      "<div class='kpi'><div class='k'>Funding Scenario</div><div class='v'>"+out.funding+"</div></div>"+
       "<div class='kpi'><div class='k'>Revenue 2030</div><div class='v'>"+fm(out.rev2030)+"</div></div>"+
       "<div class='kpi'><div class='k'>EBITDA 2030</div><div class='v'>"+fm(out.ebitda2030)+"</div></div>"+
       "<div class='kpi'><div class='k'>Total CAPEX</div><div class='v'>"+fm(out.totalCapex)+"</div></div>"+
       "<div class='kpi'><div class='k'>Required GPU 2030</div><div class='v'>"+fi(out.req2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Owned GPU 2030</div><div class='v'>"+fi(out.owned2030||0)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Rented GPU 2030</div><div class='v'>"+fi(out.rented2030||0)+"</div></div>"+
       "<div class='kpi'><div class='k'>Revolver Balance 2030</div><div class='v'>"+fm(out.revBal2030)+"</div></div>"+
       "<div class='kpi'><div class='k'>Payback</div><div class='v'>N/A</div></div>";
     };
     const calc=()=>{ const p=read(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
+      const infra=(document.getElementById('sl_infra_scenario')||{value:SL_BASE.active_infrastructure_scenario}).value;
+      const funding=(document.getElementById('sl_funding_scenario')||{value:SL_BASE.active_funding_scenario}).value;
+      const shares=(SL_BASE.funding_scenarios&&SL_BASE.funding_scenarios[funding])||{equity_share:0.5,revolver_share:0.5};
       const defaults={sl_wp_tok:1,sl_cc_tok:1,sl_wp_act:1,sl_cc_auto:1,sl_margin:1,sl_wt:1,sl_util:1,sl_fte:1,sl_salary:1,sl_sga:1,sl_dr:SL_BASE.base_discount_rate,sl_gpu_cost:SL_BASE.base_gpu_unit_cost,sl_rent:SL_BASE.base_rental_price};
-      const isDefault = slIds.every(k=>Math.abs((p[k]||0)-(defaults[k]||0))<1e-9);
+      const isDefault = slIds.every(k=>Math.abs((p[k]||0)-(defaults[k]||0))<1e-9) && infra===(SL_BASE.active_infrastructure_scenario||'hybrid') && funding===(SL_BASE.active_funding_scenario||'mix');
+      let prevOwned=0, prevClose=0, prevRevBal=0, owned2030=0, rented2030=0;
       SL_BASE.rows.forEach((r,idx)=>{ const wp=(r.workplace_annual_tokens||0)*p.sl_wp_tok*p.sl_wp_act; const cc=(r.contact_center_annual_tokens||0)*p.sl_cc_tok*p.sl_cc_auto;
         const tps=(wp+cc)/(((r.total_annual_tokens||1)/(r.tokens_per_second||1))||1);
         const req=Math.ceil(tps/(((r.weighted_throughput||1)*p.sl_wt)*((r.utilization||0.5)*p.sl_util))*(r.peak_factor||1));
-        const s=(r.required_gpu||0)>0?req/(r.required_gpu||1):1;
+        let owned=0, rented=0; const csy=Math.round(SL_BASE.construction_start_year||2028);
+        if(infra==='build_own_dc'){owned=req; rented=0;} else if(infra==='rent_gpu_only'){owned=0; rented=req;} else { if((r.year||0)<csy){owned=0; rented=req;} else {owned=req; rented=0;} }
+        const s=(r.owned_gpu||0)>0?owned/(r.owned_gpu||1):1;
         const team=(r.annual_core_team_cash_cost||0)*p.sl_fte*p.sl_salary-(r.capitalized_core_team_cost||0);
         const sga=(r.annual_fixed_sga||0)*p.sl_sga+(r.annual_office_rent||0);
-        const cogs=(r.total_datacenter_opex||0)*s+team+(r.rented_gpu||0)*p.sl_rent; const da=(r.total_depreciation_and_amortization||0);
+        const cogs=(r.total_datacenter_opex||0)*(owned>0?s:0)+team+rented*p.sl_rent; const da=(r.total_depreciation_and_amortization||0);
         const m=Math.min(Math.max((r.target_contribution_margin||0)*p.sl_margin,0),0.99);
         const pb=cogs+da; const wpPB=pb*(r.workplace_token_share||0); const ccPB=pb*(r.contact_center_token_share||0);
         const rev=(wpPB/(1-m))*(r.workplace_revenue_availability_factor||0)+(ccPB/(1-m))*(r.contact_center_revenue_availability_factor||0);
-        const ebitda=(rev-cogs)-sga; const ebit=ebitda-da; const ebt=ebit-(r.interest_expense||0); const tax=Math.max(ebt,0)*(SL_BASE.profit_tax_rate||0); const ni=ebt-tax; const ocf=ni+da;
-        const gi=(r.owned_gpu_increment||0)*s*p.sl_gpu_cost*(SL_BASE.infra_multiplier||0);
-        const invest=-(gi+(r.datacenter_construction_capex||0)+(r.office_capex||0)+(r.intangible_capex||0));
-        const fcf=isDefault?(r.free_cash_flow||0):(ocf+invest);
-        npv+=fcf/Math.pow(1+p.sl_dr,idx); totalCapex+=(gi+(r.datacenter_construction_capex||0)+(r.office_capex||0)+(r.intangible_capex||0));
-        if(idx===SL_BASE.rows.length-1){rev2030=rev;ebitda2030=ebitda;req2030=req;revBal2030=r.revolver_balance||0;}
-      }); render({npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030}); };
+        const ownInc=(idx===0)?owned:Math.max(owned-prevOwned,0); prevOwned=owned;
+        const ebt_pre=(rev-cogs)-sga-da;
+        const gi=ownInc*p.sl_gpu_cost*(SL_BASE.infra_multiplier||0);
+        const dcc=(infra==='rent_gpu_only')?0:((infra==='hybrid'&& (r.year||0)!==csy)?0:(r.datacenter_construction_capex||0));
+        const invest=-(gi+dcc+(r.office_capex||0)+(r.intangible_capex||0));
+        const preFin=(ebt_pre - (r.interest_expense||0) - Math.max(ebt_pre-(r.interest_expense||0),0)*(SL_BASE.profit_tax_rate||0) + da) + invest;
+        const openingCash=idx===0?(r.opening_cash||0):prevClose;
+        const openingRev=idx===0?0:prevRevBal;
+        const floor=(r.minimum_cash_balance||0);
+        const need=Math.max(-(openingCash+preFin),0);
+        const eq=need*(shares.equity_share||0), drw=need*(shares.revolver_share||0);
+        const cashAfter=openingCash+preFin+eq+drw;
+        const repay=Math.min(Math.max(cashAfter-floor,0),openingRev);
+        const revBal=openingRev+drw-repay; prevRevBal=revBal; prevClose=cashAfter-repay;
+        const fcf=isDefault?(r.free_cash_flow||0):(preFin+eq+drw-repay);
+        npv+=fcf/Math.pow(1+p.sl_dr,idx); totalCapex+=(gi+dcc+(r.office_capex||0)+(r.intangible_capex||0));
+        if(idx===SL_BASE.rows.length-1){rev2030=rev;ebitda2030=(rev-cogs)-sga;req2030=req;revBal2030=revBal;owned2030=owned;rented2030=rented;}
+      }); render({npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030,owned2030,rented2030,infra,funding}); };
     document.getElementById('sl_recalc').addEventListener('click',calc);
-    document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); e.value=e.defaultValue;}); calc();});
+    document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); e.value=e.defaultValue;}); const i=document.getElementById('sl_infra_scenario'); if(i) i.value=SL_BASE.active_infrastructure_scenario; const f=document.getElementById('sl_funding_scenario'); if(f) f.value=SL_BASE.active_funding_scenario; calc();});
     calc();
   } catch(e){ console.warn('Scenario Lab initialization failed',e); const w=document.getElementById('sl_warn'); if(w) w.textContent='Scenario Lab failed to initialize.'; }
 })();
