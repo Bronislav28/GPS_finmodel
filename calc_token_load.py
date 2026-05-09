@@ -1514,6 +1514,8 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     hy = "".join(f"<th class='yr'>{y}</th>" for y in years)
     tables_by_title: dict[str, str] = {}
     scenario_cmp = build_scenario_comparison(assumptions)
+    validation_messages: list[str] = []
+    active_scenario = str(rows[-1].get("active_scenario", "N/A")) if rows else "N/A"
 
     pct_metrics = {"discount_rate", "irr", "roic", "roe", "roa", "utilization", "target_contribution_margin", "contribution_margin"}
     x_metrics = {"debt_to_equity", "net_debt_to_ebitda", "interest_coverage"}
@@ -1678,12 +1680,92 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     sensitivity_html = f"<div class='card'><h3>Sensitivity Analysis — NPV</h3><div class='table-wrap'><table class='sensitivity'><thead><tr><th class='sticky'>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table></div></div>"
     tables_by_title["Sensitivity Analysis"] = sensitivity_html
 
+    # Validation checks
+    checks_rows: list[str] = []
+    # 1) Balance sheet check
+    for r in rows:
+        y = int(r["year"])
+        bal = as_float(r.get("balance_check")) or 0.0
+        ok = abs(bal) < 1.0
+        if not ok:
+            validation_messages.append(f"WARNING: balance_check year={y} diff={bal:.4f}")
+        checks_rows.append(f"<tr><td>Balance Sheet</td><td>{y}</td><td>{fmt_num(bal,2)}</td><td class={'ok' if ok else 'warn'}>{'OK' if ok else 'WARNING'}</td></tr>")
+    # 2) CAPEX double counting check
+    for r in rows:
+        y = int(r["year"])
+        expected = -((as_float(r.get("gpu_infra_capex")) or 0.0) + (as_float(r.get("datacenter_construction_capex")) or 0.0) + (as_float(r.get("office_capex")) or 0.0) + (as_float(r.get("intangible_capex")) or 0.0))
+        actual = as_float(r.get("investing_cash_flow")) or 0.0
+        diff = actual - expected
+        ok = abs(diff) < 1.0
+        if not ok:
+            validation_messages.append(f"WARNING: investing_cash_flow year={y} diff={diff:.4f}")
+        checks_rows.append(f"<tr><td>Investing CF composition</td><td>{y}</td><td>{fmt_num(diff,2)}</td><td class={'ok' if ok else 'warn'}>{'OK' if ok else 'WARNING'}</td></tr>")
+    # 3) Revenue go-live expected factors
+    wp_cfg = (((assumptions.get("capex", {}) or {}).get("intangible_assets", {}) or {}).get("products", {}) or {}).get("workplace_ai", {}) or {}
+    cc_cfg = (((assumptions.get("capex", {}) or {}).get("intangible_assets", {}) or {}).get("products", {}) or {}).get("contact_center_ai", {}) or {}
+    wp_y, wp_m = int(as_float(wp_cfg.get("go_live_year")) or years[0]), int(as_float(wp_cfg.get("go_live_month")) or 1)
+    cc_y, cc_m = int(as_float(cc_cfg.get("go_live_year")) or years[0]), int(as_float(cc_cfg.get("go_live_month")) or 1)
+    for y in years:
+        wp_exp = 0.0 if y < wp_y else (12 - wp_m + 1) / 12.0 if y == wp_y else 1.0
+        cc_exp = 0.0 if y < cc_y else (12 - cc_m + 1) / 12.0 if y == cc_y else 1.0
+        ok = True
+        checks_rows.append(f"<tr><td>Revenue go-live factors</td><td>{y}</td><td>WP={wp_exp:.2f}, CC={cc_exp:.2f}</td><td class='ok'>OK</td></tr>")
+    # 4) Funding floor check
+    for r in rows:
+        y = int(r["year"])
+        repay = as_float(r.get("revolver_repayment")) or 0.0
+        cash = as_float(r.get("closing_cash_after_funding")) or 0.0
+        floor = as_float(r.get("minimum_cash_balance")) or 0.0
+        ok = True if repay <= 0 else cash >= (floor - 1.0)
+        if not ok:
+            validation_messages.append(f"WARNING: cash floor year={y} cash={cash:.2f} floor={floor:.2f}")
+        checks_rows.append(f"<tr><td>Funding cash floor</td><td>{y}</td><td>cash={fmt_num(cash,2)} floor={fmt_num(floor,2)}</td><td class={'ok' if ok else 'warn'}>{'OK' if ok else 'WARNING'}</td></tr>")
+    # 5) Electricity check
+    for r in rows:
+        y = int(r["year"]); owned = as_float(r.get("owned_gpu")) or 0.0
+        p = as_float(r.get("electricity_price_t")) or 0.0; kwh = as_float(r.get("electricity_kwh")) or 0.0; cost = as_float(r.get("electricity_cost")) or 0.0
+        ok = (p > 0 and kwh > 0 and cost > 0) if owned > 0 else (p > 0)
+        if not ok:
+            validation_messages.append(f"WARNING: electricity check year={y} owned={owned} price={p} kwh={kwh} cost={cost}")
+        checks_rows.append(f"<tr><td>Electricity</td><td>{y}</td><td>owned={owned:.0f}, tariff={fmt_num(p,2)}, kwh={fmt_num(kwh,0)}, cost={fmt_num(cost,2)}</td><td class={'ok' if ok else 'warn'}>{'OK' if ok else 'WARNING'}</td></tr>")
+    # 6) DCF check
+    npv_val = as_float(metric_store.get("npv", {}).get(years[0])) or 0.0
+    dcf_sum = sum((as_float(metric_store.get("discounted_fcf", {}).get(y)) or 0.0) for y in years)
+    dcf_diff = npv_val - dcf_sum
+    dcf_ok = abs(dcf_diff) < 1.0
+    checks_rows.append(f"<tr><td>DCF NPV sum</td><td>All</td><td>{fmt_num(dcf_diff,2)}</td><td class={'ok' if dcf_ok else 'warn'}>{'OK' if dcf_ok else 'WARNING'}</td></tr>")
+    if not dcf_ok:
+        validation_messages.append(f"WARNING: dcf npv diff={dcf_diff:.4f}")
+    # 7) Sensitivity base cell check
+    sens_base = matrix.get((1.0, 1.0))
+    sens_diff = (as_float(sens_base) or 0.0) - npv_val
+    sens_ok = abs(sens_diff) < 1.0
+    checks_rows.append(f"<tr><td>Sensitivity base cell</td><td>1.00x/1.00x</td><td>{fmt_num(sens_diff,2)}</td><td class={'ok' if sens_ok else 'warn'}>{'OK' if sens_ok else 'WARNING'}</td></tr>")
+    if not sens_ok:
+        validation_messages.append(f"WARNING: sensitivity base diff={sens_diff:.4f}")
+    # 8) Scenario comparison active scenario check
+    sc = str(active_scenario)
+    sc_row = scenario_cmp.get(sc, {})
+    active_ok = True
+    if sc_row:
+        active_ok = (
+            abs((as_float(sc_row.get("npv")) or 0.0) - npv_val) < 1.0
+            and str(sc_row.get("simple_payback")) == str(metric_store.get("simple_payback", {}).get(years[0]))
+            and str(sc_row.get("discounted_payback")) == str(metric_store.get("discounted_payback", {}).get(years[0]))
+        )
+    checks_rows.append(f"<tr><td>Scenario comparison active row</td><td>{sc}</td><td>match base metrics</td><td class={'ok' if active_ok else 'warn'}>{'OK' if active_ok else 'WARNING'}</td></tr>")
+    if not active_ok:
+        validation_messages.append(f"WARNING: scenario comparison mismatch for active={sc}")
+    tables_by_title["Model Validation Checks"] = f"<div class='card'><h3>Model Validation Checks</h3><table><thead><tr><th>Check</th><th>Year</th><th>Detail / Difference</th><th>Status</th></tr></thead><tbody>{''.join(checks_rows)}</tbody></table></div>"
+    for msg in validation_messages:
+        print(msg, file=sys.stderr)
+
     section_map = {
         "Operating Model": ["Token Load", "GPU Calculation", "Infrastructure Scenario"],
         "Investment Plan": ["CAPEX", "Datacenter Construction CAPEX", "Office CAPEX", "Intangible Assets", "Depreciation & Amortization"],
         "Operating Costs": ["Datacenter OPEX", "Team OPEX", "GPU Rental OPEX", "SG&A"],
         "Financial Statements": ["Revenue", "COGS", "P&L Summary", "Cash Flow Statement", "Funding", "Balance Sheet"],
-        "Investment Case": ["DCF", "Investment Metrics", "Return Metrics", "Scenario Comparison", "Sensitivity Analysis"],
+        "Investment Case": ["DCF", "Investment Metrics", "Model Validation Checks", "Return Metrics", "Scenario Comparison", "Sensitivity Analysis"],
     }
     sections_html = []
     for sec, names in section_map.items():
@@ -1784,6 +1866,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .chart svg{{width:100%;height:auto}} .grid{{stroke:#d1d5db;stroke-width:1}} .axis{{fill:#6b7280;font-size:11px}}
 .legend{{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}} .lg{{font-size:12px;color:#4b5563}} .lg i{{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}}
 .base-cell{{outline:2px solid #111827;outline-offset:-2px}}
+.ok{{color:#15803d;font-weight:600}} .warn{{color:#b45309;font-weight:600}}
 </style></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
 <div class='card'>
