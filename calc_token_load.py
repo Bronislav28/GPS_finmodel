@@ -1519,6 +1519,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
 
     pct_metrics = {"discount_rate", "irr", "roic", "roe", "roa", "utilization", "target_contribution_margin", "contribution_margin"}
     x_metrics = {"debt_to_equity", "net_debt_to_ebitda", "interest_coverage"}
+    int_metrics = {"required_gpu"}
 
     def render_value(v: Any, metric: str | None = None) -> str:
         if v is None or (isinstance(v, float) and math.isnan(v)):
@@ -1527,7 +1528,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         if fv is None:
             return str(v)
         metric_name = metric or ""
-        if metric_name == "construction_start_year" or metric_name.endswith("_year"):
+        if metric_name in int_metrics or metric_name == "construction_start_year" or metric_name.endswith("_year"):
             cls = "neg" if fv < 0 else ("zero" if abs(fv) < 1e-12 else "")
             return f"<span class='{cls}'>{int(round(fv))}</span>"
         if metric_name in {"simple_payback", "discounted_payback"}:
@@ -1775,19 +1776,19 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
 
     latest = rows[-1]
     kpis = [
-        ("NPV", metric_store.get("npv", {}).get(years[0])),
-        ("IRR", metric_store.get("irr", {}).get(years[0])),
-        ("Revenue 2030", metric_store.get("total_revenue", {}).get(years[-1])),
-        ("EBITDA 2030", metric_store.get("ebitda", {}).get(years[-1])),
-        ("Net Income 2030", metric_store.get("net_income", {}).get(years[-1])),
-        ("Total CAPEX", sum((as_float(r.get("total_capex")) or 0.0) for r in rows)),
-        ("Peak Required GPU", max((as_float(r.get("required_gpu")) or 0.0) for r in rows)),
-        ("Revolver Balance 2030", metric_store.get("revolver_balance", {}).get(years[-1])),
-        ("Payback", metric_store.get("simple_payback", {}).get(years[0])),
+        ("NPV", "npv", metric_store.get("npv", {}).get(years[0])),
+        ("IRR", "irr", metric_store.get("irr", {}).get(years[0])),
+        ("Revenue 2030", "total_revenue", metric_store.get("total_revenue", {}).get(years[-1])),
+        ("EBITDA 2030", "ebitda", metric_store.get("ebitda", {}).get(years[-1])),
+        ("Net Income 2030", "net_income", metric_store.get("net_income", {}).get(years[-1])),
+        ("Total CAPEX", "total_capex", sum((as_float(r.get("total_capex")) or 0.0) for r in rows)),
+        ("Peak Required GPU", "required_gpu", max((as_float(r.get("required_gpu")) or 0.0) for r in rows)),
+        ("Revolver Balance 2030", "revolver_balance", metric_store.get("revolver_balance", {}).get(years[-1])),
+        ("Payback", "simple_payback", metric_store.get("simple_payback", {}).get(years[0])),
     ]
     kpi_html = "".join(
-        f"<div class='kpi'><div class='k'>{k}</div><div class='v' {'id=\"kpi-npv\"' if k=='NPV' else ''}>{render_value(v)}</div></div>"
-        for k, v in kpis
+        f"<div class='kpi'><div class='k'>{k}</div><div class='v' {'id=\"kpi-npv\"' if k=='NPV' else ''}>{render_value(v, m)}</div></div>"
+        for k, m, v in kpis
     )
     charts_html = "".join(
         [
