@@ -506,7 +506,7 @@ opex:
       it_load_mw: average_owned_gpu * gpu_power_kw / 1000
       total_load_mw: it_load_mw * pue
       electricity_kwh: total_load_mw * 1000 * operating_hours_per_day * calendar_days_per_year
-      electricity_cost: electricity_kwh * electricity_price
+      electricity_cost: electricity_kwh * electricity_price_t
       datacenter_maintenance_base: cumulative_gpu_infra_capex + cumulative_datacenter_construction_capex
       maintenance_cost: datacenter_maintenance_base * maintenance_percent_of_capex
       network_cost: total_load_mw * network_cost_per_mw_per_year
@@ -531,13 +531,18 @@ opex:
         2029: 0.08
         2030: 0.06
       calculation_logic:
+        total_core_team_fte: sum(core_team_target_fte)
+        core_team_fte: total_core_team_fte
         monthly_gross_salary: salary_gross_monthly_rub * monthly_fte
         monthly_bonus_accrual: monthly_gross_salary * bonus_percent_of_gross
         monthly_social_contribution_sfr: (monthly_gross_salary + monthly_bonus_accrual) * social_contribution_sfr_percent_of_gross
         monthly_fully_loaded_team_cost: monthly_gross_salary + monthly_bonus_accrual + monthly_social_contribution_sfr
-        annual_core_team_cash_cost: sum(monthly_fully_loaded_cost_by_role_by_month)
+        annual_core_team_cash_cost: payroll_gross + annual_bonus + social_contribution_sfr
         build_phase_months: go_live_month - 1
-        capitalized_core_team_cost: sum(monthly_fully_loaded_cost_by_role_by_month where role in eligible_core_team_roles and month < go_live_month)
+        capitalized_core_team_cost: >
+          sum(monthly_fully_loaded_cost_by_role_by_month
+          where role in eligible_core_team_roles
+          and month < go_live_month)
         total_team_opex: annual_core_team_cash_cost - capitalized_core_team_cost
     core_team_target_fte:
       leadership:
@@ -914,9 +919,9 @@ funding:
         Funding need покрывается комбинацией equity и revolver.
         Доли задаются пользователем вручную.
       equity_share:
-        value: 0.50
+        value: 0.5
       revolver_share:
-        value: 0.50
+        value: 0.5
       validation:
         formula: equity_share + revolver_share = 1.0
   revolver:
@@ -926,21 +931,21 @@ funding:
       2028: 0.25
       2029: 0.25
       2030: 0.25
-    repayment_logic:
-      minimum_cash_balance:
-        description: >
-          Минимальный остаток денежных средств для операционной устойчивости.
-          Рассчитывается как 1 месяц фиксированных расходов GPS:
-          team OPEX + SG&A + GPU rental OPEX.
-        months_of_fixed_costs:
-          value: 1
-        calculation_logic:
-          monthly_team_opex: total_team_opex / 12
-          monthly_sga: total_sga / 12
-          monthly_gpu_rental_opex: annual_gpu_rental_cost / 12
-          minimum_cash_balance: (monthly_team_opex + monthly_sga + monthly_gpu_rental_opex) * months_of_fixed_costs
+  minimum_cash_balance:
+    description: >
+      Минимальный остаток денежных средств для операционной устойчивости.
+      Рассчитывается как 1 месяц фиксированных расходов GPS:
+      team OPEX + SG&A + GPU rental OPEX.
+    months_of_fixed_costs:
+      value: 1
+    calculation_logic:
+      monthly_team_opex: total_team_opex / 12
+      monthly_sga: total_sga / 12
+      monthly_gpu_rental_opex: annual_gpu_rental_cost / 12
+      monthly_fixed_costs: monthly_team_opex + monthly_sga + monthly_gpu_rental_opex
+      minimum_cash_balance: monthly_fixed_costs * months_of_fixed_costs
   calculation_logic:
-    closing_cash_before_funding: opening_cash + net_cash_flow
+    closing_cash_before_funding: opening_cash + pre_financing_cash_flow
     funding_need: max(-closing_cash_before_funding, 0)
     equity_injection: funding_need * equity_share
     revolver_drawdown: funding_need * revolver_share
