@@ -1506,6 +1506,74 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         cls = "neg" if fv < 0 else ("zero" if abs(fv) < 1e-12 else "")
         return f"<span class='{cls}'>{fmt_num(fv,2)}</span>"
 
+    def compact_num(v: float) -> str:
+        sign = "-" if v < 0 else ""
+        x = abs(v)
+        if x >= 1_000_000_000:
+            return f"{sign}{x/1_000_000_000:.1f} bn"
+        if x >= 1_000_000:
+            return f"{sign}{x/1_000_000:.1f} m"
+        if x >= 1_000:
+            return f"{sign}{x/1_000:.1f} k"
+        return f"{v:.0f}"
+
+    def chart_series(metric: str) -> list[float]:
+        out = []
+        for y in years:
+            v = as_float(metric_store.get(metric, {}).get(y))
+            out.append(0.0 if v is None or math.isnan(v) else float(v))
+        return out
+
+    def render_grouped_bar_chart(title: str, desc: str, series: list[tuple[str, str, list[float]]]) -> str:
+        w, h, ml, mb, mt = 860, 260, 56, 36, 20
+        pw, ph = w - ml - 16, h - mb - mt
+        vals = [v for _, _, arr in series for v in arr] or [0.0]
+        ymin, ymax = min(vals), max(vals)
+        if ymin == ymax:
+            ymax = ymin + 1.0
+        if ymin > 0:
+            ymin = 0.0
+        if ymax < 0:
+            ymax = 0.0
+        def py(v: float) -> float:
+            return mt + (ymax - v) / (ymax - ymin) * ph
+        zero_y = py(0.0)
+        gx = pw / max(len(years), 1)
+        bar_w = gx * 0.7 / max(len(series), 1)
+        bars = []
+        for i, y in enumerate(years):
+            x0 = ml + i * gx + gx * 0.15
+            for j, (_, color, arr) in enumerate(series):
+                v = arr[i]
+                x = x0 + j * bar_w
+                yv = py(v)
+                bars.append(f"<rect x='{x:.1f}' y='{min(yv,zero_y):.1f}' width='{bar_w-2:.1f}' height='{abs(zero_y-yv):.1f}' fill='{color}' rx='2'/>")
+            bars.append(f"<text x='{ml+i*gx+gx/2:.1f}' y='{h-10}' text-anchor='middle' class='axis'>{y}</text>")
+        legend = "".join(f"<span class='lg'><i style='background:{c}'></i>{n}</span>" for n, c, _ in series)
+        return f"<div class='chart card'><h3>{title}</h3><div class='sub'>{desc}</div><svg viewBox='0 0 {w} {h}'><line x1='{ml}' y1='{zero_y:.1f}' x2='{w-10}' y2='{zero_y:.1f}' class='grid'/>{''.join(bars)}</svg><div class='legend'>{legend}</div></div>"
+
+    def render_line_chart(title: str, desc: str, series: list[tuple[str, str, list[float]]]) -> str:
+        w, h, ml, mb, mt = 860, 260, 56, 36, 20
+        pw, ph = w - ml - 16, h - mb - mt
+        vals = [v for _, _, arr in series for v in arr] or [0.0]
+        ymin, ymax = min(vals), max(vals)
+        if ymin == ymax:
+            ymax = ymin + 1.0
+        if ymin > 0:
+            ymin = 0.0
+        if ymax < 0:
+            ymax = 0.0
+        def py(v: float) -> float:
+            return mt + (ymax - v) / (ymax - ymin) * ph
+        gx = pw / max(len(years)-1, 1)
+        lines = []
+        for name, color, arr in series:
+            pts = " ".join(f"{ml+i*gx:.1f},{py(v):.1f}" for i, v in enumerate(arr))
+            lines.append(f"<polyline fill='none' stroke='{color}' stroke-width='2.2' points='{pts}'/>")
+        xlabels = "".join(f"<text x='{ml+i*gx:.1f}' y='{h-10}' text-anchor='middle' class='axis'>{y}</text>" for i, y in enumerate(years))
+        legend = "".join(f"<span class='lg'><i style='background:{c}'></i>{n}</span>" for n, c, _ in series)
+        return f"<div class='chart card'><h3>{title}</h3><div class='sub'>{desc}</div><svg viewBox='0 0 {w} {h}'><line x1='{ml}' y1='{py(0):.1f}' x2='{w-10}' y2='{py(0):.1f}' class='grid'/>{''.join(lines)}{xlabels}</svg><div class='legend'>{legend}</div></div>"
+
     for table in report_tables:
         if not isinstance(table, dict):
             continue
@@ -1549,12 +1617,28 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     wt,cm,matrix = build_sensitivity_matrix(assumptions, rows)
     scol = ''.join(f'<th>{c:.2f}</th>' for c in cm)
     sbody=[]
+    npv_vals = [float(v) for v in matrix.values() if v is not None]
+    npv_min = min(npv_vals) if npv_vals else 0.0
+    npv_max = max(npv_vals) if npv_vals else 1.0
     for w in wt:
+        cells = []
+        for c in cm:
+            v = matrix.get((w, c))
+            if v is None:
+                cells.append("<td><span class='na'>N/A</span></td>")
+                continue
+            fv = float(v)
+            t = 0.5 if npv_max == npv_min else (fv - npv_min) / (npv_max - npv_min)
+            if fv >= 0:
+                bg = f"rgba(22,163,74,{0.15 + 0.45*t:.3f})"
+            else:
+                bg = f"rgba(220,38,38,{0.15 + 0.55*(1-t):.3f})"
+            base_cls = " base-cell" if abs(w - 1.0) < 1e-9 and abs(c - 1.0) < 1e-9 else ""
+            cells.append(f"<td class='num heat{base_cls}' style='background:{bg}'>{fmt_num(fv,2)}</td>")
         row = "".join(
-            f"<td>{('N/A' if matrix.get((w,c)) is None else fmt_num(float(matrix.get((w,c))),2))}</td>"
-            for c in cm
+            cells
         )
-        sbody.append(f"<tr><td>{w:.2f}</td>{row}</tr>")
+        sbody.append(f"<tr><td class='sticky'>{w:.2f}</td>{row}</tr>")
     sensitivity_html = f"<div class='card'><h3>Sensitivity Analysis — NPV</h3><div class='table-wrap'><table class='sensitivity'><thead><tr><th class='sticky'>weighted_throughput_multiplier</th>{scol}</tr></thead><tbody>{''.join(sbody)}</tbody></table></div></div>"
     tables_by_title["Sensitivity Analysis"] = sensitivity_html
 
@@ -1584,10 +1668,60 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         ("Payback", metric_store.get("simple_payback", {}).get(years[0])),
     ]
     kpi_html = "".join(f"<div class='kpi'><div class='k'>{k}</div><div class='v'>{render_value(v)}</div></div>" for k, v in kpis)
+    charts_html = "".join(
+        [
+            render_line_chart(
+                "Revenue / EBITDA / Net Income",
+                "Profitability trajectory by year.",
+                [
+                    ("Revenue", "var(--c-blue)", chart_series("total_revenue")),
+                    ("EBITDA", "var(--c-green)", chart_series("ebitda")),
+                    ("Net Income", "var(--c-purple)", chart_series("net_income")),
+                ],
+            ),
+            render_grouped_bar_chart(
+                "CAPEX Breakdown",
+                "Investment phasing by CAPEX component.",
+                [
+                    ("GPU Infra CAPEX", "var(--c-orange)", chart_series("gpu_infra_capex")),
+                    ("DC Construction", "var(--c-red)", chart_series("datacenter_construction_capex")),
+                    ("Office CAPEX", "var(--c-blue)", chart_series("office_capex")),
+                    ("Intangible CAPEX", "var(--c-purple)", chart_series("intangible_capex")),
+                ],
+            ),
+            render_grouped_bar_chart(
+                "Cash Flow",
+                "Operating, investing and free cash flow (pre-financing).",
+                [
+                    ("Operating CF", "var(--c-green)", chart_series("operating_cash_flow")),
+                    ("Investing CF", "var(--c-red)", chart_series("investing_cash_flow")),
+                    ("Free CF", "var(--c-blue)", chart_series("free_cash_flow")),
+                ],
+            ),
+            render_line_chart(
+                "GPU Infrastructure",
+                "Required vs owned/rented GPU transition.",
+                [
+                    ("Required", "var(--c-blue)", chart_series("required_gpu")),
+                    ("Owned", "var(--c-green)", chart_series("owned_gpu")),
+                    ("Rented", "var(--c-orange)", chart_series("rented_gpu")),
+                ],
+            ),
+            render_grouped_bar_chart(
+                "Debt and Cash",
+                "Funding structure and deleveraging profile.",
+                [
+                    ("Revolver Balance", "var(--c-purple)", chart_series("revolver_balance")),
+                    ("Cash", "var(--c-green)", chart_series("cash")),
+                ],
+            ),
+        ]
+    )
     active_scenario = latest.get("active_scenario", "N/A")
     dt = __import__("datetime")
     ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
+:root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
 body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
 .nav{{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid #e5e7eb;padding:10px 24px}}
 .container{{max-width:1280px;margin:0 auto;padding:20px}}
@@ -1603,9 +1737,13 @@ table{{width:100%;border-collapse:collapse;font-size:12px}} th,td{{padding:6px 8
 th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{text-align:right}}
 .neg{{color:#b91c1c}} .zero{{color:#9ca3af}} .na{{color:#9ca3af}} .kpi .v span{{color:inherit}}
 .table-wrap{{overflow:auto;max-width:100%}} .sticky{{position:sticky;left:0;background:#f8fafc}}
+.chart svg{{width:100%;height:auto}} .grid{{stroke:#d1d5db;stroke-width:1}} .axis{{fill:#6b7280;font-size:11px}}
+.legend{{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}} .lg{{font-size:12px;color:#4b5563}} .lg i{{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}}
+.base-cell{{outline:2px solid #111827;outline-offset:-2px}}
 </style></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
+<section><h2>Charts Overview</h2><div class='grid charts'>{charts_html}</div></section>
 {''.join(sections_html)}
 </div></body></html>"""
 
