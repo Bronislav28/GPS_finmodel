@@ -1667,7 +1667,10 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         ("Revolver Balance 2030", metric_store.get("revolver_balance", {}).get(years[-1])),
         ("Payback", metric_store.get("simple_payback", {}).get(years[0])),
     ]
-    kpi_html = "".join(f"<div class='kpi'><div class='k'>{k}</div><div class='v'>{render_value(v)}</div></div>" for k, v in kpis)
+    kpi_html = "".join(
+        f"<div class='kpi'><div class='k'>{k}</div><div class='v' {'id=\"kpi-npv\"' if k=='NPV' else ''}>{render_value(v)}</div></div>"
+        for k, v in kpis
+    )
     charts_html = "".join(
         [
             render_line_chart(
@@ -1756,15 +1759,93 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     <div class='ctrl'><label>Funding scenario</label><select disabled><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select></div>
     <div class='ctrl'><label>Funding mix (equity %)</label><input value='50' disabled/></div>
     <div class='ctrl'><label>Funding mix (revolver %)</label><input value='50' disabled/></div>
-    <div class='ctrl'><label>Discount rate</label><input type='number' value='30' disabled/></div>
+    <div class='ctrl'><label>Discount rate (%)</label><input id='discount-rate-input' type='number' value='30' step='0.1' min='0'/></div>
   </div>
   <div class='note'>Interactive scenario switching is not enabled yet. Current report shows the Python-calculated base case.</div>
-  <div class='note'>Discount rate recalculation will be enabled in a later version.</div>
+  <div class='note'>Discount rate updates DCF / NPV only. It does not change operating model, P&L, funding, or balance sheet.</div>
 </div>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
 <section><h2>Charts Overview</h2><div class='grid charts'>{charts_html}</div></section>
 {''.join(sections_html)}
-</div></body></html>"""
+</div>
+<script>
+(function(){{
+  const YEARS = {json.dumps(years)};
+  const FREE_CASH_FLOW = {json.dumps([as_float(metric_store.get("free_cash_flow", {}).get(y)) or 0.0 for y in years])};
+  const DEFAULT_RATE = {float(as_float(metric_store.get("discount_rate", {}).get(years[0])) or 0.30)};
+  const input = document.getElementById('discount-rate-input');
+  if(!input) return;
+  input.value = (DEFAULT_RATE * 100).toFixed(2);
+  const fmtNum = (v)=> Number(v).toLocaleString(undefined, {{minimumFractionDigits:2, maximumFractionDigits:2}});
+  const fmtPct = (v)=> (v*100).toFixed(2) + "%";
+  const setCellClass = (td, val) => {{
+    td.classList.remove('neg','zero','na');
+    if (val < 0) td.classList.add('neg');
+    else if (Math.abs(val) < 1e-12) td.classList.add('zero');
+  }};
+  const updateMetricRow = (tableTitle, metric, values, formatter) => {{
+    const cards = [...document.querySelectorAll('.card')];
+    const card = cards.find(c => c.querySelector('h3') && c.querySelector('h3').textContent.trim() === tableTitle);
+    if(!card) return;
+    const rows = [...card.querySelectorAll('tbody tr')];
+    const row = rows.find(r => (r.children[0]?.textContent || '').trim() === metric);
+    if(!row) return;
+    for(let i=0;i<values.length;i++) {{
+      const td = row.children[i+1];
+      if(!td) continue;
+      td.textContent = formatter(values[i]);
+      setCellClass(td, Number(values[i]));
+    }}
+  }};
+  const updatePayback = (val) => {{
+    const cards = [...document.querySelectorAll('.card')];
+    const card = cards.find(c => c.querySelector('h3') && c.querySelector('h3').textContent.trim() === 'Investment Metrics');
+    if(!card) return;
+    const rows = [...card.querySelectorAll('tbody tr')];
+    const row = rows.find(r => (r.children[0]?.textContent || '').trim() === 'discounted_payback');
+    if(row && row.children[1]) row.children[1].textContent = val;
+    const kpis = [...document.querySelectorAll('.kpi')];
+    const k = kpis.find(x => (x.querySelector('.k')?.textContent || '').trim() === 'NPV');
+    if(k) {{
+      const v = k.querySelector('.v');
+      v.textContent = fmtNum(current.npv);
+      v.classList.remove('neg','zero');
+      if(current.npv<0) v.classList.add('neg');
+      else if(Math.abs(current.npv)<1e-12) v.classList.add('zero');
+    }}
+  }};
+  const current = {{npv:0}};
+  const recalc = () => {{
+    try {{
+      let r = Number(input.value);
+      if(!Number.isFinite(r)) return;
+      r = r / 100.0;
+      const df = [], dcf = [], cdf = [];
+      let cum = 0.0;
+      for(let i=0;i<YEARS.length;i++) {{
+        const factor = 1 / Math.pow(1+r, i);
+        const disc = FREE_CASH_FLOW[i] * factor;
+        cum += disc;
+        df.push(factor); dcf.push(disc); cdf.push(cum);
+      }}
+      current.npv = dcf.reduce((a,b)=>a+b,0);
+      let payback = "Not reached";
+      for(let i=0;i<cdf.length;i++) if(cdf[i] > 0) {{ payback = String(YEARS[i]); break; }}
+      updateMetricRow('DCF', 'discount_rate', YEARS.map(()=>r), fmtPct);
+      updateMetricRow('DCF', 'discount_factor', df, (v)=>fmtNum(v));
+      updateMetricRow('DCF', 'discounted_fcf', dcf, (v)=>fmtNum(v));
+      updateMetricRow('DCF', 'cumulative_discounted_fcf', cdf, (v)=>fmtNum(v));
+      updateMetricRow('Investment Metrics', 'npv', [current.npv], (v)=>fmtNum(v));
+      updatePayback(payback);
+    }} catch(err) {{
+      console.warn('Discount rate recalculation failed:', err);
+    }}
+  }};
+  input.addEventListener('input', recalc);
+  recalc();
+}})();
+</script>
+</body></html>"""
 
 def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
