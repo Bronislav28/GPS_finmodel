@@ -532,7 +532,16 @@ def calculate(ass: dict[str, Any]) -> list[dict[str, Any]]:
         year_value(electricity_price_cfg.get("base_price_per_kwh"), years[0]),
         "opex.datacenter.drivers.electricity_price.base_price_per_kwh",
     )
-    annual_growth_map = to_year_map(electricity_price_cfg.get("annual_growth"))
+    annual_growth_raw = electricity_price_cfg.get("annual_growth")
+    annual_growth_map: dict[int, float] = {}
+    if isinstance(annual_growth_raw, dict):
+        for y_key, y_val in annual_growth_raw.items():
+            try:
+                y_int = int(y_key)
+            except (TypeError, ValueError):
+                continue
+            g = as_float((y_val or {}).get("value")) if isinstance(y_val, dict) else as_float(y_val)
+            annual_growth_map[y_int] = 0.0 if g is None else float(g)
     electricity_price_by_year: dict[int, float] = {}
     prev_price = float(base_price_per_kwh or 0.0)
     for i, y in enumerate(years):
