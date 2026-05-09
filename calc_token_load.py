@@ -1729,6 +1729,11 @@ h1{{margin:0;font-size:28px}} .sub{{color:#6b7280;margin-top:4px}}
 .meta{{margin-top:8px;color:#4b5563;font-size:12px}}
 section h2{{margin:24px 0 12px;font-size:18px}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}}
+.controls{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px}}
+.ctrl{{display:flex;flex-direction:column;gap:4px}} .ctrl label{{font-size:12px;color:#6b7280}}
+.ctrl input,.ctrl select{{padding:7px 8px;border:1px solid #d1d5db;border-radius:8px;background:#f9fafb;color:#6b7280}}
+.ctrl input:disabled,.ctrl select:disabled{{opacity:.75;cursor:not-allowed}}
+.note{{margin-top:8px;font-size:12px;color:#6b7280}}
 .kpi{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px}}
 .kpi .k{{font-size:12px;color:#6b7280}} .kpi .v{{font-size:18px;font-weight:600;margin-top:6px}}
 .card{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}}
@@ -1742,6 +1747,20 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .base-cell{{outline:2px solid #111827;outline-offset:-2px}}
 </style></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
+<div class='card'>
+  <h3>Controls</h3>
+  <div class='controls'>
+    <div class='ctrl'><label>Revenue scenario</label><select disabled><option>base</option></select></div>
+    <div class='ctrl'><label>Infrastructure scenario</label><select disabled><option>build_own_dc</option><option>rent_gpu_only</option><option selected>hybrid</option></select></div>
+    <div class='ctrl'><label>Construction start year</label><input type='number' value='2028' disabled/></div>
+    <div class='ctrl'><label>Funding scenario</label><select disabled><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select></div>
+    <div class='ctrl'><label>Funding mix (equity %)</label><input value='50' disabled/></div>
+    <div class='ctrl'><label>Funding mix (revolver %)</label><input value='50' disabled/></div>
+    <div class='ctrl'><label>Discount rate</label><input type='number' value='30' disabled/></div>
+  </div>
+  <div class='note'>Interactive scenario switching is not enabled yet. Current report shows the Python-calculated base case.</div>
+  <div class='note'>Discount rate recalculation will be enabled in a later version.</div>
+</div>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
 <section><h2>Charts Overview</h2><div class='grid charts'>{charts_html}</div></section>
 {''.join(sections_html)}
