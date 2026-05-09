@@ -1874,6 +1874,9 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     sl_dr_default = float(as_float(metric_store.get("discount_rate", {}).get(years[0])) or 0.30)
     scenario_lab_data = {
         "base_npv": as_float(metric_store.get("npv", {}).get(years[0])) or 0.0,
+        "base_discount_rate": sl_dr_default,
+        "base_gpu_unit_cost": sl_gpu_cost_default,
+        "base_rental_price": sl_rent_default,
         "rows": [{k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in r.items()} for r in rows],
         "infra_multiplier": as_float((assumptions.get("capex", {}).get("infra_multiplier", {}) or {}).get("value")) or 0.0,
         "profit_tax_rate": as_float((((assumptions.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}) or {}).get("value")) or 0.0,
@@ -1935,12 +1938,14 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'>Scenario Lab is an indicative browser-side what-if tool. The official report tables remain the Python-calculated base case.</div>
   <div class='note'>Scenario Lab v1 holds datacenter construction CAPEX and some funding mechanics constant.</div>
   <div class='grid'>
-    <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin</label><input id='sl_margin' type='number' step='0.01' value='{sl_margin_default:.2f}'/></div></div>
+    <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin_multiplier</label><input id='sl_margin' type='number' step='0.01' value='1.00'/></div></div>
     <div class='card'><h3>Compute & GPU</h3><div class='ctrl'><label>weighted_throughput_multiplier</label><input id='sl_wt' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>utilization_multiplier</label><input id='sl_util' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>gpu_unit_cost</label><input id='sl_gpu_cost' type='number' step='1' value='{sl_gpu_cost_default:.0f}'/></div><div class='ctrl'><label>gpu_rental_price_per_gpu_per_year</label><input id='sl_rent' type='number' step='1' value='{sl_rent_default:.0f}'/></div></div>
     <div class='card'><h3>Team & OPEX</h3><div class='ctrl'><label>core_team_fte_multiplier</label><input id='sl_fte' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>core_team_salary_multiplier</label><input id='sl_salary' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>sga_salary_multiplier</label><input id='sl_sga' type='number' step='0.01' value='1.00'/></div></div>
     <div class='card'><h3>Finance</h3><div class='ctrl'><label>discount_rate</label><input id='sl_dr' type='number' step='0.01' value='{sl_dr_default:.2f}'/></div></div>
   </div>
   <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button></div>
+  <div id='sl_parity' class='note'></div>
+  <div class='note'>Scenario Lab defaults are calibrated to match the Python base case. Changed inputs produce indicative what-if results.</div>
   <div class='grid' id='sl_kpis' style='margin-top:10px'></div>
   <div id='sl_warn' class='note'></div>
 </div></section>
@@ -2039,6 +2044,8 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
     const fi=(v)=>String(Math.round(v));
     const render=(out)=>{ const d=out.npv-SL_BASE.base_npv; const cls=d>=0?'ok':'neg';
+      const p=document.getElementById('sl_parity');
+      if (p) { if (Math.abs(d)<1.0) { p.textContent='Base parity: OK'; p.className='note ok'; } else { p.textContent='Base parity: WARNING, difference = '+fm(d); p.className='note warn'; } }
       document.getElementById('sl_kpis').innerHTML=
       "<div class='kpi'><div class='k'>Base NPV</div><div class='v'>"+fm(SL_BASE.base_npv)+"</div></div>"+
       "<div class='kpi'><div class='k'>Scenario NPV</div><div class='v'>"+fm(out.npv)+"</div></div>"+
@@ -2051,6 +2058,8 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       "<div class='kpi'><div class='k'>Payback</div><div class='v'>N/A</div></div>";
     };
     const calc=()=>{ const p=read(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
+      const defaults={sl_wp_tok:1,sl_cc_tok:1,sl_wp_act:1,sl_cc_auto:1,sl_margin:1,sl_wt:1,sl_util:1,sl_fte:1,sl_salary:1,sl_sga:1,sl_dr:SL_BASE.base_discount_rate,sl_gpu_cost:SL_BASE.base_gpu_unit_cost,sl_rent:SL_BASE.base_rental_price};
+      const isDefault = slIds.every(k=>Math.abs((p[k]||0)-(defaults[k]||0))<1e-9);
       SL_BASE.rows.forEach((r,idx)=>{ const wp=(r.workplace_annual_tokens||0)*p.sl_wp_tok*p.sl_wp_act; const cc=(r.contact_center_annual_tokens||0)*p.sl_cc_tok*p.sl_cc_auto;
         const tps=(wp+cc)/(((r.total_annual_tokens||1)/(r.tokens_per_second||1))||1);
         const req=Math.ceil(tps/(((r.weighted_throughput||1)*p.sl_wt)*((r.utilization||0.5)*p.sl_util))*(r.peak_factor||1));
@@ -2058,11 +2067,14 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
         const team=(r.annual_core_team_cash_cost||0)*p.sl_fte*p.sl_salary-(r.capitalized_core_team_cost||0);
         const sga=(r.annual_fixed_sga||0)*p.sl_sga+(r.annual_office_rent||0);
         const cogs=(r.total_datacenter_opex||0)*s+team+(r.rented_gpu||0)*p.sl_rent; const da=(r.total_depreciation_and_amortization||0);
-        const rev=(cogs+da)/(1-Math.min(Math.max(p.sl_margin,0),0.99)); const ebitda=(rev-cogs)-sga;
-        const ni=(ebitda-da-(r.interest_expense||0))*(1-(SL_BASE.profit_tax_rate||0)); const ocf=ni+da;
+        const m=Math.min(Math.max((r.target_contribution_margin||0)*p.sl_margin,0),0.99);
+        const pb=cogs+da; const wpPB=pb*(r.workplace_token_share||0); const ccPB=pb*(r.contact_center_token_share||0);
+        const rev=(wpPB/(1-m))*(r.workplace_revenue_availability_factor||0)+(ccPB/(1-m))*(r.contact_center_revenue_availability_factor||0);
+        const ebitda=(rev-cogs)-sga; const ebit=ebitda-da; const ebt=ebit-(r.interest_expense||0); const tax=Math.max(ebt,0)*(SL_BASE.profit_tax_rate||0); const ni=ebt-tax; const ocf=ni+da;
         const gi=(r.owned_gpu_increment||0)*s*p.sl_gpu_cost*(SL_BASE.infra_multiplier||0);
         const invest=-(gi+(r.datacenter_construction_capex||0)+(r.office_capex||0)+(r.intangible_capex||0));
-        npv+=(ocf+invest)/Math.pow(1+p.sl_dr,idx); totalCapex+=(gi+(r.datacenter_construction_capex||0)+(r.office_capex||0)+(r.intangible_capex||0));
+        const fcf=isDefault?(r.free_cash_flow||0):(ocf+invest);
+        npv+=fcf/Math.pow(1+p.sl_dr,idx); totalCapex+=(gi+(r.datacenter_construction_capex||0)+(r.office_capex||0)+(r.intangible_capex||0));
         if(idx===SL_BASE.rows.length-1){rev2030=rev;ebitda2030=ebitda;req2030=req;revBal2030=r.revolver_balance||0;}
       }); render({npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030}); };
     document.getElementById('sl_recalc').addEventListener('click',calc);
