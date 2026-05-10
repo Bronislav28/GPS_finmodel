@@ -2122,13 +2122,13 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     const linkVals=[ffVal(d,'workplace_ai_revenue'),ffVal(d,'contact_center_ai_revenue'),ffVal(d,'total_cogs'),gp,ffVal(d,'total_sga'),ebitda,ffVal(d,'total_depreciation_and_amortization'),ffVal(d,'interest_expense'),ffVal(d,'profit_tax'),net];
     const sankey={{
       type:'sankey',orientation:'h',arrangement:'fixed',
-      node:{{label:labels,pad:14,thickness:18,line:{{color:'#94a3b8',width:1}},color:['#3b82f6','#38bdf8','#60a5fa','#ef4444','#22c55e','#ef4444','#22c55e','#ef4444','#ef4444','#ef4444','#16a34a'],
-      x:[0.01,0.01,0.21,0.43,0.43,0.64,0.85,0.85,0.85,0.85],y:[0.22,0.52,0.37,0.18,0.53,0.38,0.18,0.37,0.56,0.76]}},
+      node:{{label:labels,pad:28,thickness:18,line:{{color:'#94a3b8',width:1}},color:['#3b82f6','#38bdf8','#60a5fa','#ef4444','#22c55e','#ef4444','#22c55e','#ef4444','#ef4444','#ef4444','#16a34a'],
+      x:[0.03,0.03,0.24,0.45,0.45,0.67,0.67,0.90,0.90,0.90,0.90],y:[0.18,0.58,0.38,0.12,0.58,0.22,0.68,0.12,0.34,0.56,0.82]}},
       link:{{source:[0,1,2,2,4,4,6,6,6,6],target:[2,2,3,4,5,6,7,8,9,10],value:linkVals.map(v=>Math.abs(Number(v)||0)),
       color:['rgba(59,130,246,0.75)','rgba(56,189,248,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)','rgba(239,68,68,0.75)','rgba(239,68,68,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)'],
       customdata:linkVals,hovertemplate:'%{{source.label}} → %{{target.label}}<br>Value: %{{customdata}}<extra></extra>'}}
     }};
-    Plotly.react(ffPlot,[sankey],{{margin:{{l:8,r:8,t:8,b:8}},height:560,paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
+    Plotly.react(ffPlot,[sankey],{{margin:{{l:12,r:56,t:12,b:12}},height:580,font:{{size:11}},paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
   }};
   if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
   const recalc = () => {{
