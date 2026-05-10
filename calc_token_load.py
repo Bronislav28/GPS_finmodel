@@ -1947,6 +1947,24 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         "go_live_year": int((years[0] if years else 2026)),
         "go_live_month": 1,
     }
+    financial_flow_data = {
+        str(int(r.get("year", 0))): {
+            "workplace_ai_revenue": as_float(r.get("workplace_ai_revenue")),
+            "contact_center_ai_revenue": as_float(r.get("contact_center_ai_revenue")),
+            "total_revenue": as_float(r.get("total_revenue")),
+            "total_cogs": as_float(r.get("total_cogs")),
+            "gross_profit": as_float(r.get("gross_profit")),
+            "total_sga": as_float(r.get("total_sga")),
+            "ebitda": as_float(r.get("ebitda")),
+            "total_depreciation_and_amortization": as_float(r.get("total_depreciation_and_amortization")),
+            "ebit": as_float(r.get("ebit")),
+            "interest_expense": as_float(r.get("interest_expense")),
+            "ebt": as_float(r.get("ebt")),
+            "profit_tax": as_float(r.get("profit_tax")),
+            "net_income": as_float(r.get("net_income")),
+        }
+        for r in rows
+    }
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
 body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
@@ -2000,6 +2018,12 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'>Discount rate updates official DCF display and Scenario Lab. Other top controls affect Scenario Lab only.</div>
 </div>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
+<section><h2>Financial Flow — P&L Bridge</h2>
+<div class='card'>
+  <div class='ctrl' style='max-width:220px'><label>Year</label><select id='ff_year'>{''.join(f"<option {'selected' if y==years[-1] else ''}>{y}</option>" for y in years)}</select></div>
+  <div class='note'>Financial Flow uses official Python-calculated base-case values. Scenario Lab changes do not affect this chart.</div>
+  <svg id='ff_svg' viewBox='0 0 1200 650' style='width:100%;height:auto;margin-top:8px'></svg>
+</div></section>
 <section><h2>Scenario Lab — NPV What-if</h2>
 <div class='card'>
   <div class='note'>Scenario Lab is an indicative browser-side what-if tool. The official report tables remain the Python-calculated base case.</div>
@@ -2070,6 +2094,54 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     }}
   }};
   const current = {{npv:0}};
+  const FIN_FLOW = {json.dumps(financial_flow_data)};
+  const ffSvg = document.getElementById('ff_svg');
+  const ffYear = document.getElementById('ff_year');
+  const ffFmt = (v)=>{{ if(v===null||v===undefined||!Number.isFinite(Number(v))) return 'N/A'; const n=Number(v),a=Math.abs(n); const s=n<0?'(':'',e=n<0?')':''; if(a>=1e9) return s+'₽'+(a/1e9).toFixed(1)+'bn'+e; if(a>=1e6) return s+'₽'+(a/1e6).toFixed(1)+'m'+e; return s+'₽'+a.toFixed(0)+e; }};
+  const ffPct=(v,d)=> (Number.isFinite(v)&&Number.isFinite(d)&&Math.abs(d)>1e-9)?((v/d)*100).toFixed(1)+'% margin':'N/A';
+  const ffVal=(o,k)=> Number.isFinite(Number(o?.[k]))?Number(o[k]):null;
+  const renderFinancialFlow=(year)=>{{ if(!ffSvg) return; const d=FIN_FLOW[String(year)]||{{}}; const rev=ffVal(d,'total_revenue');
+    const nodes=[
+      ['Workplace.ai Revenue',130,90,ffVal(d,'workplace_ai_revenue')],
+      ['Contact Center.ai Revenue',130,220,ffVal(d,'contact_center_ai_revenue')],
+      ['Total Revenue',390,155,rev],
+      ['COGS',660,95,ffVal(d,'total_cogs')],
+      ['Gross Profit',660,255,ffVal(d,'gross_profit')],
+      ['SG&A',900,215,ffVal(d,'total_sga')],
+      ['EBITDA',900,355,ffVal(d,'ebitda')],
+      ['D&A',1080,315,ffVal(d,'total_depreciation_and_amortization')],
+      ['EBIT',1080,455,ffVal(d,'ebit')],
+      ['Interest',1080,535,ffVal(d,'interest_expense')],
+      ['EBT',1080,610,ffVal(d,'ebt')],
+      ['Tax',1160,545,ffVal(d,'profit_tax')],
+      ['Net Income',1160,630,ffVal(d,'net_income')],
+    ];
+    const mx=Math.max(...nodes.map(n=>Math.abs(n[3]||0)),1);
+    const w=(v)=>6+Math.max(0,Math.abs(v||0))/mx*34;
+    const color=(v,profit=true)=> (v===null?'#9ca3af':(!profit||v<0?'#dc2626':'#16a34a'));
+    const edge=(a,b,v,c)=>'<path d="M '+(a[1]+130)+' '+a[2]+' C '+((a[1]+b[1])/2)+' '+a[2]+', '+((a[1]+b[1])/2)+' '+b[2]+', '+(b[1]-8)+' '+b[2]+'" stroke="'+c+'" stroke-width="'+w(v)+'" fill="none" stroke-linecap="round" opacity="0.75"/>';
+    const nBy=Object.fromEntries(nodes.map(n=>[n[0],n]));
+    const edges=[
+      edge(nBy['Workplace.ai Revenue'],nBy['Total Revenue'],nBy['Workplace.ai Revenue'][3],'#2563eb'),
+      edge(nBy['Contact Center.ai Revenue'],nBy['Total Revenue'],nBy['Contact Center.ai Revenue'][3],'#0ea5e9'),
+      edge(nBy['Total Revenue'],nBy['COGS'],nBy['COGS'][3],'#dc2626'),
+      edge(nBy['Total Revenue'],nBy['Gross Profit'],nBy['Gross Profit'][3],'#16a34a'),
+      edge(nBy['Gross Profit'],nBy['SG&A'],nBy['SG&A'][3],'#dc2626'),
+      edge(nBy['Gross Profit'],nBy['EBITDA'],nBy['EBITDA'][3],'#16a34a'),
+      edge(nBy['EBITDA'],nBy['D&A'],nBy['D&A'][3],'#dc2626'),
+      edge(nBy['EBITDA'],nBy['EBIT'],nBy['EBIT'][3],'#16a34a'),
+      edge(nBy['EBIT'],nBy['Interest'],nBy['Interest'][3],'#dc2626'),
+      edge(nBy['EBIT'],nBy['EBT'],nBy['EBT'][3],'#6b7280'),
+      edge(nBy['EBT'],nBy['Tax'],nBy['Tax'][3],'#dc2626'),
+      edge(nBy['EBT'],nBy['Net Income'],nBy['Net Income'][3],'#16a34a'),
+    ].join('');
+    const nodeHtml=nodes.map(n=>{{ const neg=(n[3]||0)<0; const fill=neg?'#fef2f2':'#f8fafc'; const st=neg?'#ef4444':'#cbd5e1';
+      let extra=''; if(n[0]==='Gross Profit') extra=' · '+ffPct(n[3],rev); if(n[0]==='EBITDA') extra=' · '+ffPct(n[3],rev); if(n[0]==='Net Income') extra=' · '+ffPct(n[3],rev);
+      return '<g><rect x="'+n[1]+'" y="'+(n[2]-26)+'" width="130" height="52" rx="10" fill="'+fill+'" stroke="'+st+'"/><text x="'+(n[1]+8)+'" y="'+(n[2]-4)+'" font-size="11" fill="#334155">'+n[0]+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+13)+'" font-size="12" font-weight="600" fill="'+color(n[3],true)+'">'+ffFmt(n[3])+extra+'</text></g>';
+    }}).join('');
+    ffSvg.innerHTML = '<rect x="0" y="0" width="1200" height="650" fill="#ffffff"/>'+edges+nodeHtml;
+  }};
+  if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
   const recalc = () => {{
     try {{
       let r = Number(input.value);
