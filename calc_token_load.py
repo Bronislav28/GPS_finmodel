@@ -2103,21 +2103,19 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   const ffPct=(v,d)=> (Number.isFinite(v)&&Number.isFinite(d)&&Math.abs(d)>1e-9)?((v/d)*100).toFixed(1)+'% margin':'N/A';
   const ffVal=(o,k)=> Number.isFinite(Number(o?.[k]))?Number(o[k]):null;
   const renderFinancialFlow=(year)=>{{ if(!ffSvg) return; const d=FIN_FLOW[String(year)]||{{}}; const rev=ffVal(d,'total_revenue');
-    const NW=180,NH=64;
+    const NW=166,NH=58;
     const nodes=[
-      ['Workplace.ai Revenue',80,170,ffVal(d,'workplace_ai_revenue')],
-      ['Contact Center Revenue',80,330,ffVal(d,'contact_center_ai_revenue')],
-      ['Total Revenue',330,250,rev],
-      ['COGS',600,150,ffVal(d,'total_cogs')],
-      ['Gross Profit',600,350,ffVal(d,'gross_profit')],
-      ['SG&A',850,260,ffVal(d,'total_sga')],
-      ['EBITDA',850,440,ffVal(d,'ebitda')],
-      ['D&A',1000,350,ffVal(d,'total_depreciation_and_amortization')],
-      ['EBIT',1000,530,ffVal(d,'ebit')],
-      ['Interest',850,590,ffVal(d,'interest_expense')],
-      ['EBT',1000,620,ffVal(d,'ebt')],
-      ['Tax',850,660,ffVal(d,'profit_tax')],
-      ['Net Income',1000,660,ffVal(d,'net_income')],
+      ['Workplace.ai Revenue',40,170,ffVal(d,'workplace_ai_revenue')],
+      ['Contact Center Revenue',40,320,ffVal(d,'contact_center_ai_revenue')],
+      ['Total Revenue',250,245,rev],
+      ['COGS',470,155,ffVal(d,'total_cogs')],
+      ['Gross Profit',470,335,ffVal(d,'gross_profit')],
+      ['SG&A',680,255,ffVal(d,'total_sga')],
+      ['EBITDA',680,430,ffVal(d,'ebitda')],
+      ['D&A',900,220,ffVal(d,'total_depreciation_and_amortization')],
+      ['Interest',900,330,ffVal(d,'interest_expense')],
+      ['Tax',900,440,ffVal(d,'profit_tax')],
+      ['Net Income',900,560,ffVal(d,'net_income')],
     ];
     const scale=Math.max(Math.abs(rev||0),1);
     const w=(v)=>Math.max(5,46*Math.abs(v||0)/scale);
@@ -2133,15 +2131,13 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       edge('Gross Profit','rt','SG&A','lm',ffVal(d,'total_sga'),'#ef4444'),
       edge('Gross Profit','rb','EBITDA','lm',ffVal(d,'ebitda'),'#22c55e'),
       edge('EBITDA','rt','D&A','lm',ffVal(d,'total_depreciation_and_amortization'),'#ef4444'),
-      edge('EBITDA','rb','EBIT','lm',ffVal(d,'ebit'),'#22c55e'),
-      edge('EBIT','lt','Interest','rm',ffVal(d,'interest_expense'),'#ef4444'),
-      edge('EBIT','rb','EBT','lm',ffVal(d,'ebt'),'#22c55e'),
-      edge('EBT','lt','Tax','rm',ffVal(d,'profit_tax'),'#ef4444'),
-      edge('EBT','rb','Net Income','lm',ffVal(d,'net_income'),'#22c55e'),
+      edge('EBITDA','rm','Interest','lm',ffVal(d,'interest_expense'),'#ef4444'),
+      edge('EBITDA','rb','Tax','lm',ffVal(d,'profit_tax'),'#ef4444'),
+      edge('EBITDA','rb','Net Income','lt',ffVal(d,'net_income'),'#22c55e'),
     ].join('');
     const nodeHtml=nodes.map(n=>{{ const neg=(n[3]||0)<0; const fill='#f8fafc'; const st='#cbd5e1';
-      let extra=''; if(n[0]==='Gross Profit') extra=' · '+ffPct(n[3],rev); if(n[0]==='EBITDA') extra=' · '+ffPct(n[3],rev); if(n[0]==='Net Income') extra=' · '+ffPct(n[3],rev);
-      return '<g><rect x="'+n[1]+'" y="'+n[2]+'" width="'+NW+'" height="'+NH+'" rx="10" fill="'+fill+'" stroke="'+st+'" stroke-width="1.2"/><text x="'+(n[1]+10)+'" y="'+(n[2]+24)+'" font-size="13" font-weight="600" fill="#334155">'+n[0]+'</text><text x="'+(n[1]+10)+'" y="'+(n[2]+44)+'" font-size="14" font-weight="700" fill="'+(neg?'#ef4444':'#16a34a')+'">'+ffFmt(n[3])+'</text><text x="'+(n[1]+10)+'" y="'+(n[2]+58)+'" font-size="11" fill="#64748b">'+extra.replace(' · ','')+'</text></g>';
+      let extra=''; if(n[0]==='Gross Profit') extra=ffPct(n[3],rev); if(n[0]==='EBITDA') extra=ffPct(n[3],rev); if(n[0]==='Net Income') extra=ffPct(n[3],rev);
+      return '<g><rect x="'+n[1]+'" y="'+n[2]+'" width="'+NW+'" height="'+NH+'" rx="10" fill="'+fill+'" stroke="'+st+'" stroke-width="1.2"/><text x="'+(n[1]+8)+'" y="'+(n[2]+20)+'" font-size="11" font-weight="600" fill="#334155">'+n[0]+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+37)+'" font-size="12" font-weight="700" fill="'+(neg?'#ef4444':'#16a34a')+'">'+ffFmt(n[3])+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+51)+'" font-size="10" fill="#64748b">'+extra+'</text></g>';
     }}).join('');
     ffSvg.innerHTML = '<rect x="0" y="0" width="1200" height="720" fill="#ffffff"/>'+edges+nodeHtml;
   }};
