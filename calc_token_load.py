@@ -2106,19 +2106,10 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   const renderFinancialFlow=(year)=>{{ if(!ffPlot) return; const d=FIN_FLOW[String(year)]||{{}}; const rev=ffVal(d,'total_revenue');
     if(typeof Plotly==='undefined'){{ ffPlot.innerHTML="<div class='note warn'>Plotly failed to load. Financial Flow chart unavailable.</div>"; return; }}
     const gp=ffVal(d,'gross_profit'), ebitda=ffVal(d,'ebitda'), net=ffVal(d,'net_income');
-    const labels=[
-      "Workplace.ai Revenue\\n"+ffFmt(ffVal(d,'workplace_ai_revenue')),
-      "Contact Center Revenue\\n"+ffFmt(ffVal(d,'contact_center_ai_revenue')),
-      "Total Revenue\\n"+ffFmt(rev),
-      "COGS\\n"+ffFmt(ffVal(d,'total_cogs')),
-      "Gross Profit\\n"+ffFmt(gp)+" · "+ffPct(gp,rev),
-      "SG&A\\n"+ffFmt(ffVal(d,'total_sga')),
-      "EBITDA\\n"+ffFmt(ebitda)+" · "+ffPct(ebitda,rev),
-      "D&A\\n"+ffFmt(ffVal(d,'total_depreciation_and_amortization')),
-      "Interest\\n"+ffFmt(ffVal(d,'interest_expense')),
-      "Tax\\n"+ffFmt(ffVal(d,'profit_tax')),
-      "Net Income\\n"+ffFmt(net)+" · "+ffPct(net,rev),
-    ];
+    const names=["Workplace.ai Revenue","Contact Center Revenue","Total Revenue","COGS","Gross Profit","SG&A","EBITDA","D&A","Interest","Tax","Net Income"];
+    const vals=[ffVal(d,'workplace_ai_revenue'),ffVal(d,'contact_center_ai_revenue'),rev,ffVal(d,'total_cogs'),gp,ffVal(d,'total_sga'),ebitda,ffVal(d,'total_depreciation_and_amortization'),ffVal(d,'interest_expense'),ffVal(d,'profit_tax'),net];
+    const margins=['','','','',ffPct(gp,rev),'',ffPct(ebitda,rev),'','','',ffPct(net,rev)];
+    const labels=[...names];
     const linkVals=[ffVal(d,'workplace_ai_revenue'),ffVal(d,'contact_center_ai_revenue'),ffVal(d,'total_cogs'),gp,ffVal(d,'total_sga'),ebitda,ffVal(d,'total_depreciation_and_amortization'),ffVal(d,'interest_expense'),ffVal(d,'profit_tax'),net];
     const sankey={{
       type:'sankey',orientation:'h',arrangement:'fixed',
@@ -2128,7 +2119,15 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       color:['rgba(59,130,246,0.75)','rgba(56,189,248,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)','rgba(239,68,68,0.75)','rgba(239,68,68,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)'],
       customdata:linkVals,hovertemplate:'%{{source.label}} → %{{target.label}}<br>Value: %{{customdata}}<extra></extra>'}}
     }};
-    Plotly.react(ffPlot,[sankey],{{margin:{{l:12,r:56,t:12,b:12}},height:580,font:{{size:11}},paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
+    const annPos=[
+      [0.00,0.205],[0.00,0.605],[0.19,0.43],[0.58,0.17],[0.50,0.64],[0.80,0.27],[0.72,0.74],[0.98,0.17],[0.98,0.39],[0.98,0.61],[0.98,0.87]
+    ];
+    const annotations=names.map((nm,i)=>({{x:annPos[i][0],y:annPos[i][1],xref:'paper',yref:'paper',showarrow:false,align:'left',
+      xanchor:i<2?'right':'left',yanchor:'middle',bgcolor:'rgba(255,255,255,0.78)',borderpad:2,
+      text:'<b style=\"color:#1f2937\">'+nm+'</b><br><span style=\"color:#16a34a\">'+ffFmt(vals[i])+'</span>'+(margins[i]?'<br><span style=\"color:#6b7280\">'+margins[i]+'</span>':''),
+      font:{{size:11}}
+    }}));
+    Plotly.react(ffPlot,[sankey],{{margin:{{l:100,r:180,t:12,b:12}},height:580,font:{{size:11}},annotations,paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
   }};
   if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
   const recalc = () => {{
