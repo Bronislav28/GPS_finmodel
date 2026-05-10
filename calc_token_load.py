@@ -1992,7 +1992,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .base-cell{{outline:2px solid #111827;outline-offset:-2px}}
 .ok{{color:#15803d;font-weight:600}} .warn{{color:#b45309;font-weight:600}}
 .financial-flow-wrap{{overflow-x:auto;max-width:100%;padding-bottom:8px}}
-</style></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
+</style><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
 <div class='card'>
   <h3>Model Status</h3>
@@ -2023,8 +2023,9 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 <div class='card'>
   <div class='ctrl' style='max-width:220px'><label>Year</label><select id='ff_year'>{''.join(f"<option {'selected' if y==years[-1] else ''}>{y}</option>" for y in years)}</select></div>
   <div class='note'>Financial Flow uses official Python-calculated base-case values. Scenario Lab changes do not affect this chart.</div>
-  <div class='financial-flow-wrap'><svg id='ff_svg' viewBox='0 0 1200 720' preserveAspectRatio='xMidYMid meet' style='width:100%;height:auto;margin-top:8px'></svg></div>
+  <div class='financial-flow-wrap'><div id='ff_plot' style='width:100%;height:560px'></div></div>
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
+  <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
 </div></section>
 <section><h2>Scenario Lab — NPV What-if</h2>
 <div class='card'>
@@ -2097,51 +2098,37 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   }};
   const current = {{npv:0}};
   const FIN_FLOW = {json.dumps(financial_flow_data)};
-  const ffSvg = document.getElementById('ff_svg');
+  const ffPlot = document.getElementById('ff_plot');
   const ffYear = document.getElementById('ff_year');
   const ffFmt = (v)=>{{ if(v===null||v===undefined||!Number.isFinite(Number(v))) return 'N/A'; const n=Number(v),a=Math.abs(n); const s=n<0?'(':'',e=n<0?')':''; if(a>=1e9) return s+'₽'+(a/1e9).toFixed(1)+'bn'+e; if(a>=1e6) return s+'₽'+(a/1e6).toFixed(1)+'m'+e; return s+'₽'+a.toFixed(0)+e; }};
   const ffPct=(v,d)=> (Number.isFinite(v)&&Number.isFinite(d)&&Math.abs(d)>1e-9)?((v/d)*100).toFixed(1)+'% margin':'N/A';
   const ffVal=(o,k)=> Number.isFinite(Number(o?.[k]))?Number(o[k]):null;
-  const renderFinancialFlow=(year)=>{{ if(!ffSvg) return; const d=FIN_FLOW[String(year)]||{{}}; const rev=ffVal(d,'total_revenue');
-    const NW=162,NH=56;
-    const X1=70, X2=290, X3=510, X4=730, X5=950;
-    const nodes=[
-      ['Workplace.ai Revenue',X1,180,ffVal(d,'workplace_ai_revenue')],
-      ['Contact Center Revenue',X1,320,ffVal(d,'contact_center_ai_revenue')],
-      ['Total Revenue',X2,250,rev],
-      ['COGS',X3,170,ffVal(d,'total_cogs')],
-      ['Gross Profit',X3,340,ffVal(d,'gross_profit')],
-      ['SG&A',X4,260,ffVal(d,'total_sga')],
-      ['EBITDA',X4,430,ffVal(d,'ebitda')],
-      ['D&A',X5,180,ffVal(d,'total_depreciation_and_amortization')],
-      ['Interest',X5,300,ffVal(d,'interest_expense')],
-      ['Tax',X5,420,ffVal(d,'profit_tax')],
-      ['Net Income',X5,560,ffVal(d,'net_income')],
+  const renderFinancialFlow=(year)=>{{ if(!ffPlot) return; const d=FIN_FLOW[String(year)]||{{}}; const rev=ffVal(d,'total_revenue');
+    if(typeof Plotly==='undefined'){{ ffPlot.innerHTML="<div class='note warn'>Plotly failed to load. Financial Flow chart unavailable.</div>"; return; }}
+    const gp=ffVal(d,'gross_profit'), ebitda=ffVal(d,'ebitda'), net=ffVal(d,'net_income');
+    const labels=[
+      "Workplace.ai Revenue\\n"+ffFmt(ffVal(d,'workplace_ai_revenue')),
+      "Contact Center Revenue\\n"+ffFmt(ffVal(d,'contact_center_ai_revenue')),
+      "Total Revenue\\n"+ffFmt(rev),
+      "COGS\\n"+ffFmt(ffVal(d,'total_cogs')),
+      "Gross Profit\\n"+ffFmt(gp)+" · "+ffPct(gp,rev),
+      "SG&A\\n"+ffFmt(ffVal(d,'total_sga')),
+      "EBITDA\\n"+ffFmt(ebitda)+" · "+ffPct(ebitda,rev),
+      "D&A\\n"+ffFmt(ffVal(d,'total_depreciation_and_amortization')),
+      "Interest\\n"+ffFmt(ffVal(d,'interest_expense')),
+      "Tax\\n"+ffFmt(ffVal(d,'profit_tax')),
+      "Net Income\\n"+ffFmt(net)+" · "+ffPct(net,rev),
     ];
-    const scale=Math.max(Math.abs(rev||0),1);
-    const w=(v)=>Math.max(5,46*Math.abs(v||0)/scale);
-    const color=(v,profit=true)=> (v===null?'#9ca3af':(!profit||v<0?'#ef4444':'#22c55e'));
-    const nBy=Object.fromEntries(nodes.map(n=>[n[0],{{n:n,ax:{{r:n[1]+NW,l:n[1],m:n[2]+NH/2}}}}]));
-    const anchor=(name,side,off)=>{{ const o=nBy[name].ax; return [side==='r'?o.r:o.l, o.m+(off||0)]; }};
-    const edge=(A,aSide,aOff,B,bSide,bOff,v,c)=>{{ const a=anchor(A,aSide,aOff), b=anchor(B,bSide,bOff); const dx=Math.max(95,Math.abs(b[0]-a[0])*0.52);
-      return '<path d="M '+a[0]+' '+a[1]+' C '+(a[0]+dx)+' '+a[1]+', '+(b[0]-dx)+' '+b[1]+', '+b[0]+' '+b[1]+'" stroke="'+c+'" stroke-width="'+w(v)+'" fill="none" stroke-linecap="round" opacity="0.78"/>'; }};
-    const edges=[
-      edge('Workplace.ai Revenue','r',-8,'Total Revenue','l',-10,ffVal(d,'workplace_ai_revenue'),'#3b82f6'),
-      edge('Contact Center Revenue','r',8,'Total Revenue','l',10,ffVal(d,'contact_center_ai_revenue'),'#38bdf8'),
-      edge('Total Revenue','r',-12,'COGS','l',-8,ffVal(d,'total_cogs'),'#ef4444'),
-      edge('Total Revenue','r',12,'Gross Profit','l',8,ffVal(d,'gross_profit'),'#22c55e'),
-      edge('Gross Profit','r',-10,'SG&A','l',-8,ffVal(d,'total_sga'),'#ef4444'),
-      edge('Gross Profit','r',10,'EBITDA','l',8,ffVal(d,'ebitda'),'#22c55e'),
-      edge('EBITDA','r',-18,'D&A','l',-10,ffVal(d,'total_depreciation_and_amortization'),'#ef4444'),
-      edge('EBITDA','r',-6,'Interest','l',-4,ffVal(d,'interest_expense'),'#ef4444'),
-      edge('EBITDA','r',6,'Tax','l',4,ffVal(d,'profit_tax'),'#ef4444'),
-      edge('EBITDA','r',18,'Net Income','l',10,ffVal(d,'net_income'),'#22c55e'),
-    ].join('');
-    const nodeHtml=nodes.map(n=>{{ const neg=(n[3]||0)<0; const fill='#f8fafc'; const st='#cbd5e1';
-      let extra=''; if(n[0]==='Gross Profit') extra=ffPct(n[3],rev); if(n[0]==='EBITDA') extra=ffPct(n[3],rev); if(n[0]==='Net Income') extra=ffPct(n[3],rev);
-      return '<g><rect x="'+n[1]+'" y="'+n[2]+'" width="'+NW+'" height="'+NH+'" rx="10" fill="'+fill+'" stroke="'+st+'" stroke-width="1.2"/><text x="'+(n[1]+8)+'" y="'+(n[2]+19)+'" font-size="11" font-weight="600" fill="#334155">'+n[0]+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+35)+'" font-size="12" font-weight="700" fill="'+(neg?'#ef4444':'#16a34a')+'">'+ffFmt(n[3])+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+49)+'" font-size="10" fill="#64748b">'+extra+'</text></g>';
-    }}).join('');
-    ffSvg.innerHTML = '<rect x="0" y="0" width="1200" height="720" fill="#ffffff"/>'+edges+nodeHtml;
+    const linkVals=[ffVal(d,'workplace_ai_revenue'),ffVal(d,'contact_center_ai_revenue'),ffVal(d,'total_cogs'),gp,ffVal(d,'total_sga'),ebitda,ffVal(d,'total_depreciation_and_amortization'),ffVal(d,'interest_expense'),ffVal(d,'profit_tax'),net];
+    const sankey={{
+      type:'sankey',orientation:'h',arrangement:'fixed',
+      node:{{label:labels,pad:14,thickness:18,line:{{color:'#94a3b8',width:1}},color:['#3b82f6','#38bdf8','#60a5fa','#ef4444','#22c55e','#ef4444','#22c55e','#ef4444','#ef4444','#ef4444','#16a34a'],
+      x:[0.01,0.01,0.21,0.43,0.43,0.64,0.85,0.85,0.85,0.85],y:[0.22,0.52,0.37,0.18,0.53,0.38,0.18,0.37,0.56,0.76]}},
+      link:{{source:[0,1,2,2,4,4,6,6,6,6],target:[2,2,3,4,5,6,7,8,9,10],value:linkVals.map(v=>Math.abs(Number(v)||0)),
+      color:['rgba(59,130,246,0.75)','rgba(56,189,248,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)','rgba(239,68,68,0.75)','rgba(239,68,68,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)'],
+      customdata:linkVals,hovertemplate:'%{{source.label}} → %{{target.label}}<br>Value: %{{customdata}}<extra></extra>'}}
+    }};
+    Plotly.react(ffPlot,[sankey],{{margin:{{l:8,r:8,t:8,b:8}},height:560,paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
   }};
   if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
   const recalc = () => {{
