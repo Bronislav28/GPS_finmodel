@@ -1933,16 +1933,17 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 <div class='card'>
   <h3>Controls</h3>
   <div class='controls'>
-    <div class='ctrl'><label>Revenue scenario</label><select disabled><option>base</option></select></div>
-    <div class='ctrl'><label>Infrastructure scenario</label><select disabled><option>build_own_dc</option><option>rent_gpu_only</option><option selected>hybrid</option></select></div>
-    <div class='ctrl'><label>Construction start year</label><input type='number' value='2028' disabled/></div>
-    <div class='ctrl'><label>Funding scenario</label><select disabled><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select></div>
-    <div class='ctrl'><label>Funding mix (equity %)</label><input value='50' disabled/></div>
-    <div class='ctrl'><label>Funding mix (revolver %)</label><input value='50' disabled/></div>
+    <div class='ctrl'><label>Revenue scenario</label><select id='top_revenue' disabled title='Not enabled in Scenario Lab v1'><option>base</option></select><small class='note'>Not enabled in Scenario Lab v1</small></div>
+    <div class='ctrl'><label>Infrastructure scenario</label><select id='top_infra'><option>build_own_dc</option><option>rent_gpu_only</option><option selected>hybrid</option></select><small class='note'>Scenario Lab only</small></div>
+    <div class='ctrl'><label>Construction start year</label><input id='top_csy' type='number' value='2028' disabled title='Not enabled in Scenario Lab v1'/><small class='note'>Not enabled in Scenario Lab v1</small></div>
+    <div class='ctrl'><label>Funding scenario</label><select id='top_funding'><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select><small class='note'>Scenario Lab only</small></div>
+    <div class='ctrl'><label>Funding mix (equity %)</label><input id='top_eq_mix' value='50' disabled title='Not enabled in Scenario Lab v1'/><small class='note'>Not enabled in Scenario Lab v1</small></div>
+    <div class='ctrl'><label>Funding mix (revolver %)</label><input id='top_rev_mix' value='50' disabled title='Not enabled in Scenario Lab v1'/><small class='note'>Not enabled in Scenario Lab v1</small></div>
     <div class='ctrl'><label>Discount rate (%)</label><input id='discount-rate-input' type='number' value='30' step='0.1' min='0'/></div>
   </div>
-  <div class='note'>Interactive scenario switching is not enabled yet. Current report shows the Python-calculated base case.</div>
-  <div class='note'>Discount rate updates DCF / NPV only. It does not change operating model, P&L, funding, or balance sheet.</div>
+  <div class='note'>Scenario controls affect Scenario Lab only. The official report tables remain the Python-calculated YAML base case.</div>
+  <div class='note'>To make a scenario official, copy the selected assumptions into assumptions.yaml and regenerate the report.</div>
+  <div class='note'>Discount rate updates official DCF display and Scenario Lab. Other top controls affect Scenario Lab only.</div>
 </div>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
 <section><h2>Scenario Lab — NPV What-if</h2>
