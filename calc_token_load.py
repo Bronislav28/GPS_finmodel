@@ -2103,41 +2103,43 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   const ffPct=(v,d)=> (Number.isFinite(v)&&Number.isFinite(d)&&Math.abs(d)>1e-9)?((v/d)*100).toFixed(1)+'% margin':'N/A';
   const ffVal=(o,k)=> Number.isFinite(Number(o?.[k]))?Number(o[k]):null;
   const renderFinancialFlow=(year)=>{{ if(!ffSvg) return; const d=FIN_FLOW[String(year)]||{{}}; const rev=ffVal(d,'total_revenue');
-    const NW=166,NH=58;
+    const NW=162,NH=56;
+    const X1=70, X2=290, X3=510, X4=730, X5=950;
     const nodes=[
-      ['Workplace.ai Revenue',40,170,ffVal(d,'workplace_ai_revenue')],
-      ['Contact Center Revenue',40,320,ffVal(d,'contact_center_ai_revenue')],
-      ['Total Revenue',250,245,rev],
-      ['COGS',470,155,ffVal(d,'total_cogs')],
-      ['Gross Profit',470,335,ffVal(d,'gross_profit')],
-      ['SG&A',680,255,ffVal(d,'total_sga')],
-      ['EBITDA',680,430,ffVal(d,'ebitda')],
-      ['D&A',900,220,ffVal(d,'total_depreciation_and_amortization')],
-      ['Interest',900,330,ffVal(d,'interest_expense')],
-      ['Tax',900,440,ffVal(d,'profit_tax')],
-      ['Net Income',900,560,ffVal(d,'net_income')],
+      ['Workplace.ai Revenue',X1,180,ffVal(d,'workplace_ai_revenue')],
+      ['Contact Center Revenue',X1,320,ffVal(d,'contact_center_ai_revenue')],
+      ['Total Revenue',X2,250,rev],
+      ['COGS',X3,170,ffVal(d,'total_cogs')],
+      ['Gross Profit',X3,340,ffVal(d,'gross_profit')],
+      ['SG&A',X4,260,ffVal(d,'total_sga')],
+      ['EBITDA',X4,430,ffVal(d,'ebitda')],
+      ['D&A',X5,180,ffVal(d,'total_depreciation_and_amortization')],
+      ['Interest',X5,300,ffVal(d,'interest_expense')],
+      ['Tax',X5,420,ffVal(d,'profit_tax')],
+      ['Net Income',X5,560,ffVal(d,'net_income')],
     ];
     const scale=Math.max(Math.abs(rev||0),1);
     const w=(v)=>Math.max(5,46*Math.abs(v||0)/scale);
     const color=(v,profit=true)=> (v===null?'#9ca3af':(!profit||v<0?'#ef4444':'#22c55e'));
-    const nBy=Object.fromEntries(nodes.map(n=>[n[0],{{n:n,ax:{{rt:[n[1]+NW,n[2]+18],rb:[n[1]+NW,n[2]+46],lt:[n[1],n[2]+18],lb:[n[1],n[2]+46],rm:[n[1]+NW,n[2]+32],lm:[n[1],n[2]+32]}}}}]));
-    const edge=(A,aa,B,bb,v,c)=>{{ const a=nBy[A].ax[aa], b=nBy[B].ax[bb]; const dx=Math.max(80,Math.abs(b[0]-a[0])*0.45);
+    const nBy=Object.fromEntries(nodes.map(n=>[n[0],{{n:n,ax:{{r:n[1]+NW,l:n[1],m:n[2]+NH/2}}}}]));
+    const anchor=(name,side,off)=>{{ const o=nBy[name].ax; return [side==='r'?o.r:o.l, o.m+(off||0)]; }};
+    const edge=(A,aSide,aOff,B,bSide,bOff,v,c)=>{{ const a=anchor(A,aSide,aOff), b=anchor(B,bSide,bOff); const dx=Math.max(95,Math.abs(b[0]-a[0])*0.52);
       return '<path d="M '+a[0]+' '+a[1]+' C '+(a[0]+dx)+' '+a[1]+', '+(b[0]-dx)+' '+b[1]+', '+b[0]+' '+b[1]+'" stroke="'+c+'" stroke-width="'+w(v)+'" fill="none" stroke-linecap="round" opacity="0.78"/>'; }};
     const edges=[
-      edge('Workplace.ai Revenue','rm','Total Revenue','lt',ffVal(d,'workplace_ai_revenue'),'#3b82f6'),
-      edge('Contact Center Revenue','rm','Total Revenue','lb',ffVal(d,'contact_center_ai_revenue'),'#38bdf8'),
-      edge('Total Revenue','rt','COGS','lm',ffVal(d,'total_cogs'),'#ef4444'),
-      edge('Total Revenue','rb','Gross Profit','lm',ffVal(d,'gross_profit'),'#22c55e'),
-      edge('Gross Profit','rt','SG&A','lm',ffVal(d,'total_sga'),'#ef4444'),
-      edge('Gross Profit','rb','EBITDA','lm',ffVal(d,'ebitda'),'#22c55e'),
-      edge('EBITDA','rt','D&A','lm',ffVal(d,'total_depreciation_and_amortization'),'#ef4444'),
-      edge('EBITDA','rm','Interest','lm',ffVal(d,'interest_expense'),'#ef4444'),
-      edge('EBITDA','rb','Tax','lm',ffVal(d,'profit_tax'),'#ef4444'),
-      edge('EBITDA','rb','Net Income','lt',ffVal(d,'net_income'),'#22c55e'),
+      edge('Workplace.ai Revenue','r',-8,'Total Revenue','l',-10,ffVal(d,'workplace_ai_revenue'),'#3b82f6'),
+      edge('Contact Center Revenue','r',8,'Total Revenue','l',10,ffVal(d,'contact_center_ai_revenue'),'#38bdf8'),
+      edge('Total Revenue','r',-12,'COGS','l',-8,ffVal(d,'total_cogs'),'#ef4444'),
+      edge('Total Revenue','r',12,'Gross Profit','l',8,ffVal(d,'gross_profit'),'#22c55e'),
+      edge('Gross Profit','r',-10,'SG&A','l',-8,ffVal(d,'total_sga'),'#ef4444'),
+      edge('Gross Profit','r',10,'EBITDA','l',8,ffVal(d,'ebitda'),'#22c55e'),
+      edge('EBITDA','r',-18,'D&A','l',-10,ffVal(d,'total_depreciation_and_amortization'),'#ef4444'),
+      edge('EBITDA','r',-6,'Interest','l',-4,ffVal(d,'interest_expense'),'#ef4444'),
+      edge('EBITDA','r',6,'Tax','l',4,ffVal(d,'profit_tax'),'#ef4444'),
+      edge('EBITDA','r',18,'Net Income','l',10,ffVal(d,'net_income'),'#22c55e'),
     ].join('');
     const nodeHtml=nodes.map(n=>{{ const neg=(n[3]||0)<0; const fill='#f8fafc'; const st='#cbd5e1';
       let extra=''; if(n[0]==='Gross Profit') extra=ffPct(n[3],rev); if(n[0]==='EBITDA') extra=ffPct(n[3],rev); if(n[0]==='Net Income') extra=ffPct(n[3],rev);
-      return '<g><rect x="'+n[1]+'" y="'+n[2]+'" width="'+NW+'" height="'+NH+'" rx="10" fill="'+fill+'" stroke="'+st+'" stroke-width="1.2"/><text x="'+(n[1]+8)+'" y="'+(n[2]+20)+'" font-size="11" font-weight="600" fill="#334155">'+n[0]+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+37)+'" font-size="12" font-weight="700" fill="'+(neg?'#ef4444':'#16a34a')+'">'+ffFmt(n[3])+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+51)+'" font-size="10" fill="#64748b">'+extra+'</text></g>';
+      return '<g><rect x="'+n[1]+'" y="'+n[2]+'" width="'+NW+'" height="'+NH+'" rx="10" fill="'+fill+'" stroke="'+st+'" stroke-width="1.2"/><text x="'+(n[1]+8)+'" y="'+(n[2]+19)+'" font-size="11" font-weight="600" fill="#334155">'+n[0]+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+35)+'" font-size="12" font-weight="700" fill="'+(neg?'#ef4444':'#16a34a')+'">'+ffFmt(n[3])+'</text><text x="'+(n[1]+8)+'" y="'+(n[2]+49)+'" font-size="10" fill="#64748b">'+extra+'</text></g>';
     }}).join('');
     ffSvg.innerHTML = '<rect x="0" y="0" width="1200" height="720" fill="#ffffff"/>'+edges+nodeHtml;
   }};
