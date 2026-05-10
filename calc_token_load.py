@@ -1867,11 +1867,61 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     dt = __import__("datetime")
     ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     sl_margin_default = (as_float(metric_store.get("target_contribution_margin", {}).get(years[0])) or 0.30)
+    opex_root = assumptions.get("opex", {}) if isinstance(assumptions.get("opex"), dict) else {}
+    team = opex_root.get("team", assumptions.get("team", {}))
+    sga = assumptions.get("sga", {}) if isinstance(assumptions.get("sga"), dict) else {}
+    payroll = team.get("payroll_assumptions", {}) if isinstance(team, dict) and isinstance(team.get("payroll_assumptions"), dict) else {}
+    salary_growth_map = to_year_map(payroll.get("salary_growth"))
+    bonus_cfg = payroll.get("bonus_percent_of_gross")
+    social_cfg = payroll.get("social_contribution_sfr_percent_of_gross")
+    sga_payroll = sga.get("payroll_assumptions", {}) if isinstance(sga.get("payroll_assumptions"), dict) else {}
     sl_gpu_cost_default = float(as_float((assumptions.get("capex", {}).get("gpu", {}) or {}).get("unit_cost")) or 0.0)
     sl_rent_default = float(as_float(((assumptions.get("opex", {}).get("gpu_rental", {}) or {}).get("rental_price_per_gpu_per_year")) or 0.0)
         or as_float((assumptions.get("opex", {}).get("gpu_rental", {}) or {}).get("rental_price_per_gpu_per_year", {}).get("value"))
         or 0.0)
     sl_dr_default = float(as_float(metric_store.get("discount_rate", {}).get(years[0])) or 0.30)
+    core_target_fte_map = flatten_role_values((team.get("core_team_target_fte", {}) if isinstance(team, dict) else {}))
+    core_salary_map = flatten_role_values((team.get("salary_gross_monthly_rub", {}) if isinstance(team, dict) else {}))
+    core_cap_roles = flatten_role_values((((team.get("capitalization", {}) or {}).get("role_eligibility", {})) if isinstance(team, dict) else {}))
+    sga_target_fte_map = flatten_role_values((sga.get("target_fte", {}) if isinstance(sga, dict) else {}))
+    sga_salary_map = flatten_role_values((sga.get("salary_gross_monthly_rub", {}) if isinstance(sga, dict) else {}))
+    inflation_index_by_year = {}
+    for y in years:
+        salary_idx = 1.0
+        for yy in years:
+            if yy > y:
+                break
+            salary_idx *= (1.0 + (as_float(salary_growth_map.get(yy)) or 0.0))
+        inflation_index_by_year[y] = salary_idx
+    core_roles = sorted(set(core_target_fte_map.keys()) | set(core_salary_map.keys()))
+    sga_roles = sorted(set(sga_target_fte_map.keys()) | set(sga_salary_map.keys()))
+    team_planner = {
+        "core_team": {
+            "roles": [
+                {
+                    "name": "/".join(p),
+                    "monthly_salary_2026": float(core_salary_map.get(p, 0.0) or 0.0),
+                    "fte_by_year": {str(y): float(core_target_fte_map.get(p, 0.0) or 0.0) for y in years},
+                    "eligible_for_capitalization": bool(core_cap_roles.get(p, 0.0)),
+                }
+                for p in core_roles
+            ],
+            "annual_bonus_percent_of_gross": float(as_float(year_value(bonus_cfg, years[0], 0.0)) or 0.0),
+            "social_contribution_sfr_percent_of_gross": float(as_float(year_value(social_cfg, years[0], 0.0)) or 0.0),
+        },
+        "sga": {
+            "roles": [
+                {
+                    "name": "/".join(p),
+                    "monthly_salary_2026": float(sga_salary_map.get(p, 0.0) or 0.0),
+                    "fte_by_year": {str(y): float(sga_target_fte_map.get(p, 0.0) or 0.0) for y in years},
+                }
+                for p in sga_roles
+            ],
+            "annual_bonus_percent_of_gross": float(as_float(year_value(sga_payroll.get("annual_bonus_percent_of_gross"), years[0], 0.0)) or 0.0),
+            "social_contribution_sfr_percent_of_gross": float(as_float(year_value(sga_payroll.get("social_contribution_sfr_percent_of_gross"), years[0], 0.0)) or 0.0),
+        },
+    }
     scenario_lab_data = {
         "base_npv": as_float(metric_store.get("npv", {}).get(years[0])) or 0.0,
         "base_discount_rate": sl_dr_default,
@@ -1892,6 +1942,10 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         "rows": [{k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in r.items()} for r in rows],
         "infra_multiplier": as_float((assumptions.get("capex", {}).get("infra_multiplier", {}) or {}).get("value")) or 0.0,
         "profit_tax_rate": as_float((((assumptions.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}) or {}).get("value")) or 0.0,
+        "team_planner": team_planner,
+        "inflation_index_by_year": {str(y): inflation_index_by_year.get(y, 1.0) for y in years},
+        "go_live_year": int((years[0] if years else 2026)),
+        "go_live_month": 1,
     }
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
@@ -1953,9 +2007,10 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='grid'>
     <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin_multiplier</label><input id='sl_margin' type='number' step='0.01' value='1.00'/></div></div>
     <div class='card'><h3>Compute & GPU</h3><div class='ctrl'><label>weighted_throughput_multiplier</label><input id='sl_wt' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>utilization_multiplier</label><input id='sl_util' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>gpu_unit_cost</label><input id='sl_gpu_cost' type='number' step='1' value='{sl_gpu_cost_default:.0f}'/></div><div class='ctrl'><label>gpu_rental_price_per_gpu_per_year</label><input id='sl_rent' type='number' step='1' value='{sl_rent_default:.0f}'/></div></div>
-    <div class='card'><h3>Team & OPEX</h3><div class='ctrl'><label>core_team_fte_multiplier</label><input id='sl_fte' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>core_team_salary_multiplier</label><input id='sl_salary' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>sga_salary_multiplier</label><input id='sl_sga' type='number' step='0.01' value='1.00'/></div></div>
     <div class='card'><h3>Finance</h3><div class='ctrl'><label>discount_rate</label><input id='sl_dr' type='number' step='0.01' value='{sl_dr_default:.2f}'/></div></div>
   </div>
+  <div class='table-wrap' id='sl_team_tables'></div>
+  <div class='note'>Team Planner affects Scenario Lab only. To make changes official, copy the selected team assumptions into assumptions.yaml and regenerate the report.</div>
   <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button></div>
   <div id='sl_parity' class='note'></div>
   <div class='note'>Scenario Lab defaults are calibrated to match the Python base case. Changed inputs produce indicative what-if results.</div>
@@ -2063,7 +2118,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       infraSel.value=SL_BASE.active_infrastructure_scenario||'hybrid';
       wrap.querySelector('#sl_funding_scenario').value=SL_BASE.active_funding_scenario||'mix';
     }
-    const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_fte','sl_salary','sl_sga','sl_dr'];
+    const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_dr'];
     const read=()=>Object.fromEntries(slIds.map(id=>[id,Number(document.getElementById(id).value)]));
     const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
     const fi=(v)=>String(Math.round(v));
@@ -2083,23 +2138,49 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       "<div class='kpi'><div class='k'>Owned GPU 2030</div><div class='v'>"+fi(out.owned2030||0)+"</div></div>"+
       "<div class='kpi'><div class='k'>Rented GPU 2030</div><div class='v'>"+fi(out.rented2030||0)+"</div></div>"+
       "<div class='kpi'><div class='k'>Revolver Balance 2030</div><div class='v'>"+fm(out.revBal2030)+"</div></div>"+
-      "<div class='kpi'><div class='k'>Payback</div><div class='v'>N/A</div></div>";
+      "<div class='kpi'><div class='k'>Payback</div><div class='v'>N/A</div></div>"+
+      "<div class='kpi'><div class='k'>Core Team FTE 2030</div><div class='v'>"+fm(out.coreFte2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Core Team Cash Cost 2030</div><div class='v'>"+fm(out.coreCash2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Team OPEX 2030</div><div class='v'>"+fm(out.teamOpex2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>SG&A FTE 2030</div><div class='v'>"+fm(out.sgaFte2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>SG&A Payroll 2030</div><div class='v'>"+fm(out.sgaPayroll2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Total SG&A 2030</div><div class='v'>"+fm(out.totalSga2030)+"</div></div>";
     };
+    const years=(SL_BASE.rows||[]).map(r=>String(r.year));
+    const renderTeamTables=()=>{
+      const host=document.getElementById('sl_team_tables'); if(!host) return;
+      const tableHtml=(title,key)=>{ const roles=((SL_BASE.team_planner||{})[key]||{}).roles||[];
+        return "<div class='card'><h3>"+title+"</h3><div class='table-wrap'><table><thead><tr><th>Role</th><th>Monthly Salary 2026</th>"+years.map(y=>"<th>FTE "+y+"</th>").join("")+"</tr></thead><tbody>"+
+        roles.map((r,i)=>"<tr><td>"+r.name+"</td><td><input data-plan='"+key+"' data-idx='"+i+"' data-fld='salary' type='number' step='1' value='"+Number(r.monthly_salary_2026||0)+"'/></td>"+
+        years.map(y=>"<td><input data-plan='"+key+"' data-idx='"+i+"' data-fld='fte_"+y+"' type='number' step='0.1' value='"+Number((r.fte_by_year||{})[y]||0)+"'/></td>").join("")+"</tr>").join("")+
+        "</tbody></table></div></div>"; };
+      host.innerHTML=tableHtml("Core Team Planner","core_team")+tableHtml("SG&A Team Planner","sga");
+    };
+    const readTeamPlan=(key)=>{ const roles=JSON.parse(JSON.stringify((((SL_BASE.team_planner||{})[key]||{}).roles)||[]));
+      roles.forEach((r,i)=>{ const s=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='salary']"); if(s) r.monthly_salary_2026=Number(s.value)||0;
+        years.forEach(y=>{ const f=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='fte_"+y+"']"); if(f){ if(!r.fte_by_year) r.fte_by_year={}; r.fte_by_year[y]=Number(f.value)||0; }});
+      }); return roles; };
     const calc=()=>{ const p=read(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
       const infra=(document.getElementById('sl_infra_scenario')||{value:SL_BASE.active_infrastructure_scenario}).value;
       const funding=(document.getElementById('sl_funding_scenario')||{value:SL_BASE.active_funding_scenario}).value;
       const shares=(SL_BASE.funding_scenarios&&SL_BASE.funding_scenarios[funding])||{equity_share:0.5,revolver_share:0.5};
-      const defaults={sl_wp_tok:1,sl_cc_tok:1,sl_wp_act:1,sl_cc_auto:1,sl_margin:1,sl_wt:1,sl_util:1,sl_fte:1,sl_salary:1,sl_sga:1,sl_dr:SL_BASE.base_discount_rate,sl_gpu_cost:SL_BASE.base_gpu_unit_cost,sl_rent:SL_BASE.base_rental_price};
+      const defaults={sl_wp_tok:1,sl_cc_tok:1,sl_wp_act:1,sl_cc_auto:1,sl_margin:1,sl_wt:1,sl_util:1,sl_dr:SL_BASE.base_discount_rate,sl_gpu_cost:SL_BASE.base_gpu_unit_cost,sl_rent:SL_BASE.base_rental_price};
       const isDefault = slIds.every(k=>Math.abs((p[k]||0)-(defaults[k]||0))<1e-9) && infra===(SL_BASE.active_infrastructure_scenario||'hybrid') && funding===(SL_BASE.active_funding_scenario||'mix');
-      let prevOwned=0, prevClose=0, prevRevBal=0, owned2030=0, rented2030=0;
+      let prevOwned=0, prevClose=0, prevRevBal=0, owned2030=0, rented2030=0, coreFte2030=0,coreCash2030=0,teamOpex2030=0,sgaFte2030=0,sgaPayroll2030=0,totalSga2030=0;
+      const coreRoles=readTeamPlan('core_team'), sgaRoles=readTeamPlan('sga');
       SL_BASE.rows.forEach((r,idx)=>{ const wp=(r.workplace_annual_tokens||0)*p.sl_wp_tok*p.sl_wp_act; const cc=(r.contact_center_annual_tokens||0)*p.sl_cc_tok*p.sl_cc_auto;
         const tps=(wp+cc)/(((r.total_annual_tokens||1)/(r.tokens_per_second||1))||1);
         const req=Math.ceil(tps/(((r.weighted_throughput||1)*p.sl_wt)*((r.utilization||0.5)*p.sl_util))*(r.peak_factor||1));
         let owned=0, rented=0; const csy=Math.round(SL_BASE.construction_start_year||2028);
         if(infra==='build_own_dc'){owned=req; rented=0;} else if(infra==='rent_gpu_only'){owned=0; rented=req;} else { if((r.year||0)<csy){owned=0; rented=req;} else {owned=req; rented=0;} }
         const s=(r.owned_gpu||0)>0?owned/(r.owned_gpu||1):1;
-        const team=(r.annual_core_team_cash_cost||0)*p.sl_fte*p.sl_salary-(r.capitalized_core_team_cost||0);
-        const sga=(r.annual_fixed_sga||0)*p.sl_sga+(r.annual_office_rent||0);
+        const yr=String(r.year||'');
+        const infl=(SL_BASE.inflation_index_by_year||{})[yr]||1;
+        let coreCash=0, coreFte=0; coreRoles.forEach(role=>{ const f=Number((role.fte_by_year||{})[yr]||0); const gross=(Number(role.monthly_salary_2026||0)*infl)*f*12; const bonus=gross*(((SL_BASE.team_planner||{}).core_team||{}).annual_bonus_percent_of_gross||0); const soc=(gross+bonus)*(((SL_BASE.team_planner||{}).core_team||{}).social_contribution_sfr_percent_of_gross||0); coreCash += gross+bonus+soc; coreFte+=f; });
+        const capRatio=((r.annual_core_team_cash_cost||0)>0)?((r.capitalized_core_team_cost||0)/(r.annual_core_team_cash_cost||1)):0;
+        const team=coreCash-(coreCash*capRatio);
+        let sgaPayroll=0, sgaFte=0; sgaRoles.forEach(role=>{ const f=Number((role.fte_by_year||{})[yr]||0); const gross=(Number(role.monthly_salary_2026||0)*infl)*f*12; const bonus=gross*(((SL_BASE.team_planner||{}).sga||{}).annual_bonus_percent_of_gross||0); const soc=(gross+bonus)*(((SL_BASE.team_planner||{}).sga||{}).social_contribution_sfr_percent_of_gross||0); sgaPayroll += gross+bonus+soc; sgaFte += f; });
+        const sga=sgaPayroll+(r.annual_office_rent||0);
         const cogs=(r.total_datacenter_opex||0)*(owned>0?s:0)+team+rented*p.sl_rent; const da=(r.total_depreciation_and_amortization||0);
         const m=Math.min(Math.max((r.target_contribution_margin||0)*p.sl_margin,0),0.99);
         const pb=cogs+da; const wpPB=pb*(r.workplace_token_share||0); const ccPB=pb*(r.contact_center_token_share||0);
@@ -2120,10 +2201,11 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
         const revBal=openingRev+drw-repay; prevRevBal=revBal; prevClose=cashAfter-repay;
         const fcf=isDefault?(r.free_cash_flow||0):(preFin+eq+drw-repay);
         npv+=fcf/Math.pow(1+p.sl_dr,idx); totalCapex+=(gi+dcc+(r.office_capex||0)+(r.intangible_capex||0));
-        if(idx===SL_BASE.rows.length-1){rev2030=rev;ebitda2030=(rev-cogs)-sga;req2030=req;revBal2030=revBal;owned2030=owned;rented2030=rented;}
-      }); render({npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030,owned2030,rented2030,infra,funding}); };
+        if(idx===SL_BASE.rows.length-1){rev2030=rev;ebitda2030=(rev-cogs)-sga;req2030=req;revBal2030=revBal;owned2030=owned;rented2030=rented;coreFte2030=coreFte;coreCash2030=coreCash;teamOpex2030=team;sgaFte2030=sgaFte;sgaPayroll2030=sgaPayroll;totalSga2030=sga;}
+      }); render({npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030,owned2030,rented2030,infra,funding,coreFte2030,coreCash2030,teamOpex2030,sgaFte2030,sgaPayroll2030,totalSga2030}); };
     document.getElementById('sl_recalc').addEventListener('click',calc);
-    document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); e.value=e.defaultValue;}); const i=document.getElementById('sl_infra_scenario'); if(i) i.value=SL_BASE.active_infrastructure_scenario; const f=document.getElementById('sl_funding_scenario'); if(f) f.value=SL_BASE.active_funding_scenario; calc();});
+    document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); e.value=e.defaultValue;}); renderTeamTables(); const i=document.getElementById('sl_infra_scenario'); if(i) i.value=SL_BASE.active_infrastructure_scenario; const f=document.getElementById('sl_funding_scenario'); if(f) f.value=SL_BASE.active_funding_scenario; calc();});
+    renderTeamTables();
     calc();
   } catch(e){ console.warn('Scenario Lab initialization failed',e); const w=document.getElementById('sl_warn'); if(w) w.textContent='Scenario Lab failed to initialize.'; }
 })();
