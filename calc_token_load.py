@@ -1992,6 +1992,13 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .base-cell{{outline:2px solid #111827;outline-offset:-2px}}
 .ok{{color:#15803d;font-weight:600}} .warn{{color:#b45309;font-weight:600}}
 .financial-flow-wrap{{overflow-x:auto;max-width:100%;padding-bottom:8px}}
+.financial-flow-plot-wrap{{position:relative;width:100%;height:400px}}
+#financial-flow-plot{{width:100%;height:400px}}
+#financial-flow-labels{{position:absolute;inset:0;pointer-events:none}}
+.ff-label{{position:absolute;background:rgba(255,255,255,0.88);border:1px solid #cbd5e1;border-radius:8px;padding:6px 8px;min-width:110px;max-width:150px;box-shadow:0 1px 2px rgba(15,23,42,0.06);font-size:11px;line-height:1.2}}
+.ff-label .name{{font-weight:700;color:#334155}}
+.ff-label .value{{font-weight:700;color:#16a34a;margin-top:2px}}
+.ff-label .margin{{color:#64748b;margin-top:2px}}
 </style><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
 <div class='card'>
@@ -2023,7 +2030,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 <div class='card'>
   <div class='ctrl' style='max-width:220px'><label>Year</label><select id='ff_year'>{''.join(f"<option {'selected' if y==years[-1] else ''}>{y}</option>" for y in years)}</select></div>
   <div class='note'>Financial Flow uses official Python-calculated base-case values. Scenario Lab changes do not affect this chart.</div>
-  <div class='financial-flow-wrap'><div id='ff_plot' style='width:100%;height:560px'></div></div>
+  <div class='financial-flow-wrap'><div class='financial-flow-plot-wrap'><div id='financial-flow-plot'></div><div id='financial-flow-labels'></div></div></div>
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
 </div></section>
@@ -2098,7 +2105,8 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   }};
   const current = {{npv:0}};
   const FIN_FLOW = {json.dumps(financial_flow_data)};
-  const ffPlot = document.getElementById('ff_plot');
+  const ffPlot = document.getElementById('financial-flow-plot');
+  const ffLabels = document.getElementById('financial-flow-labels');
   const ffYear = document.getElementById('ff_year');
   const ffFmt = (v)=>{{ if(v===null||v===undefined||!Number.isFinite(Number(v))) return 'N/A'; const n=Number(v),a=Math.abs(n); const s=n<0?'(':'',e=n<0?')':''; if(a>=1e9) return s+'₽'+(a/1e9).toFixed(1)+'bn'+e; if(a>=1e6) return s+'₽'+(a/1e6).toFixed(1)+'m'+e; return s+'₽'+a.toFixed(0)+e; }};
   const ffPct=(v,d)=> (Number.isFinite(v)&&Number.isFinite(d)&&Math.abs(d)>1e-9)?((v/d)*100).toFixed(1)+'% margin':'N/A';
@@ -2109,7 +2117,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     const names=["Workplace.ai Revenue","Contact Center Revenue","Total Revenue","COGS","Gross Profit","SG&A","EBITDA","D&A","Interest","Tax","Net Income"];
     const vals=[ffVal(d,'workplace_ai_revenue'),ffVal(d,'contact_center_ai_revenue'),rev,ffVal(d,'total_cogs'),gp,ffVal(d,'total_sga'),ebitda,ffVal(d,'total_depreciation_and_amortization'),ffVal(d,'interest_expense'),ffVal(d,'profit_tax'),net];
     const margins=['','','','',ffPct(gp,rev),'',ffPct(ebitda,rev),'','','',ffPct(net,rev)];
-    const labels=[...names];
+    const labels=new Array(names.length).fill(' ');
     const linkVals=[ffVal(d,'workplace_ai_revenue'),ffVal(d,'contact_center_ai_revenue'),ffVal(d,'total_cogs'),gp,ffVal(d,'total_sga'),ebitda,ffVal(d,'total_depreciation_and_amortization'),ffVal(d,'interest_expense'),ffVal(d,'profit_tax'),net];
     const sankey={{
       type:'sankey',orientation:'h',arrangement:'fixed',
@@ -2117,17 +2125,11 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       x:[0.03,0.03,0.24,0.45,0.45,0.67,0.67,0.90,0.90,0.90,0.90],y:[0.18,0.58,0.38,0.12,0.58,0.22,0.68,0.12,0.34,0.56,0.82]}},
       link:{{source:[0,1,2,2,4,4,6,6,6,6],target:[2,2,3,4,5,6,7,8,9,10],value:linkVals.map(v=>Math.abs(Number(v)||0)),
       color:['rgba(59,130,246,0.75)','rgba(56,189,248,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)','rgba(239,68,68,0.75)','rgba(239,68,68,0.75)','rgba(239,68,68,0.75)','rgba(34,197,94,0.75)'],
-      customdata:linkVals,hovertemplate:'%{{source.label}} → %{{target.label}}<br>Value: %{{customdata}}<extra></extra>'}}
+      customdata:linkVals.map((v,i)=>names[[0,1,2,2,4,4,6,6,6,6][i]]+' → '+names[[2,2,3,4,5,6,7,8,9,10][i]]+'<br>Value: '+ffFmt(v)),hovertemplate:'%{{customdata}}<extra></extra>'}}
     }};
-    const annPos=[
-      [0.00,0.205],[0.00,0.605],[0.19,0.43],[0.58,0.17],[0.50,0.64],[0.80,0.27],[0.72,0.74],[0.98,0.17],[0.98,0.39],[0.98,0.61],[0.98,0.87]
-    ];
-    const annotations=names.map((nm,i)=>({{x:annPos[i][0],y:annPos[i][1],xref:'paper',yref:'paper',showarrow:false,align:'left',
-      xanchor:i<2?'right':'left',yanchor:'middle',bgcolor:'rgba(255,255,255,0.78)',borderpad:2,
-      text:'<b style=\"color:#1f2937\">'+nm+'</b><br><span style=\"color:#16a34a\">'+ffFmt(vals[i])+'</span>'+(margins[i]?'<br><span style=\"color:#6b7280\">'+margins[i]+'</span>':''),
-      font:{{size:11}}
-    }}));
-    Plotly.react(ffPlot,[sankey],{{margin:{{l:100,r:180,t:12,b:12}},height:580,font:{{size:11}},annotations,paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
+    const pos=[[2,16],[2,55],[25,40],[45,8],[45,54],[63,28],[63,58],[83,10],[83,34],[83,56],[83,78]];
+    if(ffLabels){{ ffLabels.innerHTML=names.map((nm,i)=>'<div class=\"ff-label\" style=\"left:'+pos[i][0]+'%;top:'+pos[i][1]+'%\"><div class=\"name\">'+nm+'</div><div class=\"value\">'+ffFmt(vals[i])+'</div>'+(margins[i]?'<div class=\"margin\">'+margins[i]+'</div>':'')+'</div>').join(''); }}
+    Plotly.react(ffPlot,[sankey],{{margin:{{l:20,r:20,t:8,b:8}},height:400,font:{{size:10}},paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
   }};
   if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
   const recalc = () => {{
