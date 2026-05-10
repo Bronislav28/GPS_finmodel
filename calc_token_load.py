@@ -2011,7 +2011,10 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   </div>
   <div class='table-wrap' id='sl_team_tables'></div>
   <div class='note'>Team Planner affects Scenario Lab only. To make changes official, copy the selected team assumptions into assumptions.yaml and regenerate the report.</div>
-  <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button></div>
+  <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button> <button id='sl_copy_yaml'>Copy Team YAML Snippet</button></div>
+  <div class='note'>This snippet is generated from Scenario Lab only. Paste it into assumptions.yaml manually, then run python calc_token_load.py to make it official.</div>
+  <div id='sl_yaml_status' class='note'></div>
+  <textarea id='sl_yaml_snippet' style='width:100%;min-height:220px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea>
   <div id='sl_parity' class='note'></div>
   <div class='note'>Scenario Lab defaults are calibrated to match the Python base case. Changed inputs produce indicative what-if results.</div>
   <div class='grid' id='sl_kpis' style='margin-top:10px'></div>
@@ -2160,6 +2163,32 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       roles.forEach((r,i)=>{ const s=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='salary']"); if(s) r.monthly_salary_2026=Number(s.value)||0;
         years.forEach(y=>{ const f=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='fte_"+y+"']"); if(f){ if(!r.fte_by_year) r.fte_by_year={}; r.fte_by_year[y]=Number(f.value)||0; }});
       }); return roles; };
+    const setDeep=(obj, path, val)=>{ let cur=obj; for(let i=0;i<path.length-1;i++){ const p=path[i]; if(!cur[p]||typeof cur[p]!=='object') cur[p]={}; cur=cur[p]; } cur[path[path.length-1]]=val; };
+    const toYaml=(v, indent=0)=>{
+      const pad=' '.repeat(indent);
+      if(v===null||v===undefined) return 'null';
+      if(typeof v==='number') return Number.isFinite(v)?String(v):'0';
+      if(typeof v==='string') return v;
+      if(Array.isArray(v)) return v.map(x=>pad+'- '+toYaml(x,indent+2)).join('\\n');
+      const lines=[]; Object.keys(v).forEach(k=>{ const val=v[k];
+        if(val&&typeof val==='object'&&!Array.isArray(val)){ lines.push(pad+k+':'); lines.push(toYaml(val, indent+2)); }
+        else lines.push(pad+k+': '+toYaml(val, indent+2));
+      }); return lines.join('\\n');
+    };
+    const buildTeamYamlSnippet=()=>{
+      const coreRoles=readTeamPlan('core_team');
+      const sgaRoles=readTeamPlan('sga');
+      const coreFteMap={}, coreSalaryMap={}, sgaFteMap={}, sgaSalaryMap={};
+      coreRoles.forEach(r=>{ const p=String(r.name||'').split('/').filter(Boolean); if(!p.length) return;
+        setDeep(coreSalaryMap,p,Number(r.monthly_salary_2026)||0);
+        const ym={}; years.forEach(y=>{ ym[y]=Number((r.fte_by_year||{})[y]||0); }); setDeep(coreFteMap,p,ym);
+      });
+      sgaRoles.forEach(r=>{ const p=String(r.name||'').split('/').filter(Boolean); if(!p.length) return;
+        setDeep(sgaSalaryMap,p,Number(r.monthly_salary_2026)||0);
+        const ym={}; years.forEach(y=>{ ym[y]=Number((r.fte_by_year||{})[y]||0); }); setDeep(sgaFteMap,p,ym);
+      });
+      return toYaml({opex:{team:{core_team_target_fte:coreFteMap,salary_gross_monthly_rub:coreSalaryMap}},sga:{target_fte:sgaFteMap,salary_gross_monthly_rub:sgaSalaryMap}});
+    };
     const calc=()=>{ const p=read(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
       const infra=(document.getElementById('sl_infra_scenario')||{value:SL_BASE.active_infrastructure_scenario}).value;
       const funding=(document.getElementById('sl_funding_scenario')||{value:SL_BASE.active_funding_scenario}).value;
@@ -2205,7 +2234,13 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       }); render({npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030,owned2030,rented2030,infra,funding,coreFte2030,coreCash2030,teamOpex2030,sgaFte2030,sgaPayroll2030,totalSga2030}); };
     document.getElementById('sl_recalc').addEventListener('click',calc);
     document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); e.value=e.defaultValue;}); renderTeamTables(); const i=document.getElementById('sl_infra_scenario'); if(i) i.value=SL_BASE.active_infrastructure_scenario; const f=document.getElementById('sl_funding_scenario'); if(f) f.value=SL_BASE.active_funding_scenario; calc();});
+    document.getElementById('sl_copy_yaml').addEventListener('click', async ()=>{ const txt=buildTeamYamlSnippet(); const ta=document.getElementById('sl_yaml_snippet'); const st=document.getElementById('sl_yaml_status'); if(ta) ta.value=txt;
+      try{ if(navigator.clipboard&&navigator.clipboard.writeText){ await navigator.clipboard.writeText(txt); if(st) st.textContent='Copied to clipboard'; }
+      else { if(st) st.textContent='Snippet generated — copy manually.'; } }
+      catch(_e){ if(st) st.textContent='Snippet generated — copy manually.'; }
+    });
     renderTeamTables();
+    const initSnippet=document.getElementById('sl_yaml_snippet'); if(initSnippet) initSnippet.value=buildTeamYamlSnippet();
     calc();
   } catch(e){ console.warn('Scenario Lab initialization failed',e); const w=document.getElementById('sl_warn'); if(w) w.textContent='Scenario Lab failed to initialize.'; }
 })();
