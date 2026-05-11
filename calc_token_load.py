@@ -1925,18 +1925,37 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     rows_by_year = {int(r.get("year", 0)): r for r in rows}
     def yv(metric: str, y: int, default: float = 0.0) -> float:
         return float(as_float((rows_by_year.get(y) or {}).get(metric)) or default)
+    usage = assumptions.get("usage_assumptions", {}) if isinstance(assumptions.get("usage_assumptions"), dict) else {}
+    token_model = assumptions.get("token_load_model", {}) if isinstance(assumptions.get("token_load_model"), dict) else {}
+    compute_model = assumptions.get("compute_model", {}) if isinstance(assumptions.get("compute_model"), dict) else {}
+    wp_act_map = to_year_map(((usage.get("Workplace.ai", {}) or {}).get("activation_rate")))
+    wp_tok_map = to_year_map(((token_model.get("Workplace.ai", {}) or {}).get("tokens_per_active_user_per_day")))
+    cc_auto_map = to_year_map(((usage.get("Contact_Center.ai", {}) or {}).get("automation_rate")))
+    cc_tok = as_float(((token_model.get("Contact_Center.ai", {}) or {}).get("tokens_per_interaction"))) or 0.0
+    mix_cfg = compute_model.get("model_mix", {}) if isinstance(compute_model.get("model_mix"), dict) else {}
+    tput_cfg = compute_model.get("throughput_per_gpu", {}) if isinstance(compute_model.get("throughput_per_gpu"), dict) else {}
+    util_map = to_year_map(((compute_model.get("infra", {}) or {}).get("utilization")))
+    def pct(v: float) -> float: return float(v) * 100.0
     key_assumptions_rows = [
-        {"key":"workplace_activation_rate","section":"Workplace.ai","label":"Activation rate","unit":"%","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("workplace_activation_rate", y)*100 for y in years}},
-        {"key":"workplace_tokens_per_active_user_per_day","section":"Workplace.ai","label":"Tokens per active user per day","unit":"tokens/user/day","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("workplace_tokens_per_active_user_per_day", y) for y in years}},
-        {"key":"contact_center_automation_rate","section":"Contact_Center.ai","label":"Automation rate","unit":"%","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("contact_center_automation_rate", y)*100 for y in years}},
-        {"key":"contact_center_tokens_per_interaction","section":"Contact_Center.ai","label":"Tokens per interaction","unit":"tokens/interaction","notes":"Base value","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):yv("contact_center_tokens_per_interaction", y) for y in years}},
-        {"key":"target_contribution_margin","section":"Revenue / Pricing","label":"Target contribution margin","unit":"%","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("target_contribution_margin", y)*100 for y in years}},
-        {"key":"weighted_throughput","section":"Compute / GPU","label":"Weighted throughput","unit":"tokens/sec/GPU","notes":"Workbench override; official YAML mix-derived","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):yv("weighted_throughput", y) for y in years}},
-        {"key":"gpu_utilization","section":"Compute / GPU","label":"GPU utilization","unit":"%","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("utilization", y)*100 for y in years}},
-        {"key":"peak_factor","section":"Compute / GPU","label":"Peak factor","unit":"x","notes":"Base value","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):yv("peak_factor", y, 1.0) for y in years}},
-        {"key":"gpu_unit_cost","section":"Infrastructure / Cost","label":"GPU unit cost","unit":"RUB/GPU","notes":"Base 2026","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):sl_gpu_cost_default for y in years}},
-        {"key":"gpu_rental_price_per_gpu_per_year","section":"Infrastructure / Cost","label":"GPU rental price per year","unit":"RUB/GPU/year","notes":"Base 2026","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):sl_rent_default for y in years}},
-        {"key":"discount_rate","section":"Finance","label":"Discount rate","unit":"%","notes":"Workbench v1 uses single discount rate","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):sl_dr_default*100 for y in years}},
+        {"key":"workplace_activation_rate","section":"Workplace.ai","label":"Activation rate","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(wp_act_map.get(y, yv("workplace_activation_rate", y))) for y in years}},
+        {"key":"workplace_tokens_per_active_user_per_day","section":"Workplace.ai","label":"Tokens per active user per day","unit":"tokens/user/day","input_mode":"yearly","value_type":"tokens","values_by_year":{str(y):float(wp_tok_map.get(y, yv("workplace_tokens_per_active_user_per_day", y))) for y in years}},
+        {"key":"contact_center_automation_rate","section":"Contact_Center.ai","label":"Automation rate","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(cc_auto_map.get(y, yv("contact_center_automation_rate", y))) for y in years}},
+        {"key":"contact_center_tokens_per_interaction","section":"Contact_Center.ai","label":"Tokens per interaction","unit":"tokens/interaction","input_mode":"base_only","value_type":"tokens","values_by_year":{str(y):float(cc_tok or yv("contact_center_tokens_per_interaction", y)) for y in years}},
+        {"key":"target_contribution_margin","section":"Revenue / Pricing","label":"Target contribution margin","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(yv("target_contribution_margin", y)) for y in years}},
+        {"key":"model_mix_frontier","section":"Compute / GPU","label":"Model mix — frontier","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("frontier")) or 0.0) for y in years}},
+        {"key":"model_mix_large","section":"Compute / GPU","label":"Model mix — large","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("large")) or 0.0) for y in years}},
+        {"key":"model_mix_medium","section":"Compute / GPU","label":"Model mix — medium","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("medium")) or 0.0) for y in years}},
+        {"key":"model_mix_small","section":"Compute / GPU","label":"Model mix — small","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("small")) or 0.0) for y in years}},
+        {"key":"throughput_frontier","section":"Compute / GPU","label":"Throughput per GPU — frontier","unit":"tokens/sec/GPU","input_mode":"base_only","value_type":"number","values_by_year":{str(y):float(as_float(tput_cfg.get("frontier")) or 0.0) for y in years}},
+        {"key":"throughput_large","section":"Compute / GPU","label":"Throughput per GPU — large","unit":"tokens/sec/GPU","input_mode":"base_only","value_type":"number","values_by_year":{str(y):float(as_float(tput_cfg.get("large")) or 0.0) for y in years}},
+        {"key":"throughput_medium","section":"Compute / GPU","label":"Throughput per GPU — medium","unit":"tokens/sec/GPU","input_mode":"base_only","value_type":"number","values_by_year":{str(y):float(as_float(tput_cfg.get("medium")) or 0.0) for y in years}},
+        {"key":"throughput_small","section":"Compute / GPU","label":"Throughput per GPU — small","unit":"tokens/sec/GPU","input_mode":"base_only","value_type":"number","values_by_year":{str(y):float(as_float(tput_cfg.get("small")) or 0.0) for y in years}},
+        {"key":"gpu_utilization","section":"Compute / GPU","label":"GPU utilization","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(util_map.get(y, yv("utilization", y, 0.5))) for y in years}},
+        {"key":"peak_factor","section":"Compute / GPU","label":"Peak factor","unit":"x","input_mode":"base_only","value_type":"number","values_by_year":{str(y):yv("peak_factor", y, 1.0) for y in years}},
+        {"key":"weighted_throughput","section":"Compute / GPU","label":"Weighted throughput","unit":"tokens/sec/GPU","input_mode":"readonly","value_type":"number","values_by_year":{str(y):yv("weighted_throughput", y) for y in years}},
+        {"key":"gpu_unit_cost","section":"Infrastructure / Cost","label":"GPU unit cost","unit":"RUB/GPU","input_mode":"base_only","value_type":"rub","values_by_year":{str(y):sl_gpu_cost_default for y in years}},
+        {"key":"gpu_rental_price_per_gpu_per_year","section":"Infrastructure / Cost","label":"GPU rental price per year","unit":"RUB/GPU/year","input_mode":"base_only","value_type":"rub","values_by_year":{str(y):sl_rent_default for y in years}},
+        {"key":"discount_rate","section":"Finance","label":"Discount rate","unit":"%","input_mode":"base_only","value_type":"percent","values_by_year":{str(y):sl_dr_default*100 for y in years}},
     ]
     scenario_lab_data = {
         "base_npv": as_float(metric_store.get("npv", {}).get(years[0])) or 0.0,
@@ -2016,9 +2035,11 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .ff-label .name{{font-weight:700;color:#334155}}
 .ff-label .value{{font-weight:700;color:#16a34a;margin-top:2px}}
 .ff-label .margin{{color:#64748b;margin-top:2px}}
-.ka-section h4{{margin:10px 0 6px;color:#334155}}
-.ka-derived{{color:#94a3b8;font-style:italic;background:#f8fafc}}
-.ka-base-only td{{background:rgba(248,250,252,.55)}}
+.ka-empty{{background:#f8fafc}}
+.ka-readonly{{color:#475569;background:#f8fafc;font-weight:600}}
+.ka-section h4{{margin-top:14px;margin-bottom:6px;color:#334155}}
+.ka-section table th,.ka-section table td{{vertical-align:middle}}
+.ka-section input{{width:90px;padding:5px 6px;border:1px solid #d1d5db;border-radius:6px}}
 </style><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
 <div class='card'>
@@ -2221,10 +2242,10 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_dr'];
     const renderKeyAssumptionsTable=()=>{ const host=document.getElementById('sl_key_assumptions_table'); if(!host) return; const rows=((SL_BASE.key_assumptions||{}).rows)||[];
       const sections=[...new Set(rows.map(r=>r.section||'Other'))];
-      host.innerHTML="<div class='note'>Rows with annual assumptions can be edited by year. Rows marked Base 2026 are entered once; later years are derived by the model or kept constant for Workbench calculation.</div>"+sections.map(sec=>{
+      host.innerHTML="<div class='note'>Rows with annual assumptions can be edited by year. Rows marked Base 2026 are entered once; later years are kept constant for Workbench calculation.</div>"+sections.map(sec=>{
         const rs=rows.filter(r=>(r.section||'Other')===sec);
-        return "<div class='ka-section'><h4>"+sec+"</h4><table><thead><tr><th>Assumption</th><th>Base 2026</th><th>2027</th><th>2028</th><th>2029</th><th>2030</th><th>Unit</th><th>Notes</th></tr></thead><tbody>"+
-        rs.map(r=>"<tr class='"+(r.input_mode==='base_only'?'ka-base-only':'')+"'><td>"+r.label+"</td>"+years.map((y,idx)=>{ if(r.input_mode==='base_only'&&idx>0) return "<td class='ka-derived'>derived</td>"; return "<td><input class='sl-key-assumption-input' data-assumption-key='"+r.key+"' data-year='"+y+"' type='number' step='0.01' value='"+Number((r.values_by_year||{})[y]||0)+"'/></td>"; }).join("")+"<td>"+r.unit+"</td><td class='note'>"+r.notes+"</td></tr>").join("")+
+        return "<div class='ka-section'><h4>"+sec+"</h4><table><thead><tr><th>Assumption</th><th>Unit</th><th>2026</th><th>2027</th><th>2028</th><th>2029</th><th>2030</th></tr></thead><tbody>"+
+        rs.map(r=>"<tr><td>"+r.label+"</td><td>"+r.unit+"</td>"+years.map((y,idx)=>{ if(r.input_mode==='base_only'&&idx>0) return "<td class='ka-empty'></td>"; if(r.input_mode==='readonly') return "<td class='ka-readonly'>"+Number((r.values_by_year||{})[y]||0).toFixed(2)+"</td>"; return "<td><input class='sl-key-assumption-input' data-assumption-key='"+r.key+"' data-year='"+y+"' type='number' step='0.01' value='"+Number((r.values_by_year||{})[y]||0)+"'/></td>"; }).join("")+"</tr>").join("")+
         "</tbody></table></div>";
       }).join("");
     };
