@@ -2018,16 +2018,17 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .ff-label .margin{{color:#64748b;margin-top:2px}}
 </style><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
-<div class='card' style='display:none'>
-  <h3>Model Status</h3>
-  <div class='meta'>Active infrastructure scenario: {active_scenario}</div>
-  <div class='meta'>Active revenue scenario: {assumptions.get("revenue",{}).get("active_scenario","base")}</div>
-  <div class='meta'>Active funding scenario: {assumptions.get("funding",{}).get("active_scenario","mix")}</div>
+<div class='card'>
+  <h3>Report Basis</h3>
+  <div class='meta'>Official report: YAML base case</div>
+  <div class='meta'>Infrastructure scenario: {active_scenario}</div>
+  <div class='meta'>Revenue scenario: {assumptions.get("revenue",{}).get("active_scenario","base")}</div>
+  <div class='meta'>Funding scenario: {assumptions.get("funding",{}).get("active_scenario","mix")}</div>
   <div class='meta'>Discount rate: {render_value(metric_store.get("discount_rate", {}).get(years[0]), "discount_rate")}</div>
   <div class='meta'>Generated timestamp: {ts}</div>
-  <div class='note'>Scenario switching is disabled in this version.</div>
+  <div class='note'>The main report is read-only. To change official values, edit assumptions.yaml and regenerate the report.</div>
 </div>
-<div class='card'>
+<div class='card' style='display:none'>
   <h3>Controls</h3>
   <div class='controls'>
     <div class='ctrl'><label>Revenue scenario</label><select id='top_revenue' disabled title='Not enabled in Scenario Lab v1'><option>base</option></select><small class='note'>Not enabled in Scenario Lab v1</small></div>
@@ -2046,7 +2047,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 <section><h2>Financial Flow — P&L Bridge</h2>
 <div class='card'>
   <div class='ctrl' style='max-width:220px'><label>Year</label><select id='ff_year'>{''.join(f"<option {'selected' if y==years[-1] else ''}>{y}</option>" for y in years)}</select></div>
-  <div class='note'>Financial Flow uses official Python-calculated base-case values. Scenario Lab changes do not affect this chart.</div>
+  <div class='note'>Financial Flow uses official Python-calculated base-case values. Workbench changes do not affect this chart.</div>
   <div class='financial-flow-wrap'><div class='financial-flow-plot-wrap'><div id='financial-flow-plot'></div><div id='financial-flow-labels'></div></div></div>
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
@@ -2065,8 +2066,10 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     </div>
     <div id='sl_preset_status' class='note'></div>
   </div>
+  <div class='card'><h3>Scenario Setup</h3><div id='sl_setup_controls' class='controls'></div><div class='note'>These controls affect the Workbench scenario only. Official report tables remain unchanged.</div></div>
   <div class='note'>The Workbench is a browser-side what-if tool. The official report tables remain the Python-calculated YAML base case.</div>
   <div class='note'>To make a scenario official, copy/export the selected assumptions into assumptions.yaml and regenerate the report.</div>
+  <div class='note'>How to use: 1. Choose infrastructure and funding scenarios in Scenario Setup. 2. Edit Key Assumptions and Team Planner tables. 3. Click Recalculate Scenario. 4. Save the scenario or export YAML/JSON. 5. To make it official, paste changes into assumptions.yaml and regenerate the report.</div>
   <div class='card'><h3>Key Assumptions Planner</h3><div class='note'>Editable assumptions affect the Workbench scenario only. Official report tables remain unchanged until assumptions.yaml is updated and the report is regenerated.</div><div id='sl_key_assumptions_table' class='table-wrap'></div></div>
   <div class='grid' style='display:none'>
     <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin_multiplier</label><input id='sl_margin' type='number' step='0.01' value='1.00'/></div></div>
@@ -2074,11 +2077,11 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     <div class='card'><h3>Finance</h3><div class='ctrl'><label>discount_rate</label><input id='sl_dr' type='number' step='0.01' value='{sl_dr_default:.2f}'/></div></div>
   </div>
   <div class='table-wrap' id='sl_team_tables'></div>
-  <div class='note'>Team Planner affects Scenario Lab only. To make changes official, copy the selected team assumptions into assumptions.yaml and regenerate the report.</div>
+  <div class='note'>Team Planner affects the Workbench scenario only. To make changes official, copy the selected team assumptions into assumptions.yaml and regenerate the report.</div>
   <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button></div>
-  <div class='card'><h3>Export / Apply Scenario</h3><button id='sl_copy_key_yaml'>Copy Key Assumptions YAML</button> <button id='sl_copy_yaml'>Copy Team YAML</button> <button id='sl_preset_export_2'>Export Scenario JSON</button><div class='note'>This snippet is generated from Scenario Lab only. Paste it into assumptions.yaml manually, then run python calc_token_load.py to make it official.</div><div id='sl_yaml_status' class='note'></div><textarea id='sl_yaml_snippet' style='display:none;width:100%;min-height:220px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea><div id='sl_key_yaml_status' class='note'></div><textarea id='sl_key_yaml_snippet' style='display:none;width:100%;min-height:240px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea></div>
+  <div class='card'><h3>Export / Apply Scenario</h3><button id='sl_copy_key_yaml'>Copy Key Assumptions YAML</button> <button id='sl_copy_yaml'>Copy Team YAML</button> <button id='sl_preset_export_2'>Export Scenario JSON</button><div class='note'>This snippet is generated from Workbench only. Paste it into assumptions.yaml manually, then run python calc_token_load.py to make it official.</div><div id='sl_yaml_status' class='note'></div><textarea id='sl_yaml_snippet' style='display:none;width:100%;min-height:220px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea><div id='sl_key_yaml_status' class='note'></div><textarea id='sl_key_yaml_snippet' style='display:none;width:100%;min-height:240px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea></div>
   <div id='sl_parity' class='note'></div>
-  <div class='note'>Scenario Lab defaults are calibrated to match the Python base case. Changed inputs produce indicative what-if results.</div>
+  <div class='note'>Workbench defaults are calibrated to match the Python base case. Changed inputs produce indicative what-if results.</div>
   <div class='grid' id='sl_kpis' style='margin-top:10px'></div>
   <div id='sl_warn' class='note'></div>
 </div></section>
@@ -2202,12 +2205,13 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     }
     const host=document.getElementById('sl_warn');
     if(host){
-      const wrap=document.createElement('div');
+      const wrap=document.getElementById('sl_setup_controls')||document.createElement('div');
       wrap.className='controls';
-      wrap.innerHTML="<div class='ctrl'><label>infrastructure_scenario</label><select id='sl_infra_scenario'></select></div><div class='ctrl'><label>funding_scenario</label><select id='sl_funding_scenario'><option>equity_only</option><option>revolver_only</option><option>mix</option></select></div><div class='note'>Scenario switches affect Scenario Lab only. The official report remains the YAML base case.</div>";
-      host.parentNode.insertBefore(wrap, host);
+      wrap.innerHTML="<div class='ctrl'><label>Infrastructure scenario</label><select id='sl_infra_scenario'></select></div><div class='ctrl'><label>Funding scenario</label><select id='sl_funding_scenario'><option value='equity_only'>Equity only</option><option value='revolver_only'>Revolver only</option><option value='mix'>Equity / Revolver mix</option></select></div>";
+      if(!document.getElementById('sl_setup_controls')) host.parentNode.insertBefore(wrap, host);
       const infraSel=wrap.querySelector('#sl_infra_scenario');
-      (SL_BASE.infra_scenarios||['build_own_dc','rent_gpu_only','hybrid']).forEach(s=>{ const o=document.createElement('option'); o.value=s;o.textContent=s; infraSel.appendChild(o); });
+      const infraNames={build_own_dc:'Build own datacenter',rent_gpu_only:'Rent GPU only',hybrid:'Hybrid'};
+      (SL_BASE.infra_scenarios||['build_own_dc','rent_gpu_only','hybrid']).forEach(s=>{ const o=document.createElement('option'); o.value=s;o.textContent=infraNames[s]||s; infraSel.appendChild(o); });
       infraSel.value=SL_BASE.active_infrastructure_scenario||'hybrid';
       wrap.querySelector('#sl_funding_scenario').value=SL_BASE.active_funding_scenario||'mix';
     }
