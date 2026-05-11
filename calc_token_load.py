@@ -2075,10 +2075,12 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   </div>
   <div class='table-wrap' id='sl_team_tables'></div>
   <div class='note'>Team Planner affects Scenario Lab only. To make changes official, copy the selected team assumptions into assumptions.yaml and regenerate the report.</div>
-  <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button> <button id='sl_copy_yaml'>Copy Team YAML Snippet</button></div>
+  <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button> <button id='sl_copy_yaml'>Copy Team YAML Snippet</button> <button id='sl_copy_key_yaml'>Copy Key Assumptions YAML Snippet</button></div>
   <div class='note'>This snippet is generated from Scenario Lab only. Paste it into assumptions.yaml manually, then run python calc_token_load.py to make it official.</div>
   <div id='sl_yaml_status' class='note'></div>
   <textarea id='sl_yaml_snippet' style='width:100%;min-height:220px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea>
+  <div id='sl_key_yaml_status' class='note'></div>
+  <textarea id='sl_key_yaml_snippet' style='width:100%;min-height:240px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea>
   <div id='sl_parity' class='note'></div>
   <div class='note'>Scenario Lab defaults are calibrated to match the Python base case. Changed inputs produce indicative what-if results.</div>
   <div class='grid' id='sl_kpis' style='margin-top:10px'></div>
@@ -2307,6 +2309,27 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       });
       return toYaml({opex:{team:{core_team_target_fte:coreFteMap,salary_gross_monthly_rub:coreSalaryMap}},sga:{target_fte:sgaFteMap,salary_gross_monthly_rub:sgaSalaryMap}});
     };
+    const buildKeyYamlSnippet=()=>{
+      const ka=readKeyAssumptions();
+      const dec=(obj)=>Object.fromEntries(Object.entries(obj||{}).map(([y,v])=>[y,(Number(v)||0)/100.0]));
+      const yearly=(obj)=>Object.fromEntries(years.map(y=>[y,Number((obj||{})[y]||0)]));
+      const s={
+        usage_assumptions:{
+          "Workplace.ai":{activation_rate:dec(ka.workplace_activation_rate)},
+          "Contact_Center.ai":{automation_rate:dec(ka.contact_center_automation_rate)}
+        },
+        token_load_model:{
+          "Workplace.ai":{tokens_per_active_user_per_day:yearly(ka.workplace_tokens_per_active_user_per_day)},
+          "Contact_Center.ai":{tokens_per_interaction:{value:Number((ka.contact_center_tokens_per_interaction||{})[years[0]]||0)}}
+        },
+        revenue:{target_contribution_margin:{base:dec(ka.target_contribution_margin)}},
+        compute_model:{infra:{weighted_throughput:yearly(ka.weighted_throughput),utilization:dec(ka.utilization),peak_factor:yearly(ka.peak_factor)}},
+        capex:{gpu:{unit_cost:Number((ka.gpu_unit_cost||{})[years[0]]||0)}},
+        opex:{gpu_rental:{rental_price_per_gpu_per_year:yearly(ka.gpu_rental_price_per_gpu_per_year)}},
+        manual_review_required:{discount_rate_path_uncertain:{discount_rate_2026_decimal:(Number((ka.discount_rate||{})[years[0]]||0))/100.0}}
+      };
+      return "# Scenario Lab Key Assumptions override\\n# Paste relevant blocks into assumptions.yaml, then run:\\n# python calc_token_load.py\\n\\n"+toYaml(s);
+    };
     let lastOut=null;
     const calc=()=>{ const p=read(); const ka=readKeyAssumptions(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
       const infra=(document.getElementById('sl_infra_scenario')||{value:SL_BASE.active_infrastructure_scenario}).value;
@@ -2375,6 +2398,11 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       try{ if(navigator.clipboard&&navigator.clipboard.writeText){ await navigator.clipboard.writeText(txt); if(st) st.textContent='Copied to clipboard'; }
       else { if(st) st.textContent='Snippet generated — copy manually.'; } }
       catch(_e){ if(st) st.textContent='Snippet generated — copy manually.'; }
+    });
+    document.getElementById('sl_copy_key_yaml').addEventListener('click', async ()=>{ const txt=buildKeyYamlSnippet(); const ta=document.getElementById('sl_key_yaml_snippet'); const st=document.getElementById('sl_key_yaml_status'); if(ta) ta.value=txt;
+      try{ if(navigator.clipboard&&navigator.clipboard.writeText){ await navigator.clipboard.writeText(txt); if(st) st.textContent='Key assumptions YAML copied to clipboard.'; }
+      else { if(st) st.textContent='Key assumptions YAML generated — copy manually.'; } }
+      catch(_e){ if(st) st.textContent='Key assumptions YAML generated — copy manually.'; }
     });
     const saveCurrentPreset=()=>{ const name=((document.getElementById('sl_preset_name')||{}).value||'').trim(); if(!name){presetStatus('Enter scenario name.'); return;} const p=loadPresets(); const idx=p.findIndex(x=>x.name===name); if(idx>=0&&!confirm('Scenario exists. Overwrite?')) return;
       const item={name,created_at:(idx>=0?p[idx].created_at:new Date().toISOString()),updated_at:new Date().toISOString(),scenario_state:getScenarioLabState(),outputs_snapshot:getScenarioLabOutputsSnapshot(lastOut||{})}; if(idx>=0)p[idx]=item; else p.push(item); savePresets(p); refreshPresetDropdown(); const sel=document.getElementById('sl_preset_select'); if(sel) sel.value=name; presetStatus('Scenario saved, including Key Assumptions and Team Planners.'); };
