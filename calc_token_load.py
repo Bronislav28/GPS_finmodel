@@ -1922,6 +1922,22 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
             "social_contribution_sfr_percent_of_gross": float(as_float(year_value(sga_payroll.get("social_contribution_sfr_percent_of_gross"), years[0], 0.0)) or 0.0),
         },
     }
+    rows_by_year = {int(r.get("year", 0)): r for r in rows}
+    def yv(metric: str, y: int, default: float = 0.0) -> float:
+        return float(as_float((rows_by_year.get(y) or {}).get(metric)) or default)
+    key_assumptions_rows = [
+        {"key":"workplace_activation_rate","category":"Revenue / Demand","label":"Workplace activation rate","unit":"%","notes":"From base workplace_activation_rate","values_by_year":{str(y):yv("workplace_activation_rate", y)*100 for y in years}},
+        {"key":"workplace_tokens_per_active_user_per_day","category":"Revenue / Demand","label":"Workplace tokens per active user per day","unit":"tokens/user/day","notes":"From base workplace_tokens_per_active_user_per_day","values_by_year":{str(y):yv("workplace_tokens_per_active_user_per_day", y) for y in years}},
+        {"key":"contact_center_automation_rate","category":"Revenue / Demand","label":"Contact center automation rate","unit":"%","notes":"From base contact_center_automation_rate","values_by_year":{str(y):yv("contact_center_automation_rate", y)*100 for y in years}},
+        {"key":"contact_center_tokens_per_interaction","category":"Revenue / Demand","label":"Contact center tokens per interaction","unit":"tokens/interaction","notes":"From base contact_center_tokens_per_interaction","values_by_year":{str(y):yv("contact_center_tokens_per_interaction", y) for y in years}},
+        {"key":"target_contribution_margin","category":"Revenue / Pricing","label":"Target contribution margin","unit":"%","notes":"From base target_contribution_margin","values_by_year":{str(y):yv("target_contribution_margin", y)*100 for y in years}},
+        {"key":"weighted_throughput","category":"Compute / GPU","label":"Weighted throughput","unit":"tokens/sec/GPU","notes":"From base weighted_throughput","values_by_year":{str(y):yv("weighted_throughput", y) for y in years}},
+        {"key":"utilization","category":"Compute / GPU","label":"GPU utilization","unit":"%","notes":"From base utilization","values_by_year":{str(y):yv("utilization", y)*100 for y in years}},
+        {"key":"peak_factor","category":"Compute / GPU","label":"Peak factor","unit":"x","notes":"From base peak_factor","values_by_year":{str(y):yv("peak_factor", y, 1.0) for y in years}},
+        {"key":"gpu_unit_cost","category":"Infrastructure / Cost","label":"GPU unit cost","unit":"RUB/GPU","notes":"From base GPU capex assumption","values_by_year":{str(y):sl_gpu_cost_default for y in years}},
+        {"key":"gpu_rental_price_per_gpu_per_year","category":"Infrastructure / Cost","label":"GPU rental price per year","unit":"RUB/GPU/year","notes":"From base GPU rental assumption","values_by_year":{str(y):sl_rent_default for y in years}},
+        {"key":"discount_rate","category":"Finance","label":"Discount rate","unit":"%","notes":"From base discount_rate","values_by_year":{str(y):sl_dr_default*100 for y in years}},
+    ]
     scenario_lab_data = {
         "base_npv": as_float(metric_store.get("npv", {}).get(years[0])) or 0.0,
         "base_discount_rate": sl_dr_default,
@@ -1946,6 +1962,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         "inflation_index_by_year": {str(y): inflation_index_by_year.get(y, 1.0) for y in years},
         "go_live_year": int((years[0] if years else 2026)),
         "go_live_month": 1,
+        "key_assumptions": {"rows": key_assumptions_rows},
     }
     financial_flow_data = {
         str(int(r.get("year", 0))): {
@@ -2050,6 +2067,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   </div>
   <div class='note'>Scenario Lab is an indicative browser-side what-if tool. The official report tables remain the Python-calculated base case.</div>
   <div class='note'>Scenario Lab v1 holds datacenter construction CAPEX and some funding mechanics constant.</div>
+  <div class='card'><h3>Key Assumptions Planner</h3><div class='note'>Editable assumptions affect Scenario Lab only. In this version, the table is displayed but not yet connected to recalculation.</div><div id='sl_key_assumptions_table' class='table-wrap'></div></div>
   <div class='grid'>
     <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin_multiplier</label><input id='sl_margin' type='number' step='0.01' value='1.00'/></div></div>
     <div class='card'><h3>Compute & GPU</h3><div class='ctrl'><label>weighted_throughput_multiplier</label><input id='sl_wt' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>utilization_multiplier</label><input id='sl_util' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>gpu_unit_cost</label><input id='sl_gpu_cost' type='number' step='1' value='{sl_gpu_cost_default:.0f}'/></div><div class='ctrl'><label>gpu_rental_price_per_gpu_per_year</label><input id='sl_rent' type='number' step='1' value='{sl_rent_default:.0f}'/></div></div>
@@ -2196,6 +2214,11 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       wrap.querySelector('#sl_funding_scenario').value=SL_BASE.active_funding_scenario||'mix';
     }
     const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_dr'];
+    const renderKeyAssumptionsTable=()=>{ const host=document.getElementById('sl_key_assumptions_table'); if(!host) return; const rows=((SL_BASE.key_assumptions||{}).rows)||[];
+      host.innerHTML="<table><thead><tr><th>Category</th><th>Assumption</th>"+years.map(y=>"<th>"+y+"</th>").join("")+"<th>Unit</th><th>Notes</th></tr></thead><tbody>"+
+        rows.map(r=>"<tr><td>"+r.category+"</td><td>"+r.label+"</td>"+years.map(y=>"<td><input class='sl-key-assumption-input' data-assumption-key='"+r.key+"' data-year='"+y+"' type='number' step='0.01' value='"+Number((r.values_by_year||{})[y]||0)+"'/></td>").join("")+"<td>"+r.unit+"</td><td class='note'>"+r.notes+"</td></tr>").join("")+
+      "</tbody></table>";
+    };
     const PRESET_KEY='gps_finmodel_scenario_lab_presets';
     const read=()=>Object.fromEntries(slIds.map(id=>[id,Number(document.getElementById(id).value)]));
     const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -2344,6 +2367,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     document.getElementById('sl_preset_import').addEventListener('click',()=>{ const f=document.getElementById('sl_import_json_file'); if(f) f.click();});
     document.getElementById('sl_import_json_file').addEventListener('change',(e)=>{ const file=(e.target.files||[])[0]; if(file) importScenarioJson(file); });
     renderTeamTables();
+    renderKeyAssumptionsTable();
     refreshPresetDropdown();
     const initSnippet=document.getElementById('sl_yaml_snippet'); if(initSnippet) initSnippet.value=buildTeamYamlSnippet();
     calc();
