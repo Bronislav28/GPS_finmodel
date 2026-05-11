@@ -2018,7 +2018,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .ff-label .margin{{color:#64748b;margin-top:2px}}
 </style><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
-<div class='card'>
+<div class='card' style='display:none'>
   <h3>Model Status</h3>
   <div class='meta'>Active infrastructure scenario: {active_scenario}</div>
   <div class='meta'>Active revenue scenario: {assumptions.get("revenue",{}).get("active_scenario","base")}</div>
@@ -2051,7 +2051,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
 </div></section>
-<section><h2>Scenario Lab — NPV What-if</h2>
+<section><h2>NPV Workbench — Scenario Builder</h2>
 <div class='card'>
   <div class='card'>
     <h3>Scenario Presets</h3>
@@ -2065,22 +2065,18 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     </div>
     <div id='sl_preset_status' class='note'></div>
   </div>
-  <div class='note'>Scenario Lab is an indicative browser-side what-if tool. The official report tables remain the Python-calculated base case.</div>
-  <div class='note'>Scenario Lab v1 holds datacenter construction CAPEX and some funding mechanics constant.</div>
-  <div class='card'><h3>Key Assumptions Planner</h3><div class='note'>Editable assumptions affect Scenario Lab only. In this version, the table is displayed but not yet connected to recalculation.</div><div id='sl_key_assumptions_table' class='table-wrap'></div></div>
-  <div class='grid'>
+  <div class='note'>The Workbench is a browser-side what-if tool. The official report tables remain the Python-calculated YAML base case.</div>
+  <div class='note'>To make a scenario official, copy/export the selected assumptions into assumptions.yaml and regenerate the report.</div>
+  <div class='card'><h3>Key Assumptions Planner</h3><div class='note'>Editable assumptions affect the Workbench scenario only. Official report tables remain unchanged until assumptions.yaml is updated and the report is regenerated.</div><div id='sl_key_assumptions_table' class='table-wrap'></div></div>
+  <div class='grid' style='display:none'>
     <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin_multiplier</label><input id='sl_margin' type='number' step='0.01' value='1.00'/></div></div>
     <div class='card'><h3>Compute & GPU</h3><div class='ctrl'><label>weighted_throughput_multiplier</label><input id='sl_wt' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>utilization_multiplier</label><input id='sl_util' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>gpu_unit_cost</label><input id='sl_gpu_cost' type='number' step='1' value='{sl_gpu_cost_default:.0f}'/></div><div class='ctrl'><label>gpu_rental_price_per_gpu_per_year</label><input id='sl_rent' type='number' step='1' value='{sl_rent_default:.0f}'/></div></div>
     <div class='card'><h3>Finance</h3><div class='ctrl'><label>discount_rate</label><input id='sl_dr' type='number' step='0.01' value='{sl_dr_default:.2f}'/></div></div>
   </div>
   <div class='table-wrap' id='sl_team_tables'></div>
   <div class='note'>Team Planner affects Scenario Lab only. To make changes official, copy the selected team assumptions into assumptions.yaml and regenerate the report.</div>
-  <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button> <button id='sl_copy_yaml'>Copy Team YAML Snippet</button> <button id='sl_copy_key_yaml'>Copy Key Assumptions YAML Snippet</button></div>
-  <div class='note'>This snippet is generated from Scenario Lab only. Paste it into assumptions.yaml manually, then run python calc_token_load.py to make it official.</div>
-  <div id='sl_yaml_status' class='note'></div>
-  <textarea id='sl_yaml_snippet' style='width:100%;min-height:220px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea>
-  <div id='sl_key_yaml_status' class='note'></div>
-  <textarea id='sl_key_yaml_snippet' style='width:100%;min-height:240px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea>
+  <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button></div>
+  <div class='card'><h3>Export / Apply Scenario</h3><button id='sl_copy_key_yaml'>Copy Key Assumptions YAML</button> <button id='sl_copy_yaml'>Copy Team YAML</button> <button id='sl_preset_export_2'>Export Scenario JSON</button><div class='note'>This snippet is generated from Scenario Lab only. Paste it into assumptions.yaml manually, then run python calc_token_load.py to make it official.</div><div id='sl_yaml_status' class='note'></div><textarea id='sl_yaml_snippet' style='display:none;width:100%;min-height:220px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea><div id='sl_key_yaml_status' class='note'></div><textarea id='sl_key_yaml_snippet' style='display:none;width:100%;min-height:240px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea></div>
   <div id='sl_parity' class='note'></div>
   <div class='note'>Scenario Lab defaults are calibrated to match the Python base case. Changed inputs produce indicative what-if results.</div>
   <div class='grid' id='sl_kpis' style='margin-top:10px'></div>
@@ -2395,11 +2391,13 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     document.getElementById('sl_recalc').addEventListener('click',calc);
     document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); if(e) e.value=e.defaultValue;}); renderTeamTables(); resetKeyAssumptionsToBase(); const i=document.getElementById('sl_infra_scenario'); if(i) i.value=SL_BASE.active_infrastructure_scenario; const f=document.getElementById('sl_funding_scenario'); if(f) f.value=SL_BASE.active_funding_scenario; calc();});
     document.getElementById('sl_copy_yaml').addEventListener('click', async ()=>{ const txt=buildTeamYamlSnippet(); const ta=document.getElementById('sl_yaml_snippet'); const st=document.getElementById('sl_yaml_status'); if(ta) ta.value=txt;
+      if(ta) ta.style.display='block';
       try{ if(navigator.clipboard&&navigator.clipboard.writeText){ await navigator.clipboard.writeText(txt); if(st) st.textContent='Copied to clipboard'; }
       else { if(st) st.textContent='Snippet generated — copy manually.'; } }
       catch(_e){ if(st) st.textContent='Snippet generated — copy manually.'; }
     });
     document.getElementById('sl_copy_key_yaml').addEventListener('click', async ()=>{ const txt=buildKeyYamlSnippet(); const ta=document.getElementById('sl_key_yaml_snippet'); const st=document.getElementById('sl_key_yaml_status'); if(ta) ta.value=txt;
+      if(ta) ta.style.display='block';
       try{ if(navigator.clipboard&&navigator.clipboard.writeText){ await navigator.clipboard.writeText(txt); if(st) st.textContent='Key assumptions YAML copied to clipboard.'; }
       else { if(st) st.textContent='Key assumptions YAML generated — copy manually.'; } }
       catch(_e){ if(st) st.textContent='Key assumptions YAML generated — copy manually.'; }
@@ -2416,6 +2414,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     document.getElementById('sl_preset_dup').addEventListener('click',duplicateSelectedPreset);
     document.getElementById('sl_preset_del').addEventListener('click',deleteSelectedPreset);
     document.getElementById('sl_preset_export').addEventListener('click',exportScenarioJson);
+    const exp2=document.getElementById('sl_preset_export_2'); if(exp2) exp2.addEventListener('click',exportScenarioJson);
     document.getElementById('sl_preset_import').addEventListener('click',()=>{ const f=document.getElementById('sl_import_json_file'); if(f) f.click();});
     document.getElementById('sl_import_json_file').addEventListener('change',(e)=>{ const file=(e.target.files||[])[0]; if(file) importScenarioJson(file); });
     renderTeamTables();
