@@ -2036,6 +2036,18 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 </div></section>
 <section><h2>Scenario Lab — NPV What-if</h2>
 <div class='card'>
+  <div class='card'>
+    <h3>Scenario Presets</h3>
+    <div class='controls'>
+      <div class='ctrl'><label>Scenario name</label><input id='sl_preset_name' placeholder='Scenario name'/></div>
+      <div class='ctrl'><label>Saved scenarios</label><select id='sl_preset_select'></select></div>
+    </div>
+    <div style='margin-top:8px'>
+      <button id='sl_preset_save'>Save Scenario</button> <button id='sl_preset_load'>Load Scenario</button> <button id='sl_preset_dup'>Duplicate Scenario</button> <button id='sl_preset_del'>Delete Scenario</button> <button id='sl_preset_export'>Export Scenario JSON</button> <button id='sl_preset_import'>Import Scenario JSON</button>
+      <input id='sl_import_json_file' type='file' accept='application/json' style='display:none'/>
+    </div>
+    <div id='sl_preset_status' class='note'></div>
+  </div>
   <div class='note'>Scenario Lab is an indicative browser-side what-if tool. The official report tables remain the Python-calculated base case.</div>
   <div class='note'>Scenario Lab v1 holds datacenter construction CAPEX and some funding mechanics constant.</div>
   <div class='grid'>
@@ -2184,6 +2196,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       wrap.querySelector('#sl_funding_scenario').value=SL_BASE.active_funding_scenario||'mix';
     }
     const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_dr'];
+    const PRESET_KEY='gps_finmodel_scenario_lab_presets';
     const read=()=>Object.fromEntries(slIds.map(id=>[id,Number(document.getElementById(id).value)]));
     const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
     const fi=(v)=>String(Math.round(v));
@@ -2225,6 +2238,20 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       roles.forEach((r,i)=>{ const s=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='salary']"); if(s) r.monthly_salary_2026=Number(s.value)||0;
         years.forEach(y=>{ const f=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='fte_"+y+"']"); if(f){ if(!r.fte_by_year) r.fte_by_year={}; r.fte_by_year[y]=Number(f.value)||0; }});
       }); return roles; };
+    const getScenarioLabState=()=>({ scalars: read(), infra:(document.getElementById('sl_infra_scenario')||{}).value||SL_BASE.active_infrastructure_scenario, funding:(document.getElementById('sl_funding_scenario')||{}).value||SL_BASE.active_funding_scenario, core_team: readTeamPlan('core_team'), sga: readTeamPlan('sga') });
+    const applyScenarioLabState=(st)=>{ if(!st) return; Object.entries(st.scalars||{}).forEach(([k,v])=>{ const e=document.getElementById(k); if(e) e.value=String(v); });
+      renderTeamTables();
+      const applyPlan=(key,roles)=>{ (roles||[]).forEach((r,i)=>{ const s=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='salary']"); if(s) s.value=Number(r.monthly_salary_2026||0);
+        years.forEach(y=>{ const f=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='fte_"+y+"']"); if(f) f.value=Number((r.fte_by_year||{})[y]||0); });
+      });};
+      applyPlan('core_team', st.core_team); applyPlan('sga', st.sga);
+      const i=document.getElementById('sl_infra_scenario'); if(i&&st.infra) i.value=st.infra; const f=document.getElementById('sl_funding_scenario'); if(f&&st.funding) f.value=st.funding;
+    };
+    const getScenarioLabOutputsSnapshot=(out)=>({scenario_npv:out.npv,delta_npv:out.npv-SL_BASE.base_npv,revenue_2030:out.rev2030,ebitda_2030:out.ebitda2030,total_capex:out.totalCapex,required_gpu_2030:out.req2030,owned_gpu_2030:out.owned2030,rented_gpu_2030:out.rented2030,revolver_balance_2030:out.revBal2030});
+    const loadPresets=()=>{ try{return JSON.parse(localStorage.getItem(PRESET_KEY)||'[]');}catch(_e){return [];} };
+    const savePresets=(p)=>localStorage.setItem(PRESET_KEY,JSON.stringify(p));
+    const presetStatus=(t)=>{ const s=document.getElementById('sl_preset_status'); if(s) s.textContent=t; };
+    const refreshPresetDropdown=()=>{ const sel=document.getElementById('sl_preset_select'); if(!sel) return; const cur=sel.value; const p=loadPresets(); sel.innerHTML='<option value="">-- select --</option>'+p.map(x=>'<option>'+x.name+'</option>').join(''); if(cur) sel.value=cur; };
     const setDeep=(obj, path, val)=>{ let cur=obj; for(let i=0;i<path.length-1;i++){ const p=path[i]; if(!cur[p]||typeof cur[p]!=='object') cur[p]={}; cur=cur[p]; } cur[path[path.length-1]]=val; };
     const toYaml=(v, indent=0)=>{
       const pad=' '.repeat(indent);
@@ -2251,6 +2278,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       });
       return toYaml({opex:{team:{core_team_target_fte:coreFteMap,salary_gross_monthly_rub:coreSalaryMap}},sga:{target_fte:sgaFteMap,salary_gross_monthly_rub:sgaSalaryMap}});
     };
+    let lastOut=null;
     const calc=()=>{ const p=read(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
       const infra=(document.getElementById('sl_infra_scenario')||{value:SL_BASE.active_infrastructure_scenario}).value;
       const funding=(document.getElementById('sl_funding_scenario')||{value:SL_BASE.active_funding_scenario}).value;
@@ -2293,7 +2321,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
         const fcf=isDefault?(r.free_cash_flow||0):(preFin+eq+drw-repay);
         npv+=fcf/Math.pow(1+p.sl_dr,idx); totalCapex+=(gi+dcc+(r.office_capex||0)+(r.intangible_capex||0));
         if(idx===SL_BASE.rows.length-1){rev2030=rev;ebitda2030=(rev-cogs)-sga;req2030=req;revBal2030=revBal;owned2030=owned;rented2030=rented;coreFte2030=coreFte;coreCash2030=coreCash;teamOpex2030=team;sgaFte2030=sgaFte;sgaPayroll2030=sgaPayroll;totalSga2030=sga;}
-      }); render({npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030,owned2030,rented2030,infra,funding,coreFte2030,coreCash2030,teamOpex2030,sgaFte2030,sgaPayroll2030,totalSga2030}); };
+      }); lastOut={npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030,owned2030,rented2030,infra,funding,coreFte2030,coreCash2030,teamOpex2030,sgaFte2030,sgaPayroll2030,totalSga2030}; render(lastOut); };
     document.getElementById('sl_recalc').addEventListener('click',calc);
     document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); e.value=e.defaultValue;}); renderTeamTables(); const i=document.getElementById('sl_infra_scenario'); if(i) i.value=SL_BASE.active_infrastructure_scenario; const f=document.getElementById('sl_funding_scenario'); if(f) f.value=SL_BASE.active_funding_scenario; calc();});
     document.getElementById('sl_copy_yaml').addEventListener('click', async ()=>{ const txt=buildTeamYamlSnippet(); const ta=document.getElementById('sl_yaml_snippet'); const st=document.getElementById('sl_yaml_status'); if(ta) ta.value=txt;
@@ -2301,7 +2329,22 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       else { if(st) st.textContent='Snippet generated — copy manually.'; } }
       catch(_e){ if(st) st.textContent='Snippet generated — copy manually.'; }
     });
+    const saveCurrentPreset=()=>{ const name=((document.getElementById('sl_preset_name')||{}).value||'').trim(); if(!name){presetStatus('Enter scenario name.'); return;} const p=loadPresets(); const idx=p.findIndex(x=>x.name===name); if(idx>=0&&!confirm('Scenario exists. Overwrite?')) return;
+      const item={name,created_at:(idx>=0?p[idx].created_at:new Date().toISOString()),updated_at:new Date().toISOString(),scenario_state:getScenarioLabState(),outputs_snapshot:getScenarioLabOutputsSnapshot(lastOut||{})}; if(idx>=0)p[idx]=item; else p.push(item); savePresets(p); refreshPresetDropdown(); const sel=document.getElementById('sl_preset_select'); if(sel) sel.value=name; presetStatus('Scenario saved.'); };
+    const loadSelectedPreset=()=>{ const n=(document.getElementById('sl_preset_select')||{}).value; const it=loadPresets().find(x=>x.name===n); if(!it){presetStatus('Select scenario.'); return;} applyScenarioLabState(it.scenario_state); calc(); const nm=document.getElementById('sl_preset_name'); if(nm) nm.value=it.name; presetStatus('Scenario loaded.'); };
+    const duplicateSelectedPreset=()=>{ const n=(document.getElementById('sl_preset_select')||{}).value; const p=loadPresets(); const it=p.find(x=>x.name===n); if(!it){presetStatus('Select scenario.'); return;} const name=n+' copy'; const cp=JSON.parse(JSON.stringify(it)); cp.name=name; cp.created_at=new Date().toISOString(); cp.updated_at=cp.created_at; p.push(cp); savePresets(p); refreshPresetDropdown(); const sel=document.getElementById('sl_preset_select'); if(sel) sel.value=name; presetStatus('Scenario duplicated.'); };
+    const deleteSelectedPreset=()=>{ const n=(document.getElementById('sl_preset_select')||{}).value; if(!n) return; if(!confirm('Delete scenario?')) return; savePresets(loadPresets().filter(x=>x.name!==n)); refreshPresetDropdown(); presetStatus('Scenario deleted.'); };
+    const exportScenarioJson=()=>{ const n=(document.getElementById('sl_preset_select')||{}).value; const it=loadPresets().find(x=>x.name===n) || {name:(document.getElementById('sl_preset_name')||{}).value||'unsaved',created_at:new Date().toISOString(),updated_at:new Date().toISOString(),scenario_state:getScenarioLabState(),outputs_snapshot:getScenarioLabOutputsSnapshot(lastOut||{})}; const blob=new Blob([JSON.stringify(it,null,2)],{type:'application/json'}); const a=document.createElement('a'); const safe=String(it.name||'scenario').replace(/[^a-z0-9_-]+/gi,'_'); a.href=URL.createObjectURL(blob); a.download='gps_finmodel_scenario_'+safe+'.json'; a.click(); URL.revokeObjectURL(a.href); presetStatus('Scenario JSON exported.'); };
+    const importScenarioJson=(file)=>{ const r=new FileReader(); r.onload=()=>{ try{ const obj=JSON.parse(String(r.result||'{}')); if(!obj.scenario_state) throw new Error('Invalid'); const p=loadPresets(); let name=String(obj.name||'imported_scenario'); if(p.some(x=>x.name===name)) name=name+'_'+Date.now(); obj.name=name; obj.updated_at=new Date().toISOString(); obj.created_at=obj.created_at||obj.updated_at; p.push(obj); savePresets(p); refreshPresetDropdown(); const sel=document.getElementById('sl_preset_select'); if(sel) sel.value=name; applyScenarioLabState(obj.scenario_state); calc(); presetStatus('Scenario imported and loaded.'); } catch(_e){ presetStatus('Import failed.'); } }; r.readAsText(file); };
+    document.getElementById('sl_preset_save').addEventListener('click',saveCurrentPreset);
+    document.getElementById('sl_preset_load').addEventListener('click',loadSelectedPreset);
+    document.getElementById('sl_preset_dup').addEventListener('click',duplicateSelectedPreset);
+    document.getElementById('sl_preset_del').addEventListener('click',deleteSelectedPreset);
+    document.getElementById('sl_preset_export').addEventListener('click',exportScenarioJson);
+    document.getElementById('sl_preset_import').addEventListener('click',()=>{ const f=document.getElementById('sl_import_json_file'); if(f) f.click();});
+    document.getElementById('sl_import_json_file').addEventListener('change',(e)=>{ const file=(e.target.files||[])[0]; if(file) importScenarioJson(file); });
     renderTeamTables();
+    refreshPresetDropdown();
     const initSnippet=document.getElementById('sl_yaml_snippet'); if(initSnippet) initSnippet.value=buildTeamYamlSnippet();
     calc();
   } catch(e){ console.warn('Scenario Lab initialization failed',e); const w=document.getElementById('sl_warn'); if(w) w.textContent='Scenario Lab failed to initialize.'; }
