@@ -1926,17 +1926,17 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     def yv(metric: str, y: int, default: float = 0.0) -> float:
         return float(as_float((rows_by_year.get(y) or {}).get(metric)) or default)
     key_assumptions_rows = [
-        {"key":"workplace_activation_rate","category":"Revenue / Demand","label":"Workplace activation rate","unit":"%","notes":"From base workplace_activation_rate","values_by_year":{str(y):yv("workplace_activation_rate", y)*100 for y in years}},
-        {"key":"workplace_tokens_per_active_user_per_day","category":"Revenue / Demand","label":"Workplace tokens per active user per day","unit":"tokens/user/day","notes":"From base workplace_tokens_per_active_user_per_day","values_by_year":{str(y):yv("workplace_tokens_per_active_user_per_day", y) for y in years}},
-        {"key":"contact_center_automation_rate","category":"Revenue / Demand","label":"Contact center automation rate","unit":"%","notes":"From base contact_center_automation_rate","values_by_year":{str(y):yv("contact_center_automation_rate", y)*100 for y in years}},
-        {"key":"contact_center_tokens_per_interaction","category":"Revenue / Demand","label":"Contact center tokens per interaction","unit":"tokens/interaction","notes":"From base contact_center_tokens_per_interaction","values_by_year":{str(y):yv("contact_center_tokens_per_interaction", y) for y in years}},
-        {"key":"target_contribution_margin","category":"Revenue / Pricing","label":"Target contribution margin","unit":"%","notes":"From base target_contribution_margin","values_by_year":{str(y):yv("target_contribution_margin", y)*100 for y in years}},
-        {"key":"weighted_throughput","category":"Compute / GPU","label":"Weighted throughput","unit":"tokens/sec/GPU","notes":"From base weighted_throughput","values_by_year":{str(y):yv("weighted_throughput", y) for y in years}},
-        {"key":"utilization","category":"Compute / GPU","label":"GPU utilization","unit":"%","notes":"From base utilization","values_by_year":{str(y):yv("utilization", y)*100 for y in years}},
-        {"key":"peak_factor","category":"Compute / GPU","label":"Peak factor","unit":"x","notes":"From base peak_factor","values_by_year":{str(y):yv("peak_factor", y, 1.0) for y in years}},
-        {"key":"gpu_unit_cost","category":"Infrastructure / Cost","label":"GPU unit cost","unit":"RUB/GPU","notes":"From base GPU capex assumption","values_by_year":{str(y):sl_gpu_cost_default for y in years}},
-        {"key":"gpu_rental_price_per_gpu_per_year","category":"Infrastructure / Cost","label":"GPU rental price per year","unit":"RUB/GPU/year","notes":"From base GPU rental assumption","values_by_year":{str(y):sl_rent_default for y in years}},
-        {"key":"discount_rate","category":"Finance","label":"Discount rate","unit":"%","notes":"From base discount_rate","values_by_year":{str(y):sl_dr_default*100 for y in years}},
+        {"key":"workplace_activation_rate","section":"Workplace.ai","label":"Activation rate","unit":"%","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("workplace_activation_rate", y)*100 for y in years}},
+        {"key":"workplace_tokens_per_active_user_per_day","section":"Workplace.ai","label":"Tokens per active user per day","unit":"tokens/user/day","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("workplace_tokens_per_active_user_per_day", y) for y in years}},
+        {"key":"contact_center_automation_rate","section":"Contact_Center.ai","label":"Automation rate","unit":"%","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("contact_center_automation_rate", y)*100 for y in years}},
+        {"key":"contact_center_tokens_per_interaction","section":"Contact_Center.ai","label":"Tokens per interaction","unit":"tokens/interaction","notes":"Base value","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):yv("contact_center_tokens_per_interaction", y) for y in years}},
+        {"key":"target_contribution_margin","section":"Revenue / Pricing","label":"Target contribution margin","unit":"%","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("target_contribution_margin", y)*100 for y in years}},
+        {"key":"weighted_throughput","section":"Compute / GPU","label":"Weighted throughput","unit":"tokens/sec/GPU","notes":"Workbench override; official YAML mix-derived","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):yv("weighted_throughput", y) for y in years}},
+        {"key":"gpu_utilization","section":"Compute / GPU","label":"GPU utilization","unit":"%","notes":"Annual assumption","input_mode":"yearly","values_by_year":{str(y):yv("utilization", y)*100 for y in years}},
+        {"key":"peak_factor","section":"Compute / GPU","label":"Peak factor","unit":"x","notes":"Base value","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):yv("peak_factor", y, 1.0) for y in years}},
+        {"key":"gpu_unit_cost","section":"Infrastructure / Cost","label":"GPU unit cost","unit":"RUB/GPU","notes":"Base 2026","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):sl_gpu_cost_default for y in years}},
+        {"key":"gpu_rental_price_per_gpu_per_year","section":"Infrastructure / Cost","label":"GPU rental price per year","unit":"RUB/GPU/year","notes":"Base 2026","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):sl_rent_default for y in years}},
+        {"key":"discount_rate","section":"Finance","label":"Discount rate","unit":"%","notes":"Workbench v1 uses single discount rate","input_mode":"base_only","derived_by":"constant","values_by_year":{str(y):sl_dr_default*100 for y in years}},
     ]
     scenario_lab_data = {
         "base_npv": as_float(metric_store.get("npv", {}).get(years[0])) or 0.0,
@@ -2016,6 +2016,9 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .ff-label .name{{font-weight:700;color:#334155}}
 .ff-label .value{{font-weight:700;color:#16a34a;margin-top:2px}}
 .ff-label .margin{{color:#64748b;margin-top:2px}}
+.ka-section h4{{margin:10px 0 6px;color:#334155}}
+.ka-derived{{color:#94a3b8;font-style:italic;background:#f8fafc}}
+.ka-base-only td{{background:rgba(248,250,252,.55)}}
 </style><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
 <div class='card'>
@@ -2217,14 +2220,18 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     }
     const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_dr'];
     const renderKeyAssumptionsTable=()=>{ const host=document.getElementById('sl_key_assumptions_table'); if(!host) return; const rows=((SL_BASE.key_assumptions||{}).rows)||[];
-      host.innerHTML="<table><thead><tr><th>Category</th><th>Assumption</th>"+years.map(y=>"<th>"+y+"</th>").join("")+"<th>Unit</th><th>Notes</th></tr></thead><tbody>"+
-        rows.map(r=>"<tr><td>"+r.category+"</td><td>"+r.label+"</td>"+years.map(y=>"<td><input class='sl-key-assumption-input' data-assumption-key='"+r.key+"' data-year='"+y+"' type='number' step='0.01' value='"+Number((r.values_by_year||{})[y]||0)+"'/></td>").join("")+"<td>"+r.unit+"</td><td class='note'>"+r.notes+"</td></tr>").join("")+
-      "</tbody></table>";
+      const sections=[...new Set(rows.map(r=>r.section||'Other'))];
+      host.innerHTML="<div class='note'>Rows with annual assumptions can be edited by year. Rows marked Base 2026 are entered once; later years are derived by the model or kept constant for Workbench calculation.</div>"+sections.map(sec=>{
+        const rs=rows.filter(r=>(r.section||'Other')===sec);
+        return "<div class='ka-section'><h4>"+sec+"</h4><table><thead><tr><th>Assumption</th><th>Base 2026</th><th>2027</th><th>2028</th><th>2029</th><th>2030</th><th>Unit</th><th>Notes</th></tr></thead><tbody>"+
+        rs.map(r=>"<tr class='"+(r.input_mode==='base_only'?'ka-base-only':'')+"'><td>"+r.label+"</td>"+years.map((y,idx)=>{ if(r.input_mode==='base_only'&&idx>0) return "<td class='ka-derived'>derived</td>"; return "<td><input class='sl-key-assumption-input' data-assumption-key='"+r.key+"' data-year='"+y+"' type='number' step='0.01' value='"+Number((r.values_by_year||{})[y]||0)+"'/></td>"; }).join("")+"<td>"+r.unit+"</td><td class='note'>"+r.notes+"</td></tr>").join("")+
+        "</tbody></table></div>";
+      }).join("");
     };
     const PRESET_KEY='gps_finmodel_scenario_lab_presets';
     const read=()=>Object.fromEntries(slIds.map(id=>[id,Number(document.getElementById(id).value)]));
     const parseInputNumber=(value, fallback)=>{ const n=Number(value); return Number.isFinite(n)?n:fallback; };
-    const readKeyAssumptions=()=>{ const out={}; (((SL_BASE.key_assumptions||{}).rows)||[]).forEach(r=>{ out[r.key]={}; years.forEach(y=>{ const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y+"']"); out[r.key][y]=parseInputNumber(e?e.value:undefined, Number((r.values_by_year||{})[y]||0)); }); }); return out; };
+    const readKeyAssumptions=()=>{ const out={}; (((SL_BASE.key_assumptions||{}).rows)||[]).forEach(r=>{ out[r.key]={}; if(r.input_mode==='base_only'){ const y0=years[0]; const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y0+"']"); const base=parseInputNumber(e?e.value:undefined, Number((r.values_by_year||{})[y0]||0)); years.forEach(y=>{ out[r.key][y]=base; }); } else { years.forEach(y=>{ const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y+"']"); out[r.key][y]=parseInputNumber(e?e.value:undefined, Number((r.values_by_year||{})[y]||0)); }); } }); if(out.gpu_utilization&&!out.utilization) out.utilization=out.gpu_utilization; return out; };
     const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
     const fi=(v)=>String(Math.round(v));
     const render=(out)=>{ const d=out.npv-SL_BASE.base_npv; const cls=d>=0?'ok':'neg';
