@@ -2380,7 +2380,9 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                     ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_year"] = int(csy)
                     ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_month"] = int(csm or 1)
                 ass.setdefault("funding", {})["active_scenario"] = fund
-                srows, smetric = run_model(ass)
+                mrows = calculate_monthly(ass, scenario_overrides={"infrastructure_scenario": infra, "funding_scenario": fund, "construction_start_year": csy or base_construction_year, "construction_start_month": int(csm or 1)})
+                srows = aggregate_monthly_to_annual(mrows)
+                _, smetric, _ = build_metric_store(srows, ass)
                 syears = [str(int(r.get("year", 0))) for r in srows]
                 financial_flow = {y: {
                 "workplace_ai_revenue": as_float(r.get("workplace_ai_revenue")),
@@ -2429,7 +2431,6 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                 "profit_tax_rate": as_float((((ass.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}).get("value")) or 0.0),
                 "discount_rate": as_float(smv("discount_rate", years[0])) or 0.0,
                 }
-                mrows = calculate_monthly(ass, scenario_overrides={"infrastructure_scenario": infra, "funding_scenario": fund, "construction_start_year": csy or base_construction_year, "construction_start_month": int(csm or 1)})
                 keep = {"month_key","year","month","active_users","workplace_daily_tokens","workplace_monthly_tokens","automated_interactions_per_day","contact_center_daily_tokens","contact_center_monthly_tokens","total_monthly_tokens","required_gpu","owned_gpu","rented_gpu","owned_gpu_increment","construction_flag","gpu_capex","gpu_infra_capex","datacenter_construction_capex","office_capex","intangible_capex","total_capex","monthly_gpu_rental_cost","total_datacenter_opex","total_team_opex","total_sga","total_cogs","total_revenue","gross_profit","ebitda","total_depreciation_and_amortization","ebit","interest_expense","ebt","profit_tax","net_income","operating_cash_flow","investing_cash_flow","free_cash_flow","funding_need","equity_injection","revolver_drawdown","revolver_repayment","revolver_balance","closing_cash_after_funding","closing_cash","cash","net_ppe","net_intangible_assets","total_assets","total_liabilities","paid_in_capital","retained_earnings","total_equity","balance_check","discount_factor","discounted_fcf","cumulative_discounted_fcf","minimum_cash_balance","discount_rate_monthly"}
                 monthly_scenario_results[mkey] = {"rows": [{k: v for k, v in mr.items() if k in keep} for mr in mrows]}
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
