@@ -148,16 +148,21 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
     discount_monthly = (1.0 + discount_annual) ** (1.0 / 12.0) - 1.0
     out: list[dict[str, Any]] = []
     prev_cash = 0.0; prev_rev = 0.0; prev_pic = 0.0; prev_re = 0.0; cum_dcf = 0.0; cum_fcf = 0.0
+    prev_gppe = 0.0; prev_accdep = 0.0; prev_gia = 0.0; prev_accam = 0.0
     for mo in months:
         y = int(mo["year"]); mk = mo["month_key"]; r = by_year[y]
-        wp_daily = (as_float(r.get("workplace_annual_tokens")) or 0.0) / max((as_float(r.get("working_days_per_year")) or 250), 1)
-        cc_daily = (as_float(r.get("contact_center_annual_tokens")) or 0.0) / max((as_float(r.get("calendar_days_per_year")) or 365), 1)
-        wp_month = wp_daily * float(mo["working_days"]); cc_month = cc_daily * float(mo["days_in_month"]); total = wp_month + cc_month
+        wp_month = (as_float(r.get("workplace_annual_tokens")) or 0.0) / 12.0
+        cc_month = (as_float(r.get("contact_center_annual_tokens")) or 0.0) / 12.0
+        wp_daily = wp_month / max(float(mo["working_days"]), 1.0)
+        cc_daily = cc_month / max(float(mo["days_in_month"]), 1.0)
+        total = wp_month + cc_month
         annual_interest_rate = as_float(r.get("revolver_interest_rate")) or 0.0
         monthly_interest_rate = annual_interest_rate / 12.0  # keep simple split for Step 3 consistency
         da = (as_float(r.get("total_depreciation_and_amortization")) or 0.0) / 12.0
         ebit = (as_float(r.get("ebit")) or 0.0) / 12.0
-        capex_month = (as_float(r.get("total_capex")) or 0.0) / 12.0
+        tang_capex = ((as_float(r.get("gpu_infra_capex")) or 0.0) + (as_float(r.get("datacenter_construction_capex")) or 0.0) + (as_float(r.get("office_capex")) or 0.0)) / 12.0
+        int_capex = (as_float(r.get("intangible_capex")) or 0.0) / 12.0
+        capex_month = tang_capex + int_capex
         min_cash = (as_float(r.get("minimum_cash_balance")) or 0.0) / 12.0
         interest = prev_rev * monthly_interest_rate
         for _ in range(8):
@@ -193,6 +198,14 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
         dcf = fcf / ((1.0 + discount_monthly) ** int(mo["month_index"]))
         cum_dcf += dcf; cum_fcf += fcf
         close_cash = cash_after - repay
+        ppe_dep = ((as_float(r.get("gpu_infra_depreciation")) or 0.0) + (as_float(r.get("datacenter_depreciation")) or 0.0) + (as_float(r.get("office_depreciation")) or 0.0)) / 12.0
+        ip_am = ((as_float(r.get("workplace_ai_amortization")) or 0.0) + (as_float(r.get("contact_center_ai_amortization")) or 0.0)) / 12.0
+        gppe = prev_gppe + tang_capex
+        accdep = prev_accdep + ppe_dep
+        net_ppe = gppe - accdep
+        gia = prev_gia + int_capex
+        accam = prev_accam + ip_am
+        net_int = gia - accam
         monthly = {
             **mo,
             "active_users": (as_float(r.get("workplace_active_users")) or 0.0) / 12.0,
@@ -216,15 +229,16 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
             "ebit": ebit,
             "opening_cash": prev_cash, "opening_revolver_balance": prev_rev, "opening_paid_in_capital": prev_pic, "opening_retained_earnings": prev_re,
             "interest_expense": interest, "ebt": ebt, "profit_tax": taxm, "net_income": ni,
-            "gpu_capex": (as_float(r.get("gpu_capex")) or 0.0) / 12.0, "gpu_infra_capex": (as_float(r.get("gpu_infra_capex")) or 0.0) / 12.0, "datacenter_construction_capex": (as_float(r.get("datacenter_construction_capex")) or 0.0) / 12.0, "office_capex": (as_float(r.get("office_capex")) or 0.0) / 12.0, "intangible_capex": (as_float(r.get("intangible_capex")) or 0.0) / 12.0, "total_capex": (as_float(r.get("total_capex")) or 0.0) / 12.0,
+            "gpu_capex": (as_float(r.get("gpu_capex")) or 0.0) / 12.0, "gpu_infra_capex": (as_float(r.get("gpu_infra_capex")) or 0.0) / 12.0, "datacenter_construction_capex": (as_float(r.get("datacenter_construction_capex")) or 0.0) / 12.0, "office_capex": (as_float(r.get("office_capex")) or 0.0) / 12.0, "intangible_capex": int_capex, "monthly_tangible_capex": tang_capex, "monthly_intangible_capex": int_capex, "total_capex": capex_month,
             "operating_cash_flow": ocf, "investing_cash_flow": icf, "closing_cash_before_funding": pre, "funding_need": need, "equity_injection": eq, "revolver_drawdown": draw, "cash_after_drawdown": cash_after, "revolver_repayment": repay, "revolver_balance": rev_bal, "average_revolver_balance": avg_rev, "financing_cash_flow": eq + draw - repay, "net_cash_flow": ocf + icf + (eq + draw - repay), "closing_cash_after_funding": close_cash, "closing_cash": close_cash, "cumulative_cash": close_cash, "cash": close_cash, "free_cash_flow": fcf,
-            "paid_in_capital": prev_pic + eq, "retained_earnings": prev_re + ni, "total_equity": (prev_pic + eq) + (prev_re + ni), "total_liabilities": rev_bal, "net_ppe": (as_float(r.get("net_ppe")) or 0.0), "net_intangible_assets": (as_float(r.get("net_intangible_assets")) or 0.0), "total_assets": close_cash + (as_float(r.get("net_ppe")) or 0.0) + (as_float(r.get("net_intangible_assets")) or 0.0),
-            "balance_check": (close_cash + (as_float(r.get("net_ppe")) or 0.0) + (as_float(r.get("net_intangible_assets")) or 0.0)) - rev_bal - (((prev_pic + eq) + (prev_re + ni))),
+            "paid_in_capital": prev_pic + eq, "retained_earnings": prev_re + ni, "total_equity": (prev_pic + eq) + (prev_re + ni), "total_liabilities": rev_bal,
+            "gross_ppe": gppe, "accumulated_depreciation": accdep, "net_ppe": net_ppe, "gross_intangible_assets": gia, "accumulated_amortization": accam, "net_intangible_assets": net_int, "total_assets": close_cash + net_ppe + net_int,
+            "balance_check": (close_cash + net_ppe + net_int) - rev_bal - (((prev_pic + eq) + (prev_re + ni))),
             "discount_rate_annual": discount_annual, "discount_rate_monthly": discount_monthly, "discount_factor": 1.0 / ((1.0 + discount_monthly) ** int(mo["month_index"])), "discounted_fcf": dcf, "cumulative_discounted_fcf": cum_dcf, "npv_to_date": cum_dcf,
             "utilization": ma["utilization"].get(mk, 0.0), "target_contribution_margin": ma["target_contribution_margin"].get(mk, 0.0),
         }
         out.append(monthly)
-        prev_cash = close_cash; prev_rev = rev_bal; prev_pic = monthly["paid_in_capital"]; prev_re = monthly["retained_earnings"]
+        prev_cash = close_cash; prev_rev = rev_bal; prev_pic = monthly["paid_in_capital"]; prev_re = monthly["retained_earnings"]; prev_gppe = gppe; prev_accdep = accdep; prev_gia = gia; prev_accam = accam
     # simple monthly metrics
     def irr_bisect(cfs: list[float]) -> float | None:
         if not cfs or not (any(v > 0 for v in cfs) and any(v < 0 for v in cfs)): return None
@@ -249,7 +263,7 @@ def aggregate_monthly_to_annual(monthly_rows: list[dict[str, Any]]) -> list[dict
     for y, rows in sorted(by.items()):
         s = lambda k: sum((as_float(r.get(k)) or 0.0) for r in rows)
         mx = lambda k: max((as_float(r.get(k)) or 0.0) for r in rows)
-        out.append({"year": y, "workplace_annual_tokens": s("workplace_monthly_tokens"), "contact_center_annual_tokens": s("contact_center_monthly_tokens"), "total_annual_tokens": s("total_monthly_tokens"), "required_gpu": mx("required_gpu"), "total_revenue": s("total_revenue"), "total_cogs": s("total_cogs"), "ebitda": s("ebitda"), "ebit": s("ebit"), "interest_expense": s("interest_expense"), "ebt": s("ebt"), "profit_tax": s("profit_tax"), "net_income": s("net_income"), "total_capex": s("total_capex"), "operating_cash_flow": s("operating_cash_flow"), "investing_cash_flow": s("investing_cash_flow"), "financing_cash_flow": s("financing_cash_flow"), "free_cash_flow": s("free_cash_flow"), "equity_injection": s("equity_injection"), "revolver_drawdown": s("revolver_drawdown"), "revolver_repayment": s("revolver_repayment"), "discounted_fcf": s("discounted_fcf"), "opening_cash": as_float(rows[0].get("opening_cash")) or 0.0, "closing_cash": as_float(rows[-1].get("closing_cash")) or 0.0, "cumulative_cash": as_float(rows[-1].get("cumulative_cash")) or 0.0, "revolver_balance": as_float(rows[-1].get("revolver_balance")) or 0.0, "cash": as_float(rows[-1].get("cash")) or 0.0, "paid_in_capital": as_float(rows[-1].get("paid_in_capital")) or 0.0, "retained_earnings": as_float(rows[-1].get("retained_earnings")) or 0.0, "total_equity": as_float(rows[-1].get("total_equity")) or 0.0, "total_assets": as_float(rows[-1].get("total_assets")) or 0.0, "total_liabilities": as_float(rows[-1].get("total_liabilities")) or 0.0, "balance_check": as_float(rows[-1].get("balance_check")) or 0.0, "cumulative_discounted_fcf": as_float(rows[-1].get("cumulative_discounted_fcf")) or 0.0})
+        out.append({"year": y, "workplace_annual_tokens": s("workplace_monthly_tokens"), "contact_center_annual_tokens": s("contact_center_monthly_tokens"), "total_annual_tokens": s("total_monthly_tokens"), "required_gpu": mx("required_gpu"), "total_revenue": s("total_revenue"), "total_cogs": s("total_cogs"), "ebitda": s("ebitda"), "ebit": s("ebit"), "interest_expense": s("interest_expense"), "ebt": s("ebt"), "profit_tax": s("profit_tax"), "net_income": s("net_income"), "total_capex": s("total_capex"), "operating_cash_flow": s("operating_cash_flow"), "investing_cash_flow": s("investing_cash_flow"), "financing_cash_flow": s("financing_cash_flow"), "free_cash_flow": s("free_cash_flow"), "funding_need": s("funding_need"), "equity_injection": s("equity_injection"), "revolver_drawdown": s("revolver_drawdown"), "revolver_repayment": s("revolver_repayment"), "discounted_fcf": s("discounted_fcf"), "opening_cash": as_float(rows[0].get("opening_cash")) or 0.0, "closing_cash": as_float(rows[-1].get("closing_cash")) or 0.0, "cumulative_cash": as_float(rows[-1].get("cumulative_cash")) or 0.0, "revolver_balance": as_float(rows[-1].get("revolver_balance")) or 0.0, "cash": as_float(rows[-1].get("cash")) or 0.0, "paid_in_capital": as_float(rows[-1].get("paid_in_capital")) or 0.0, "retained_earnings": as_float(rows[-1].get("retained_earnings")) or 0.0, "total_equity": as_float(rows[-1].get("total_equity")) or 0.0, "total_assets": as_float(rows[-1].get("total_assets")) or 0.0, "total_liabilities": as_float(rows[-1].get("total_liabilities")) or 0.0, "balance_check": as_float(rows[-1].get("balance_check")) or 0.0, "cumulative_discounted_fcf": as_float(rows[-1].get("cumulative_discounted_fcf")) or 0.0})
     return out
 
 
