@@ -1,3 +1,24 @@
+model:
+  forecast_start:
+    year: 2026
+    month: 10
+  forecast_end:
+    year: 2030
+    month: 12
+
+investment_scenarios:
+  base_infrastructure: hybrid
+  base_funding: mix
+  base_construction_start:
+    year: 2028
+    month: 1
+  base_equity_share_pct: 50
+
+finance:
+  discount_rate: 0.30
+  profit_tax_rate: 0.25
+  revolver_interest_rate: 0.25
+
 years:
   - 2026
   - 2027
