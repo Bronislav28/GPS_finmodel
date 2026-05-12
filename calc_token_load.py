@@ -2580,6 +2580,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
 </div></section>
 <section><h2>Monthly Detail</h2><div class='card'><h3>Monthly Detail — Selected Year</h3><div class='controls'><div class='ctrl'><label>Year</label><select id='monthly_detail_year'>{''.join(f"<option>{y}</option>" for y in years)}</select></div><div class='ctrl'><label>Section</label><select id='monthly_detail_section'><option>Demand & Tokens</option><option>Infrastructure / GPU</option><option>CAPEX</option><option>Operating Costs</option><option>P&L</option><option>Cash Flow & Funding</option><option>Balance Sheet</option><option>DCF</option></select></div></div><div class='table-wrap' id='monthly_detail_table'></div><div class='note'>Monthly Detail uses the internal monthly engine for the selected Investment Scenario. The main report remains the annual view; monthly timing is shown here for diagnostics.</div><div class='note'>Monthly funding may differ from annual summary because interest, drawdown and repayment are timed monthly.</div></div></section>
+<section><h2>Monthly Aggregation Diagnostic</h2><div class='card' id='monthly_aggregation_diagnostic'><div class='note'>Stage 2 diagnostic only. Does not modify current report rendering.</div><div style='margin-top:8px'><button id='run_monthly_aggregation_diagnostic'>Run Monthly Aggregation Diagnostic</button></div><div id='monthly_aggregation_diagnostic_output' class='note' style='margin-top:10px'></div></div></section>
 <section><h2>NPV Workbench — Scenario Builder</h2>
 <div class='card'>
   <div class='card'>
@@ -2720,6 +2721,28 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       'DCF':['free_cash_flow','discount_factor','discounted_fcf','cumulative_discounted_fcf'],
     }};
     const getMonthlyScenarioKey=(infra,funding,csy,csm)=> (infra==='hybrid' ? (infra+'|'+funding+'|'+csy+'-'+String(csm).padStart(2,'0')) : (infra+'|'+funding));
+    const getOperatingScenarioKey=(infra,constructionYear,constructionMonth)=>{{ if(infra==='hybrid'){{ const mm=String(constructionMonth).padStart(2,'0'); return `hybrid|${{constructionYear}}-${{mm}}`; }} return infra; }};
+    const getFundingShares=(fundingScenario,equitySharePct)=>{{ if(fundingScenario==='equity_only') return {{equityShare:1.0,revolverShare:0.0}}; if(fundingScenario==='revolver_only') return {{equityShare:0.0,revolverShare:1.0}}; const equityShare=Math.min(1,Math.max(0,Number(equitySharePct||0)/100)); return {{equityShare,revolverShare:1-equityShare}}; }};
+    const buildFundedMonthlyRows=(operatingRows,fundingScenario,equitySharePct)=>{{ const rows=JSON.parse(JSON.stringify(operatingRows||[])).sort((a,b)=>Number(a.month_index||0)-Number(b.month_index||0)); const shares=getFundingShares(fundingScenario,equitySharePct); let priorCumDisc=0, priorCumFcf=0;
+      rows.forEach((r,idx)=>{{ const prev=idx>0?rows[idx-1]:null; const opening_cash=prev?Number(prev.closing_cash_after_funding||0):0; const opening_revolver_balance=prev?Number(prev.revolver_balance||0):0; const opening_paid_in_capital=prev?Number(prev.paid_in_capital||0):0; const opening_retained_earnings=prev?Number(prev.retained_earnings||0):0;
+        const ebit=Number(r.ebit||0), da=Number(r.total_depreciation_and_amortization||0), total_capex=Number(r.total_capex||0), min_cash=Number(r.minimum_cash_balance||0), annualRate=Number(r.revolver_interest_rate||0), taxRate=Number(r.profit_tax_rate||0);
+        const monthlyRate=Math.pow(1+annualRate,1/12)-1; // Assume annual rate input and convert monthly (matches monthly-rate treatment objective).
+        let interest_expense=opening_revolver_balance*monthlyRate, ebt=0, profit_tax=0, net_income=0, operating_cash_flow=0, investing_cash_flow=0, pre_financing_cash_flow=0, funding_need=0, equity_injection=0, revolver_drawdown=0, cash_after_drawdown=0, revolver_repayment=0, revolver_balance=opening_revolver_balance, average_revolver_balance=opening_revolver_balance;
+        for(let it=0; it<10; it++){{ ebt=ebit-interest_expense; profit_tax=Math.max(ebt,0)*taxRate; net_income=ebt-profit_tax; operating_cash_flow=net_income+da; investing_cash_flow=Number.isFinite(Number(r.investing_cash_flow))?Number(r.investing_cash_flow):(-total_capex); pre_financing_cash_flow=opening_cash+operating_cash_flow+investing_cash_flow; funding_need=Math.max(-pre_financing_cash_flow,0); equity_injection=funding_need*shares.equityShare; revolver_drawdown=funding_need*shares.revolverShare; cash_after_drawdown=pre_financing_cash_flow+equity_injection+revolver_drawdown; const excess=Math.max(cash_after_drawdown-min_cash,0); revolver_repayment=Math.min(opening_revolver_balance,excess); revolver_balance=opening_revolver_balance+revolver_drawdown-revolver_repayment; average_revolver_balance=(opening_revolver_balance+revolver_balance)/2; const new_interest_expense=average_revolver_balance*monthlyRate; if(Math.abs(new_interest_expense-interest_expense)<0.01){{interest_expense=new_interest_expense; break;}} interest_expense=new_interest_expense; }}
+        const financing_cash_flow=equity_injection+revolver_drawdown-revolver_repayment; const net_cash_flow=operating_cash_flow+investing_cash_flow+financing_cash_flow; const closing_cash_after_funding=cash_after_drawdown-revolver_repayment; const free_cash_flow=operating_cash_flow+investing_cash_flow;
+        const paid_in_capital=opening_paid_in_capital+equity_injection; const retained_earnings=opening_retained_earnings+net_income; const cash=closing_cash_after_funding; const net_ppe=Number(r.net_ppe||0), net_intangible_assets=Number(r.net_intangible_assets||0); const total_assets=cash+net_ppe+net_intangible_assets; const total_liabilities=revolver_balance; const total_equity=paid_in_capital+retained_earnings; const balance_check=total_assets-total_liabilities-total_equity;
+        const annualDiscountRate=Number(r.discount_rate||0); const monthlyDiscountRate=Math.pow(1+annualDiscountRate,1/12)-1; const discount_factor=1/Math.pow(1+monthlyDiscountRate,idx); const discounted_fcf=free_cash_flow*discount_factor; priorCumDisc += discounted_fcf; priorCumFcf += free_cash_flow;
+        Object.assign(r,{{opening_cash,opening_revolver_balance,interest_expense,ebt,profit_tax,net_income,operating_cash_flow,investing_cash_flow,pre_financing_cash_flow,funding_need,equity_injection,revolver_drawdown,cash_after_drawdown,revolver_repayment,revolver_balance,average_revolver_balance,financing_cash_flow,net_cash_flow,closing_cash_after_funding,closing_cash:closing_cash_after_funding,cash,paid_in_capital,retained_earnings,total_liabilities,total_assets,total_equity,balance_check,free_cash_flow,discount_factor,discounted_fcf,cumulative_discounted_fcf:priorCumDisc,cumulative_free_cash_flow:priorCumFcf}});
+      }}); return rows; }};
+    const aggregateMonthlyRowsToAnnual=(monthlyRows)=>{{ const g={{}}; const sumMap={{workplace_monthly_tokens:'workplace_annual_tokens',contact_center_monthly_tokens:'contact_center_annual_tokens',total_monthly_tokens:'total_annual_tokens'}};
+      const sumMetrics=['workplace_ai_revenue','contact_center_ai_revenue','total_revenue','total_cogs','gross_profit','ebitda','total_depreciation_and_amortization','ebit','interest_expense','ebt','profit_tax','net_income','gpu_capex','gpu_infra_capex','datacenter_construction_capex','office_capex','intangible_capex','tangible_capex','total_capex','monthly_gpu_rental_cost','annual_gpu_rental_cost','total_datacenter_opex','total_team_opex','total_sga','operating_cash_flow','investing_cash_flow','financing_cash_flow','free_cash_flow','funding_need','equity_injection','revolver_drawdown','revolver_repayment','discounted_fcf'];
+      const eopMetrics=['owned_gpu','rented_gpu','cash','closing_cash','closing_cash_after_funding','revolver_balance','gross_ppe','accumulated_depreciation','net_ppe','gross_intangible_assets','accumulated_amortization','net_intangible_assets','total_assets','total_liabilities','paid_in_capital','retained_earnings','total_equity','balance_check','cumulative_discounted_fcf'];
+      const maxMetrics=['required_gpu','peak_required_gpu']; const avgMetrics=['active_users','workplace_daily_tokens','automated_interactions_per_day','contact_center_daily_tokens','total_load_mw','average_owned_gpu'];
+      (monthlyRows||[]).forEach(r=>{{ const y=String(r.year); if(!g[y]) g[y]={{year:Number(y),_n:0}}; const a=g[y]; a._n+=1; Object.entries(sumMap).forEach(([k,t])=>a[t]=(Number(a[t]||0)+Number(r[k]||0))); sumMetrics.forEach(m=>a[m]=(Number(a[m]||0)+Number(r[m]||0))); maxMetrics.forEach(m=>a[m]=Math.max(Number(a[m]||0),Number(r[m]||0))); avgMetrics.forEach(m=>a[m]=(Number(a[m]||0)+Number(r[m]||0))); eopMetrics.forEach(m=>a[m]=Number(r[m]||0)); }});
+      Object.values(g).forEach(a=>{{ avgMetrics.forEach(m=>a[m]=a._n?Number(a[m]||0)/a._n:0); delete a._n; }}); return Object.values(g).sort((a,b)=>a.year-b.year); }};
+    const buildAnnualInvestmentSummaryFromMonthly=(monthlyRows,annualRows)=>{{ const m=(monthlyRows||[]).sort((a,b)=>Number(a.month_index||0)-Number(b.month_index||0)); const npv=m.length?Number(m[m.length-1].cumulative_discounted_fcf||0):0; let cum=0,sp=null,dp=null; m.forEach(r=>{{ cum += Number(r.free_cash_flow||0); if(sp===null&&cum>=0) sp=String(r.month_key||r.year); if(dp===null&&Number(r.cumulative_discounted_fcf||0)>=0) dp=String(r.month_key||r.year); }});
+      const cfs=m.map(r=>Number(r.free_cash_flow||0)); const irrMonthly=(()=>{{ if(cfs.length<2) return null; let lo=-0.99, hi=5.0; const npvRate=(rate)=>cfs.reduce((acc,cf,i)=>acc+cf/Math.pow(1+rate,i),0); let nlo=npvRate(lo), nhi=npvRate(hi); if(!Number.isFinite(nlo)||!Number.isFinite(nhi)||nlo*nhi>0) return null; for(let i=0;i<100;i++){{ const mid=(lo+hi)/2, nm=npvRate(mid); if(!Number.isFinite(nm)) return null; if(Math.abs(nm)<1e-7) return mid; if(nlo*nm<=0){{hi=mid;nhi=nm;}} else {{lo=mid;nlo=nm;}} }} return (lo+hi)/2; }})();
+      return {{npv,irr:irrMonthly===null?null:(Math.pow(1+irrMonthly,12)-1),simple_payback:sp,discounted_payback:dp,required_investments:(annualRows||[]).reduce((a,r)=>a+Number(r.total_capex||0),0),peak_required_gpu:Math.max(0,...(annualRows||[]).map(r=>Number(r.required_gpu||0))),balance_check_max_abs:Math.max(0,...m.map(r=>Math.abs(Number(r.balance_check||0))))}}; }};
     const buildCustomMonthlyFundingRows=(baseRows,equityShare,revolverShare)=>{{ const rows=JSON.parse(JSON.stringify(baseRows||[])).sort((a,b)=>a.month_index-b.month_index); let pc=0,pr=0,pp=0,pre=0,cdf=0; rows.forEach((r,idx)=>{{ const dr=Number(r.discount_rate_monthly||0), da=Number(r.total_depreciation_and_amortization||0), ebit=Number(r.ebit||0), icf=Number(r.investing_cash_flow||0), minc=Number(r.minimum_cash_balance||0); let intr=pr*0.01; for(let i=0;i<6;i++){{ const ebt=ebit-intr, tax=Math.max(ebt,0)*0.2, ni=ebt-tax, ocf=ni+da, preCF=pc+ocf+icf, need=Math.max(-preCF,0), eq=need*equityShare, draw=need*revolverShare, cad=preCF+eq+draw, rep=Math.min(pr,Math.max(cad-minc,0)), rb=pr+draw-rep, nii=((pr+rb)/2)*0.01; if(Math.abs(nii-intr)<0.01){{intr=nii; break;}} intr=nii; }} const ebt=ebit-intr, tax=Math.max(ebt,0)*0.2, ni=ebt-tax, ocf=ni+da, preCF=pc+ocf+icf, need=Math.max(-preCF,0), eq=need*equityShare, draw=need*revolverShare, cad=preCF+eq+draw, rep=Math.min(pr,Math.max(cad-minc,0)), rb=pr+draw-rep, fin=eq+draw-rep, close=cad-rep, fcf=ocf+icf; cdf += fcf/(Math.pow(1+dr,idx)); r.opening_cash=pc; r.opening_revolver_balance=pr; r.interest_expense=intr; r.ebt=ebt; r.profit_tax=tax; r.net_income=ni; r.operating_cash_flow=ocf; r.funding_need=need; r.equity_injection=eq; r.revolver_drawdown=draw; r.revolver_repayment=rep; r.revolver_balance=rb; r.financing_cash_flow=fin; r.closing_cash_after_funding=close; r.closing_cash=close; r.cash=close; r.paid_in_capital=pp+eq; r.retained_earnings=pre+ni; r.total_equity=pp+eq+pre+ni; r.total_liabilities=rb; r.total_assets=close+(Number(r.net_ppe)||0)+(Number(r.net_intangible_assets)||0); r.balance_check=r.total_assets-(rb+r.total_equity); r.free_cash_flow=fcf; r.discounted_fcf=fcf/(Math.pow(1+dr,idx)); r.cumulative_discounted_fcf=cdf; pc=close; pr=rb; pp=r.paid_in_capital; pre=r.retained_earnings; }}); return rows; }};
     const renderMonthlyDetail=()=>{{ const y=String((document.getElementById('monthly_detail_year')||{{}}).value||YEARS[0]); const sec=String((document.getElementById('monthly_detail_section')||{{}}).value||'Demand & Tokens'); const host=document.getElementById('monthly_detail_table'); if(!host) return; const rows=(currentMonthlyRows||[]).filter(r=>String(r.year)===y).sort((a,b)=>Number(a.month)-Number(b.month)); const metrics=MONTH_METRICS[sec]||[]; const mnames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const mons=rows.map(r=>mnames[Math.max(0,Number(r.month)-1)]); const head='<tr><th class=\"sticky\">Metric</th>'+mons.map(m=>'<th>'+m+'</th>').join('')+'<th>FY Total / YE</th></tr>'; const body=metrics.map(m=>{{ const vals=rows.map(r=>Number(r[m])||0); const t=monthlyMetricAggregationType(m); const agg=t==='sum'?vals.reduce((a,b)=>a+b,0):t==='max'?Math.max(...vals,0):t==='avg'?(vals.reduce((a,b)=>a+b,0)/Math.max(vals.length,1)):(vals.length?vals[vals.length-1]:0); return '<tr><td class=\"sticky\">'+m+'</td>'+vals.map(v=>'<td class=\"num\">'+formatMonthlyValue(m,v)+'</td>').join('')+'<td class=\"num\">'+formatMonthlyValue(m,agg)+'</td></tr>'; }}).join(''); host.innerHTML='<table class=\"sensitivity\"><thead>'+head+'</thead><tbody>'+body+'</tbody></table>'; }};
     if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
@@ -2854,8 +2877,18 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(csm) csm.value=String(baseCsm); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState();
     if(fund) fund.addEventListener('change',()=>{{sync(); updateInvestmentScenarioControlState();}}); if(eq) eq.addEventListener('input',()=>{{sync(); updateInvestmentScenarioControlState();}}); if(infra) infra.addEventListener('change',updateInvestmentScenarioControlState); if(csy) csy.addEventListener('change',updateInvestmentScenarioControlState);
     const apply=document.getElementById('report_apply_scenario'), reset=document.getElementById('report_reset_scenario');
+    const runMonthlyAggregationDiagnostic=()=>{{ const out=document.getElementById('monthly_aggregation_diagnostic_output'); try{{ const infra=(document.getElementById('report_infra_scenario')||{{}}).value||'hybrid'; const funding=(document.getElementById('report_funding_scenario')||{{}}).value||'mix'; const csy=(document.getElementById('report_construction_start_year')||{{value:'2028'}}).value||'2028'; const csm=(document.getElementById('report_construction_start_month')||{{value:'1'}}).value||'1'; const eqPct=Number((document.getElementById('report_mix_equity_share')||{{value:'50'}}).value||50);
+      const opKey=getOperatingScenarioKey(infra,csy,csm); const op=((window.OPERATING_SCENARIO_RESULTS||{{}})[opKey]||{{}}).rows||[]; if(!op.length){{ if(out) out.innerHTML=`<span class='warn'>Operating scenario rows not found for key: ${{opKey}}</span>`; return; }}
+      const funded=buildFundedMonthlyRows(op,funding,eqPct); const annual=aggregateMonthlyRowsToAnnual(funded); const s=buildAnnualInvestmentSummaryFromMonthly(funded,annual);
+      const eOnly=buildAnnualInvestmentSummaryFromMonthly(buildFundedMonthlyRows(op,'equity_only',100),annual); const mix100=buildAnnualInvestmentSummaryFromMonthly(buildFundedMonthlyRows(op,'mix',100),annual);
+      const rOnly=buildAnnualInvestmentSummaryFromMonthly(buildFundedMonthlyRows(op,'revolver_only',0),annual); const mix0=buildAnnualInvestmentSummaryFromMonthly(buildFundedMonthlyRows(op,'mix',0),annual);
+      const dEq=Math.abs(Number(mix100.npv||0)-Number(eOnly.npv||0)); const dRev=Math.abs(Number(mix0.npv||0)-Number(rOnly.npv||0));
+      if(out) out.innerHTML=`<div>Operating key: <strong>${{opKey}}</strong></div><div>Funding scenario: <strong>${{funding}}</strong></div><div>Equity share: <strong>${{eqPct.toFixed(0)}}%</strong></div><div>NPV (Stage 2 path): <strong>${{Number(s.npv||0).toLocaleString(undefined,{{maximumFractionDigits:2}})}}</strong></div><div>Required Investments: <strong>${{Number(s.required_investments||0).toLocaleString(undefined,{{maximumFractionDigits:2}})}}</strong></div><div>Peak Required GPU: <strong>${{Number(s.peak_required_gpu||0).toLocaleString()}}</strong></div><div>Balance check max abs: <strong>${{Number(s.balance_check_max_abs||0).toLocaleString(undefined,{{maximumFractionDigits:4}})}}</strong></div><div>HTML path status: <strong>Diagnostic only (no report mutation)</strong></div><div>Mix 100 vs equity_only delta NPV: <strong>${{dEq.toFixed(6)}}</strong></div><div>Mix 0 vs revolver_only delta NPV: <strong>${{dRev.toFixed(6)}}</strong></div>`;
+      console.debug('Monthly aggregation diagnostic',{{opKey,funding,eqPct,npv:s.npv,dEq,dRev,annualRows:annual.length}});
+    }} catch(err){{ if(out) out.innerHTML=`<span class='warn'>Diagnostic failed: ${{String(err)}}</span>`; }} }};
     if(apply) apply.addEventListener('click',()=>{{ sync(); applyReportScenario(); }});
     if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(csm) csm.value=String(baseCsm); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState(); applyReportScenario(); if(st) st.textContent='Reset to YAML base investment scenario. Monthly Detail updated.'; }});
+    const diagBtn=document.getElementById('run_monthly_aggregation_diagnostic'); if(diagBtn) diagBtn.addEventListener('click',runMonthlyAggregationDiagnostic);
     applyReportScenario();
     const mdy=document.getElementById('monthly_detail_year'); const mds=document.getElementById('monthly_detail_section'); if(mdy) mdy.addEventListener('change',renderMonthlyDetail); if(mds) mds.addEventListener('change',renderMonthlyDetail); renderMonthlyDetail();
   }} catch(_e) {{}}
@@ -3129,177 +3162,6 @@ def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: 
     html = build_html(rows, assumptions)
     output.write_text(html, encoding="utf-8")
     print(f"[size] Final HTML file: {output.stat().st_size} bytes")
-
-
-def write_audit_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
-    years, metric_store, inv_metrics = build_metric_store(rows, assumptions)
-    by_year = {int(r["year"]): r for r in rows}
-    usage = assumptions.get("usage_assumptions", {})
-    token_model = assumptions.get("token_load_model", {})
-    compute = assumptions.get("compute_model", {})
-    capex = assumptions.get("capex", {})
-    revenue_cfg = assumptions.get("revenue", {})
-    pnl_cfg = assumptions.get("pnl", {})
-    funding_cfg = assumptions.get("funding", {})
-
-    wp_usage = (usage.get("Workplace.ai", {}) or {})
-    cc_usage = (usage.get("Contact_Center.ai", {}) or {})
-    wp_activation = to_year_map(wp_usage.get("activation_rate"))
-    wp_tokens_per_user = to_year_map(((token_model.get("Workplace.ai", {}) or {}).get("tokens_per_active_user_per_day")))
-    cc_automation = to_year_map(cc_usage.get("automation_rate"))
-    cc_tokens_per_interaction = as_float(((token_model.get("Contact_Center.ai", {}) or {}).get("tokens_per_interaction")))
-    working_days = as_float(((token_model.get("time_assumptions", {}) or {}).get("working_days_per_year"))) or 0.0
-    calendar_days = as_float(((token_model.get("time_assumptions", {}) or {}).get("calendar_days_per_year"))) or 0.0
-    util_map = to_year_map(((compute.get("infra", {}) or {}).get("utilization")))
-    peak_factor = as_float(((compute.get("infra", {}) or {}).get("peak_factor")) or 1.0) or 1.0
-    gpu_unit_cost = as_float((((capex.get("gpu", {}) or {}).get("unit_cost"))) or 0.0)
-    infra_multiplier = as_float((((capex.get("infra_multiplier", {}) or {}).get("value"))) or 0.0)
-    contribution_margin_map = to_year_map(((revenue_cfg.get("target_contribution_margin", {}) or {}).get(str(revenue_cfg.get("active_scenario", "base")), {})))
-    tax_rate = as_float((((pnl_cfg.get("tax", {}) or {}).get("profit_tax_rate", {}) or {}).get("value")) or 0.0)
-    min_cash_months = as_float((((funding_cfg.get("minimum_cash_balance", {}) or {}).get("months_of_fixed_costs", {}) or {}).get("value")))
-    if min_cash_months is None:
-        min_cash_months = as_float((((((funding_cfg.get("revolver", {}) or {}).get("repayment_logic", {}) or {}).get("minimum_cash_balance", {}) or {}).get("months_of_fixed_costs", {}) or {}).get("value")))
-    min_cash_months = 0.0 if min_cash_months is None else min_cash_months
-    report_rows: list[dict[str, Any]] = []
-    ok = warn = na = 0
-
-    def add_check(name: str, year: Any, formula: str, expected: Any, actual: Any, tolerance: float = 1.0, notes: str = "", exact: bool = False) -> None:
-        nonlocal ok, warn, na
-        ev, av = as_float(expected), as_float(actual)
-        if exact:
-            if expected is None or actual is None:
-                status, diff = "N/A", ""
-                na += 1
-            else:
-                same = str(expected) == str(actual)
-                status = "OK" if same else "WARNING"
-                diff = 0 if same else "mismatch"
-                ok += 1 if same else 0
-                warn += 0 if same else 1
-        elif ev is None or av is None or math.isnan(ev) or math.isnan(av):
-            status, diff = "N/A", ""
-            na += 1
-        else:
-            d = av - ev
-            status = "OK" if abs(d) < tolerance else "WARNING"
-            diff = d
-            ok += 1 if status == "OK" else 0
-            warn += 1 if status == "WARNING" else 0
-        report_rows.append({"Check": name, "Year": year, "Formula": formula, "Expected": expected, "Actual": actual, "Difference": diff, "Status": status, "Notes": notes})
-
-    prev_owned = 0.0
-    for i, y in enumerate(years):
-        r = by_year[y]
-        # Token load
-        act_users_exp = (as_float(wp_usage.get("total_employees")) or 0.0) * (as_float(wp_activation.get(y)) or 0.0)
-        add_check("active_users_check", y, "total_employees*activation_rate", act_users_exp, r.get("active_users"), 0.01)
-        wp_ann_exp = act_users_exp * (as_float(wp_tokens_per_user.get(y)) or 0.0) * float(working_days or 0.0)
-        add_check("workplace_annual_tokens_check", y, "active_users*tokens_per_active_user_per_day*working_days", wp_ann_exp, r.get("workplace_annual_tokens"), 1.0)
-        auto_int_exp = (as_float(cc_usage.get("interactions_per_day")) or 0.0) * (as_float(cc_automation.get(y)) or 0.0)
-        add_check("automated_interactions_check", y, "interactions_per_day*automation_rate", auto_int_exp, r.get("automated_interactions"), 0.01)
-        cc_ann_exp = auto_int_exp * (cc_tokens_per_interaction or 0.0) * float(calendar_days or 0.0)
-        add_check("contact_center_annual_tokens_check", y, "automated_interactions*tokens_per_interaction*calendar_days", cc_ann_exp, r.get("contact_center_annual_tokens"), 1.0)
-        add_check("total_annual_tokens_check", y, "workplace_annual_tokens+contact_center_annual_tokens", (as_float(r.get("workplace_annual_tokens")) or 0.0)+(as_float(r.get("contact_center_annual_tokens")) or 0.0), r.get("total_annual_tokens"), 1.0)
-        # GPU sizing
-        seconds = (working_days or 0.0) * (as_float((compute.get("infra", {}) or {}).get("working_hours_per_day")) or 0.0) * 3600.0
-        tps_exp = (as_float(r.get("total_annual_tokens")) or 0.0) / seconds if seconds > 0 else None
-        add_check("tokens_per_second_check", y, "total_annual_tokens/(working_days*working_hours*3600)", tps_exp, r.get("tokens_per_second"), 0.01)
-        util = as_float(util_map.get(y)) or 0.0
-        wt = as_float(r.get("weighted_throughput")) or 0.0
-        req_exp = math.ceil((tps_exp or 0.0) / (wt * util) * peak_factor) if wt > 0 and util > 0 else None
-        add_check("required_gpu_check", y, "ceil(tokens_per_second/(weighted_throughput*utilization)*peak_factor)", req_exp, r.get("required_gpu"), 0.01)
-        # Infrastructure
-        csy = as_float(r.get("construction_start_year"))
-        cflag_exp = 1 if csy is not None and y == int(csy) else 0
-        add_check("construction_flag_check", y, "1 if year==construction_start_year else 0", cflag_exp, r.get("construction_flag"), exact=True)
-        if str(r.get("active_scenario")) == "hybrid":
-            req = as_float(r.get("required_gpu")) or 0.0
-            add_check("owned_gpu_check", y, "required_gpu if year>=construction_start_year else 0", req if y >= int(csy or 9999) else 0, r.get("owned_gpu"), 0.01)
-            add_check("rented_gpu_check", y, "required_gpu if year<construction_start_year else 0", req if y < int(csy or 9999) else 0, r.get("rented_gpu"), 0.01)
-        owned = as_float(r.get("owned_gpu")) or 0.0
-        own_inc_exp = owned if i == 0 else max(owned - prev_owned, 0.0)
-        add_check("owned_gpu_increment_check", y, "owned first year else max(delta,0)", own_inc_exp, r.get("owned_gpu_increment"), 0.01)
-        prev_owned = owned
-        # CAPEX
-        add_check("gpu_capex_check", y, "owned_gpu_increment*gpu_unit_cost", (as_float(r.get("owned_gpu_increment")) or 0.0) * float(gpu_unit_cost or 0.0), r.get("gpu_capex"), 1.0)
-        add_check("gpu_infra_capex_check", y, "gpu_capex*infra_multiplier", (as_float(r.get("gpu_capex")) or 0.0) * float(infra_multiplier or 0.0), r.get("gpu_infra_capex"), 1.0)
-        tangible_exp = (as_float(r.get("gpu_infra_capex")) or 0.0) + (as_float(r.get("datacenter_construction_capex")) or 0.0) + (as_float(r.get("office_capex")) or 0.0)
-        add_check("tangible_capex_check", y, "gpu_infra+dc+office", tangible_exp, r.get("tangible_capex"), 1.0)
-        intang_exp = (as_float(r.get("workplace_ai_ip_value")) or 0.0) + (as_float(r.get("contact_center_ai_ip_value")) or 0.0)
-        add_check("intangible_capex_check", y, "workplace_ai_ip_value+contact_center_ai_ip_value", intang_exp, r.get("intangible_capex"), 1.0)
-        add_check("total_capex_check", y, "tangible_capex+intangible_capex", tangible_exp + intang_exp, r.get("total_capex"), 1.0)
-        add_check("datacenter_construction_capex_check", y, "total_component_rub*construction_flag", (as_float(r.get("total_component_rub")) or 0.0)*(as_float(r.get("construction_flag")) or 0.0), r.get("datacenter_construction_capex"), 1.0)
-        # D&A
-        add_check("office_capex_depreciation_check", y, "sum office depreciation components", (as_float(r.get("office_server_depreciation")) or 0.0)+(as_float(r.get("employee_laptops_depreciation")) or 0.0)+(as_float(r.get("executive_laptops_depreciation")) or 0.0)+(as_float(r.get("mfu_depreciation")) or 0.0)+(as_float(r.get("meeting_rooms_depreciation")) or 0.0)+(as_float(r.get("office_furniture_depreciation")) or 0.0), r.get("office_capex_depreciation"), 1.0)
-        add_check("total_ppe_depreciation_check", y, "gpu_depreciation+datacenter_depreciation+office_capex_depreciation", (as_float(r.get("gpu_depreciation")) or 0.0)+(as_float(r.get("datacenter_depreciation")) or 0.0)+(as_float(r.get("office_capex_depreciation")) or 0.0), r.get("total_ppe_depreciation"), 1.0)
-        add_check("ip_amortization_check", y, "workplace_ai_amortization+contact_center_ai_amortization", (as_float(r.get("workplace_ai_amortization")) or 0.0)+(as_float(r.get("contact_center_ai_amortization")) or 0.0), r.get("ip_amortization"), 1.0)
-        add_check("total_depreciation_and_amortization_check", y, "total_ppe_depreciation+ip_amortization", (as_float(r.get("total_ppe_depreciation")) or 0.0)+(as_float(r.get("ip_amortization")) or 0.0), r.get("total_depreciation_and_amortization"), 1.0)
-        # OPEX / Revenue / P&L / CF / Funding / BS
-        add_check("gpu_rental_opex_check", y, "rented_gpu*rental_price_per_gpu_per_year", (as_float(r.get("rented_gpu")) or 0.0)*(as_float(r.get("rental_price_per_gpu_per_year")) or 0.0), r.get("annual_gpu_rental_cost"), 1.0)
-        add_check("electricity_cost_check", y, "electricity_kwh*electricity_price_t", (as_float(r.get("electricity_kwh")) or 0.0)*(as_float(r.get("electricity_price_t")) or 0.0), r.get("electricity_cost"), 1.0)
-        add_check("total_datacenter_opex_check", y, "electricity+maintenance+network+land+other", (as_float(r.get("electricity_cost")) or 0.0)+(as_float(r.get("maintenance_cost")) or 0.0)+(as_float(r.get("network_cost")) or 0.0)+(as_float(r.get("land_rent")) or 0.0)+(as_float(r.get("other_datacenter_opex")) or 0.0), r.get("total_datacenter_opex"), 1.0)
-        add_check("team_opex_check", y, "annual_core_team_cash_cost-capitalized_core_team_cost", (as_float(r.get("annual_core_team_cash_cost")) or 0.0)-(as_float(r.get("capitalized_core_team_cost")) or 0.0), r.get("total_team_opex"), 1.0)
-        add_check("total_sga_check", y, "annual_fixed_sga+annual_office_rent", (as_float(r.get("annual_fixed_sga")) or 0.0)+(as_float(r.get("annual_office_rent")) or 0.0), r.get("total_sga"), 1.0)
-        pricing_base_exp = (as_float(r.get("total_cogs")) or 0.0) + (as_float(r.get("total_depreciation_and_amortization")) or 0.0)
-        add_check("pricing_base_check", y, "total_cogs+total_depreciation_and_amortization", pricing_base_exp, r.get("pricing_base"), 1.0)
-        total_tokens = as_float(r.get("total_annual_tokens")) or 0.0
-        add_check("workplace_token_share_check", y, "workplace_annual_tokens/total_annual_tokens", (as_float(r.get("workplace_annual_tokens")) or 0.0)/total_tokens if total_tokens else None, r.get("workplace_token_share"), 0.01)
-        add_check("contact_center_token_share_check", y, "contact_center_annual_tokens/total_annual_tokens", (as_float(r.get("contact_center_annual_tokens")) or 0.0)/total_tokens if total_tokens else None, r.get("contact_center_token_share"), 0.01)
-        margin = as_float(contribution_margin_map.get(y))
-        denom = (1.0 - margin) if margin is not None and margin < 1 else None
-        wp_rev_exp = None if denom in (None, 0) else ((pricing_base_exp * (as_float(r.get("workplace_token_share")) or 0.0)) / denom) * (as_float(r.get("workplace_revenue_availability_factor")) or 0.0)
-        cc_rev_exp = None if denom in (None, 0) else ((pricing_base_exp * (as_float(r.get("contact_center_token_share")) or 0.0)) / denom) * (as_float(r.get("contact_center_revenue_availability_factor")) or 0.0)
-        add_check("workplace_revenue_check", y, "workplace_pricing_base/(1-margin)*availability", wp_rev_exp, r.get("workplace_ai_revenue"), 1.0)
-        add_check("contact_center_revenue_check", y, "contact_center_pricing_base/(1-margin)*availability", cc_rev_exp, r.get("contact_center_ai_revenue"), 1.0)
-        add_check("total_revenue_check", y, "workplace_ai_revenue+contact_center_ai_revenue", (as_float(r.get("workplace_ai_revenue")) or 0.0)+(as_float(r.get("contact_center_ai_revenue")) or 0.0), r.get("total_revenue"), 1.0)
-        add_check("total_cogs_check", y, "total_datacenter_opex+total_team_opex+annual_gpu_rental_cost", (as_float(r.get("total_datacenter_opex")) or 0.0)+(as_float(r.get("total_team_opex")) or 0.0)+(as_float(r.get("annual_gpu_rental_cost")) or 0.0), r.get("total_cogs"), 1.0)
-        add_check("gross_profit_check", y, "total_revenue-total_cogs", (as_float(r.get("total_revenue")) or 0.0)-(as_float(r.get("total_cogs")) or 0.0), r.get("gross_profit"), 1.0)
-        add_check("ebitda_check", y, "gross_profit-total_sga", (as_float(r.get("gross_profit")) or 0.0)-(as_float(r.get("total_sga")) or 0.0), r.get("ebitda"), 1.0)
-        add_check("ebit_check", y, "ebitda-total_depreciation_and_amortization", (as_float(r.get("ebitda")) or 0.0)-(as_float(r.get("total_depreciation_and_amortization")) or 0.0), r.get("ebit"), 1.0)
-        add_check("ebt_check", y, "ebit-interest_expense", (as_float(r.get("ebit")) or 0.0)-(as_float(r.get("interest_expense")) or 0.0), r.get("ebt"), 1.0)
-        add_check("profit_tax_check", y, "max(ebt,0)*tax_rate", max((as_float(r.get("ebt")) or 0.0), 0.0)*float(tax_rate or 0.0), r.get("profit_tax"), 1.0)
-        add_check("net_income_check", y, "ebt-profit_tax", (as_float(r.get("ebt")) or 0.0)-(as_float(r.get("profit_tax")) or 0.0), r.get("net_income"), 1.0)
-        add_check("operating_cash_flow_check", y, "net_income+total_depreciation_and_amortization", (as_float(r.get("net_income")) or 0.0)+(as_float(r.get("total_depreciation_and_amortization")) or 0.0), r.get("operating_cash_flow"), 1.0)
-        add_check("investing_cash_flow_check", y, "-gpu_infra-dc-office-intangible", -((as_float(r.get("gpu_infra_capex")) or 0.0)+(as_float(r.get("datacenter_construction_capex")) or 0.0)+(as_float(r.get("office_capex")) or 0.0)+(as_float(r.get("intangible_capex")) or 0.0)), r.get("investing_cash_flow"), 1.0)
-        add_check("pre_financing_cash_flow_check", y, "operating_cash_flow+investing_cash_flow", (as_float(r.get("operating_cash_flow")) or 0.0)+(as_float(r.get("investing_cash_flow")) or 0.0), r.get("pre_financing_cash_flow"), 1.0)
-        add_check("financing_cash_flow_check", y, "equity_injection+revolver_drawdown-revolver_repayment", (as_float(r.get("equity_injection")) or 0.0)+(as_float(r.get("revolver_drawdown")) or 0.0)-(as_float(r.get("revolver_repayment")) or 0.0), r.get("financing_cash_flow"), 1.0)
-        add_check("net_cash_flow_check", y, "pre_financing_cash_flow+financing_cash_flow", (as_float(r.get("pre_financing_cash_flow")) or 0.0)+(as_float(r.get("financing_cash_flow")) or 0.0), r.get("net_cash_flow"), 1.0)
-        add_check("funding_need_check", y, "max(-closing_cash_before_funding,0)", max(-((as_float(r.get("closing_cash_before_funding")) or 0.0)), 0.0), r.get("funding_need"), 1.0)
-        add_check("minimum_cash_balance_check", y, "(total_team_opex+total_sga+annual_gpu_rental_cost)/12*months_of_fixed_costs", ((as_float(r.get("total_team_opex")) or 0.0)+(as_float(r.get("total_sga")) or 0.0)+(as_float(r.get("annual_gpu_rental_cost")) or 0.0))/12.0*float(min_cash_months), r.get("minimum_cash_balance"), 1.0)
-        add_check("revolver_balance_check", y, "opening_revolver_balance+drawdown-repayment", (as_float(r.get("opening_revolver_balance")) or 0.0)+(as_float(r.get("revolver_drawdown")) or 0.0)-(as_float(r.get("revolver_repayment")) or 0.0), r.get("revolver_balance"), 1.0)
-        add_check("interest_expense_check", y, "average_revolver_balance*revolver_interest_rate", (as_float(r.get("average_revolver_balance")) or 0.0)*(as_float(r.get("revolver_interest_rate")) or 0.0), r.get("interest_expense"), 1.0)
-        add_check("closing_cash_after_funding_check", y, "cash_after_drawdown-revolver_repayment", (as_float(r.get("cash_after_drawdown")) or 0.0)-(as_float(r.get("revolver_repayment")) or 0.0), r.get("closing_cash_after_funding"), 1.0)
-        add_check("net_ppe_check", y, "gross_ppe-accumulated_depreciation", (as_float(r.get("gross_ppe")) or 0.0)-(as_float(r.get("accumulated_depreciation")) or 0.0), r.get("net_ppe"), 1.0)
-        add_check("net_intangible_assets_check", y, "gross_intangible_assets-accumulated_amortization", (as_float(r.get("gross_intangible_assets")) or 0.0)-(as_float(r.get("accumulated_amortization")) or 0.0), r.get("net_intangible_assets"), 1.0)
-        add_check("total_assets_check", y, "cash+net_ppe+net_intangible_assets", (as_float(r.get("cash")) or 0.0)+(as_float(r.get("net_ppe")) or 0.0)+(as_float(r.get("net_intangible_assets")) or 0.0), r.get("total_assets"), 1.0)
-        add_check("total_equity_check", y, "paid_in_capital+retained_earnings", (as_float(r.get("paid_in_capital")) or 0.0)+(as_float(r.get("retained_earnings")) or 0.0), r.get("total_equity"), 1.0)
-        add_check("balance_check", y, "0", 0.0, r.get("balance_check"), 1.0)
-        add_check("free_cash_flow_check", y, "operating_cash_flow+investing_cash_flow", (as_float(r.get("operating_cash_flow")) or 0.0)+(as_float(r.get("investing_cash_flow")) or 0.0), r.get("free_cash_flow"), 1.0)
-        dr = as_float(metric_store.get("discount_rate", {}).get(years[0])) or 0.0
-        df_exp = 1.0 / ((1.0 + dr) ** i)
-        add_check("discount_factor_check", y, "1/(1+discount_rate)^year_index", df_exp, metric_store.get("discount_factor", {}).get(y), 0.01)
-        add_check("discounted_fcf_check", y, "free_cash_flow*discount_factor", (as_float(r.get("free_cash_flow")) or 0.0) * df_exp, metric_store.get("discounted_fcf", {}).get(y), 1.0)
-
-    npv_exp = sum((as_float(metric_store.get("discounted_fcf", {}).get(y)) or 0.0) for y in years)
-    npv_act = as_float(metric_store.get("npv", {}).get(years[0]))
-    add_check("npv_check", "Total", "sum(discounted_fcf)", npv_exp, npv_act, 1.0)
-    sc = build_scenario_comparison(assumptions)
-    active = str(rows[-1].get("active_scenario"))
-    add_check("scenario_comparison_active_npv_check", "Total", "scenario row npv == base npv", as_float(sc.get(active, {}).get("npv")), npv_act, 1.0)
-    wt, cm, matrix = build_sensitivity_matrix(assumptions, rows)
-    add_check("sensitivity_base_cell_check", "Total", "sensitivity(1.00,1.00)==base npv", matrix.get((1.0, 1.0)), npv_act, 1.0)
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["Check", "Year", "Formula", "Expected", "Actual", "Difference", "Status", "Notes"])
-        writer.writeheader()
-        writer.writerows(report_rows)
-
-    print(f"Audit checks: {ok} OK, {warn} WARNING, {na} N/A")
-    if warn > 0:
-        for r in report_rows:
-            if r["Status"] == "WARNING":
-                print(f"WARNING AUDIT: {r['Check']} year={r['Year']} diff={r['Difference']}")
 
 
 def write_audit_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
