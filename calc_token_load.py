@@ -23,6 +23,10 @@ OUT_MONTHLY_VS_ANNUAL_AUDIT = OUT_DIR / "monthly_vs_annual_audit.csv"
 OUT_MONTHLY_VALIDATION = OUT_DIR / "monthly_validation_checks.csv"
 OUT_MONTHLY_BS_DEBUG = OUT_DIR / "monthly_balance_sheet_debug.csv"
 TARGET_YEARS = [2026, 2027, 2028, 2029, 2030]
+MONTHLY_FORECAST_START_YEAR = 2026
+MONTHLY_FORECAST_START_MONTH = 10
+MONTHLY_FORECAST_END_YEAR = 2030
+MONTHLY_FORECAST_END_MONTH = 12
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -56,14 +60,16 @@ def to_year_map(src: dict[Any, Any] | None) -> dict[int, Any]:
     return out
 
 
-def build_monthly_calendar(start_year: int = 2026, end_year: int = 2030) -> list[dict[str, Any]]:
+def build_monthly_calendar(start_year: int = MONTHLY_FORECAST_START_YEAR, start_month: int = MONTHLY_FORECAST_START_MONTH, end_year: int = MONTHLY_FORECAST_END_YEAR, end_month: int = MONTHLY_FORECAST_END_MONTH) -> list[dict[str, Any]]:
     import calendar
     from datetime import date
     out: list[dict[str, Any]] = []
     idx = 0
     for y in range(start_year, end_year + 1):
         diy = 366 if calendar.isleap(y) else 365
-        for m in range(1, 13):
+        m_from = start_month if y == start_year else 1
+        m_to = end_month if y == end_year else 12
+        for m in range(m_from, m_to + 1):
             dim = calendar.monthrange(y, m)[1]
             wd = sum(1 for d in range(1, dim + 1) if date(y, m, d).weekday() < 5)
             out.append({"month_key": f"{y:04d}-{m:02d}", "year": y, "month": m, "month_index": idx, "days_in_month": dim, "calendar_days_in_year": diy, "working_days": wd, "year_fraction": dim / diy})
@@ -138,7 +144,7 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
         ass.update(scenario_overrides)
     annual_rows = calculate(ass)
     by_year = {int(r["year"]): r for r in annual_rows}
-    months = build_monthly_calendar(min(by_year), max(by_year))
+    months = build_monthly_calendar(MONTHLY_FORECAST_START_YEAR, MONTHLY_FORECAST_START_MONTH, MONTHLY_FORECAST_END_YEAR, MONTHLY_FORECAST_END_MONTH)
     ma = build_monthly_assumptions(ass, months)
     funding_cfg = ass.get("funding", {}) or {}
     infra_cfg = ((ass.get("capex", {}) or {}).get("strategy_scenarios", {}) or {})
@@ -2358,17 +2364,21 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     report_base_infra = str((assumptions.get("capex", {}).get("strategy_scenarios", {}) or {}).get("active_scenario", "hybrid"))
     report_base_funding = str((assumptions.get("funding", {}) or {}).get("active_scenario", "mix"))
     report_base_mix_equity_pct = (as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) * 100.0)
+    report_base_construction_month = int(as_float((((assumptions.get("capex", {}).get("strategy_scenarios", {}).get("scenarios", {}).get("hybrid", {}) or {}).get("construction_start_month"))) or 1) or 1)
     report_scenario_results: dict[str, Any] = {}
     monthly_scenario_results: dict[str, Any] = {}
     base_construction_year = int(as_float(rows[-1].get("construction_start_year")) or 2028) if rows else 2028
     for infra in ["build_own_dc", "rent_gpu_only", "hybrid"]:
         year_variants = [2026, 2027, 2028, 2029, 2030] if infra == "hybrid" else [None]
         for csy in year_variants:
-            for fund in ["equity_only", "revolver_only", "mix"]:
+            month_variants = ([10, 11, 12] if csy == 2026 else list(range(1, 13))) if infra == "hybrid" else [None]
+            for csm in month_variants:
+              for fund in ["equity_only", "revolver_only", "mix"]:
                 ass = copy.deepcopy(assumptions)
                 ass.setdefault("capex", {}).setdefault("strategy_scenarios", {})["active_scenario"] = infra
                 if infra == "hybrid" and csy is not None:
                     ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_year"] = int(csy)
+                    ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_month"] = int(csm or 1)
                 ass.setdefault("funding", {})["active_scenario"] = fund
                 srows, smetric = run_model(ass)
                 syears = [str(int(r.get("year", 0))) for r in srows]
@@ -2396,6 +2406,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                     for t in report_tables if isinstance(t, dict) and isinstance(t.get("title"), str)
                 }
                 key = f"{infra}|{fund}|{csy}" if infra == "hybrid" and csy is not None else f"{infra}|{fund}"
+                mkey = f"{infra}|{fund}|{csy}-{int(csm or 1):02d}" if infra == "hybrid" and csy is not None else f"{infra}|{fund}"
                 report_scenario_results[key] = {
                 "infra_scenario": infra,
                 "funding_scenario": fund,
@@ -2418,9 +2429,9 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                 "profit_tax_rate": as_float((((ass.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}).get("value")) or 0.0),
                 "discount_rate": as_float(smv("discount_rate", years[0])) or 0.0,
                 }
-                mrows = calculate_monthly(ass, scenario_overrides={"infrastructure_scenario": infra, "funding_scenario": fund, "construction_start_year": csy or base_construction_year, "construction_start_month": 1})
+                mrows = calculate_monthly(ass, scenario_overrides={"infrastructure_scenario": infra, "funding_scenario": fund, "construction_start_year": csy or base_construction_year, "construction_start_month": int(csm or 1)})
                 keep = {"month_key","year","month","active_users","workplace_daily_tokens","workplace_monthly_tokens","automated_interactions_per_day","contact_center_daily_tokens","contact_center_monthly_tokens","total_monthly_tokens","required_gpu","owned_gpu","rented_gpu","owned_gpu_increment","construction_flag","gpu_capex","gpu_infra_capex","datacenter_construction_capex","office_capex","intangible_capex","total_capex","monthly_gpu_rental_cost","total_datacenter_opex","total_team_opex","total_sga","total_cogs","total_revenue","gross_profit","ebitda","total_depreciation_and_amortization","ebit","interest_expense","ebt","profit_tax","net_income","operating_cash_flow","investing_cash_flow","free_cash_flow","funding_need","equity_injection","revolver_drawdown","revolver_repayment","revolver_balance","closing_cash_after_funding","closing_cash","cash","net_ppe","net_intangible_assets","total_assets","total_liabilities","paid_in_capital","retained_earnings","total_equity","balance_check","discount_factor","discounted_fcf","cumulative_discounted_fcf","minimum_cash_balance","discount_rate_monthly"}
-                monthly_scenario_results[key] = {"rows": [{k: v for k, v in mr.items() if k in keep} for mr in mrows]}
+                monthly_scenario_results[mkey] = {"rows": [{k: v for k, v in mr.items() if k in keep} for mr in mrows]}
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
 body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
@@ -2471,7 +2482,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='meta'>Official report: YAML base case</div>
   <div class='meta'>Selected infrastructure scenario: {active_scenario}</div>
   <div class='meta'>Selected funding scenario: {assumptions.get("funding",{}).get("active_scenario","mix")}</div>
-  <div class='meta'>Data center construction start year: {base_construction_year if report_base_infra!='rent_gpu_only' else 'N/A'}</div>
+  <div class='meta'>Data center construction start: {(str(base_construction_year)+'-'+str(report_base_construction_month).zfill(2)) if report_base_infra!='rent_gpu_only' else 'N/A'}</div>
   <div class='meta'>Discount rate: {render_value(metric_store.get("discount_rate", {}).get(years[0]), "discount_rate")}</div>
   <div class='meta'>Generated timestamp: {ts}</div>
   <div class='note'>The main report shows the YAML base-case investment scenario. Investment scenario controls are prepared but full report switching is pending.</div>
@@ -2482,12 +2493,13 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     <div class='ctrl'><label>Infrastructure scenario</label><select id='report_infra_scenario'><option>build_own_dc</option><option>rent_gpu_only</option><option selected>hybrid</option></select></div>
     <div class='ctrl'><label>Funding scenario</label><select id='report_funding_scenario'><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select></div>
     <div class='ctrl'><label>Data center construction start year</label><select id='report_construction_start_year'><option>2026</option><option>2027</option><option selected>2028</option><option>2029</option><option>2030</option></select></div>
+    <div class='ctrl'><label>Data center construction start month</label><select id='report_construction_start_month'><option value='1'>1 — Jan</option><option value='2'>2 — Feb</option><option value='3'>3 — Mar</option><option value='4'>4 — Apr</option><option value='5'>5 — May</option><option value='6'>6 — Jun</option><option value='7'>7 — Jul</option><option value='8'>8 — Aug</option><option value='9'>9 — Sep</option><option value='10' selected>10 — Oct</option><option value='11'>11 — Nov</option><option value='12'>12 — Dec</option></select></div>
     <div class='ctrl'><label>Funding mix equity share (%)</label><input id='report_mix_equity_share' type='number' min='0' max='100' value='50' step='1'/></div>
     <div class='ctrl'><label>Funding mix revolver share</label><div id='report_mix_revolver_share' class='note'>50%</div></div>
   </div>
   <div style='margin-top:8px'><button id='report_apply_scenario'>Apply Investment Scenario</button> <button id='report_reset_scenario'>Reset to YAML Base Scenario</button></div>
   <div id='report_scenario_status' class='note'></div>
-  <div class='note'>Construction start year applies to the hybrid scenario. It changes CAPEX timing, owned/rented GPU split, depreciation, datacenter OPEX, funding, DCF and investment metrics.</div>
+  <div class='note'>Construction start year/month applies to the hybrid scenario. It changes monthly CAPEX timing, owned/rented GPU split, depreciation, datacenter OPEX, funding, DCF and investment metrics.</div>
   <div class='note'>These controls switch the main report investment scenario. Workbench assumptions remain separate and do not change official report tables until exported to YAML and regenerated.</div>
 </div>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
@@ -2626,9 +2638,9 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       'Balance Sheet':['cash','net_ppe','net_intangible_assets','total_assets','total_liabilities','paid_in_capital','retained_earnings','total_equity','balance_check'],
       'DCF':['free_cash_flow','discount_factor','discounted_fcf','cumulative_discounted_fcf'],
     }};
-    const getMonthlyScenarioKey=(infra,funding,csy)=> (infra==='hybrid' ? (infra+'|'+funding+'|'+csy) : (infra+'|'+funding));
+    const getMonthlyScenarioKey=(infra,funding,csy,csm)=> (infra==='hybrid' ? (infra+'|'+funding+'|'+csy+'-'+String(csm).padStart(2,'0')) : (infra+'|'+funding));
     const buildCustomMonthlyFundingRows=(baseRows,equityShare,revolverShare)=>{{ const rows=JSON.parse(JSON.stringify(baseRows||[])).sort((a,b)=>a.month_index-b.month_index); let pc=0,pr=0,pp=0,pre=0,cdf=0; rows.forEach((r,idx)=>{{ const dr=Number(r.discount_rate_monthly||0), da=Number(r.total_depreciation_and_amortization||0), ebit=Number(r.ebit||0), icf=Number(r.investing_cash_flow||0), minc=Number(r.minimum_cash_balance||0); let intr=pr*0.01; for(let i=0;i<6;i++){{ const ebt=ebit-intr, tax=Math.max(ebt,0)*0.2, ni=ebt-tax, ocf=ni+da, preCF=pc+ocf+icf, need=Math.max(-preCF,0), eq=need*equityShare, draw=need*revolverShare, cad=preCF+eq+draw, rep=Math.min(pr,Math.max(cad-minc,0)), rb=pr+draw-rep, nii=((pr+rb)/2)*0.01; if(Math.abs(nii-intr)<0.01){{intr=nii; break;}} intr=nii; }} const ebt=ebit-intr, tax=Math.max(ebt,0)*0.2, ni=ebt-tax, ocf=ni+da, preCF=pc+ocf+icf, need=Math.max(-preCF,0), eq=need*equityShare, draw=need*revolverShare, cad=preCF+eq+draw, rep=Math.min(pr,Math.max(cad-minc,0)), rb=pr+draw-rep, fin=eq+draw-rep, close=cad-rep, fcf=ocf+icf; cdf += fcf/(Math.pow(1+dr,idx)); r.opening_cash=pc; r.opening_revolver_balance=pr; r.interest_expense=intr; r.ebt=ebt; r.profit_tax=tax; r.net_income=ni; r.operating_cash_flow=ocf; r.funding_need=need; r.equity_injection=eq; r.revolver_drawdown=draw; r.revolver_repayment=rep; r.revolver_balance=rb; r.financing_cash_flow=fin; r.closing_cash_after_funding=close; r.closing_cash=close; r.cash=close; r.paid_in_capital=pp+eq; r.retained_earnings=pre+ni; r.total_equity=pp+eq+pre+ni; r.total_liabilities=rb; r.total_assets=close+(Number(r.net_ppe)||0)+(Number(r.net_intangible_assets)||0); r.balance_check=r.total_assets-(rb+r.total_equity); r.free_cash_flow=fcf; r.discounted_fcf=fcf/(Math.pow(1+dr,idx)); r.cumulative_discounted_fcf=cdf; pc=close; pr=rb; pp=r.paid_in_capital; pre=r.retained_earnings; }}); return rows; }};
-    const renderMonthlyDetail=()=>{{ const y=String((document.getElementById('monthly_detail_year')||{{}}).value||YEARS[0]); const sec=String((document.getElementById('monthly_detail_section')||{{}}).value||'Demand & Tokens'); const host=document.getElementById('monthly_detail_table'); if(!host) return; const rows=(currentMonthlyRows||[]).filter(r=>String(r.year)===y).sort((a,b)=>Number(a.month)-Number(b.month)); const metrics=MONTH_METRICS[sec]||[]; const mons=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const head='<tr><th class=\"sticky\">Metric</th>'+mons.map(m=>'<th>'+m+'</th>').join('')+'<th>FY Total / YE</th></tr>'; const body=metrics.map(m=>{{ const vals=rows.map(r=>Number(r[m])||0); const t=monthlyMetricAggregationType(m); const agg=t==='sum'?vals.reduce((a,b)=>a+b,0):t==='max'?Math.max(...vals,0):t==='avg'?(vals.reduce((a,b)=>a+b,0)/Math.max(vals.length,1)):(vals.length?vals[vals.length-1]:0); return '<tr><td class=\"sticky\">'+m+'</td>'+vals.map(v=>'<td class=\"num\">'+formatMonthlyValue(m,v)+'</td>').join('')+'<td class=\"num\">'+formatMonthlyValue(m,agg)+'</td></tr>'; }}).join(''); host.innerHTML='<table class=\"sensitivity\"><thead>'+head+'</thead><tbody>'+body+'</tbody></table>'; }};
+    const renderMonthlyDetail=()=>{{ const y=String((document.getElementById('monthly_detail_year')||{{}}).value||YEARS[0]); const sec=String((document.getElementById('monthly_detail_section')||{{}}).value||'Demand & Tokens'); const host=document.getElementById('monthly_detail_table'); if(!host) return; const rows=(currentMonthlyRows||[]).filter(r=>String(r.year)===y).sort((a,b)=>Number(a.month)-Number(b.month)); const metrics=MONTH_METRICS[sec]||[]; const mnames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const mons=rows.map(r=>mnames[Math.max(0,Number(r.month)-1)]); const head='<tr><th class=\"sticky\">Metric</th>'+mons.map(m=>'<th>'+m+'</th>').join('')+'<th>FY Total / YE</th></tr>'; const body=metrics.map(m=>{{ const vals=rows.map(r=>Number(r[m])||0); const t=monthlyMetricAggregationType(m); const agg=t==='sum'?vals.reduce((a,b)=>a+b,0):t==='max'?Math.max(...vals,0):t==='avg'?(vals.reduce((a,b)=>a+b,0)/Math.max(vals.length,1)):(vals.length?vals[vals.length-1]:0); return '<tr><td class=\"sticky\">'+m+'</td>'+vals.map(v=>'<td class=\"num\">'+formatMonthlyValue(m,v)+'</td>').join('')+'<td class=\"num\">'+formatMonthlyValue(m,agg)+'</td></tr>'; }}).join(''); host.innerHTML='<table class=\"sensitivity\"><thead>'+head+'</thead><tbody>'+body+'</tbody></table>'; }};
     if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
     const formatReportValue=(metric,v)=>{{
       if(v===null||v===undefined||Number.isNaN(Number(v))) return "<span class='na'>N/A</span>";
@@ -2662,8 +2674,9 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     const updateInvestmentScenarioControlState=()=>{{
       const infra=(document.getElementById('report_infra_scenario')||{{}}).value||'hybrid';
       const fund=(document.getElementById('report_funding_scenario')||{{}}).value||'mix';
-      const csy=document.getElementById('report_construction_start_year'); const eq=document.getElementById('report_mix_equity_share'); const rev=document.getElementById('report_mix_revolver_share');
-      if(csy) csy.disabled = infra!=='hybrid';
+      const csy=document.getElementById('report_construction_start_year'); const csm=document.getElementById('report_construction_start_month'); const eq=document.getElementById('report_mix_equity_share'); const rev=document.getElementById('report_mix_revolver_share');
+      if(csy) csy.disabled = infra!=='hybrid'; if(csm) csm.disabled = infra!=='hybrid';
+      if(csy&&csm&&String(csy.value)==='2026'){{ [...csm.options].forEach(o=>o.disabled=Number(o.value)<10); if(Number(csm.value)<10) csm.value='10'; }} else if(csm) {{ [...csm.options].forEach(o=>o.disabled=false); }}
       if(eq) eq.disabled = fund!=='mix';
       if(eq&&rev){{ const v=Math.min(100,Math.max(0,Number(eq.value)||0)); eq.value=String(v); rev.textContent=(100-v).toFixed(0)+'%'; }}
     }};
@@ -2671,6 +2684,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       const infra=(document.getElementById('report_infra_scenario')||{{}}).value||'hybrid';
       const funding=(document.getElementById('report_funding_scenario')||{{}}).value||'mix';
       const csy=(document.getElementById('report_construction_start_year')||{{value:'2028'}}).value||'2028';
+      const csm=(document.getElementById('report_construction_start_month')||{{value:'1'}}).value||'1';
       const eqEl=document.getElementById('report_mix_equity_share'); const st=document.getElementById('report_scenario_status');
       const EPS=1e-6; const key=infra+'|'+funding; let payload=REPORT_SCENARIO_RESULTS[key];
       payload = REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,funding,csy)] || payload;
@@ -2678,17 +2692,17 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       let eqShare=funding==='equity_only'?1.0:(funding==='revolver_only'?0.0:Math.min(1,Math.max(0,(Number(eqEl?.value)||0)/100)));
       let revShare=1-eqShare; if(eqEl&&funding!=='mix') eqEl.value=String(Math.round(eqShare*100)); const rv=document.getElementById('report_mix_revolver_share'); if(rv) rv.textContent=(revShare*100).toFixed(0)+'%';
       const baseMixPayload = REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'mix',csy)] || REPORT_SCENARIO_RESULTS[infra+'|mix'];
-      const mKey = getMonthlyScenarioKey(infra, funding, csy);
+      const mKey = getMonthlyScenarioKey(infra, funding, csy, csm);
       let mRows = ((MONTHLY_SCENARIO_RESULTS[mKey]||{{}}).rows)||[];
       const defaultEq=((baseMixPayload?.funding_mix?.equity_share)||0.5);
       if(funding==='mix' && Math.abs(eqShare-1.0)<EPS) payload=REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'equity_only',csy)] || REPORT_SCENARIO_RESULTS[infra+'|equity_only'];
       else if(funding==='mix' && Math.abs(eqShare-0.0)<EPS) payload=REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'revolver_only',csy)] || REPORT_SCENARIO_RESULTS[infra+'|revolver_only'];
       else if(funding==='mix' && Math.abs(eqShare-defaultEq)<EPS) payload=baseMixPayload;
       else if(funding==='mix') payload=buildCustomFundingPayload(baseMixPayload,eqShare,revShare);
-      if(funding==='mix' && Math.abs(eqShare-1.0)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'equity_only',csy)]||{{}}).rows)||mRows;
-      else if(funding==='mix' && Math.abs(eqShare)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'revolver_only',csy)]||{{}}).rows)||mRows;
-      else if(funding==='mix' && Math.abs(eqShare-defaultEq)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'mix',csy)]||{{}}).rows)||mRows;
-      else if(funding==='mix') mRows=buildCustomMonthlyFundingRows(((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'mix',csy)]||{{}}).rows)||mRows, eqShare, revShare);
+      if(funding==='mix' && Math.abs(eqShare-1.0)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'equity_only',csy,csm)]||{{}}).rows)||mRows;
+      else if(funding==='mix' && Math.abs(eqShare)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'revolver_only',csy,csm)]||{{}}).rows)||mRows;
+      else if(funding==='mix' && Math.abs(eqShare-defaultEq)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'mix',csy,csm)]||{{}}).rows)||mRows;
+      else if(funding==='mix') mRows=buildCustomMonthlyFundingRows(((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'mix',csy,csm)]||{{}}).rows)||mRows, eqShare, revShare);
       currentMonthlyRows = mRows;
       console.debug('Funding parity infra='+infra+' funding='+funding+' eq='+eqShare+' rev='+revShare+' defaultEq='+defaultEq+' key='+key);
       const hk=document.querySelector("section h2 + .grid .kpi .k");
@@ -2699,7 +2713,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       FIN_FLOW = Object.fromEntries((payload.rows||[]).map(r=>[String(r.year),{{workplace_ai_revenue:r.workplace_ai_revenue,contact_center_ai_revenue:r.contact_center_ai_revenue,total_revenue:r.total_revenue,total_cogs:r.total_cogs,gross_profit:r.gross_profit,total_sga:r.total_sga,ebitda:r.ebitda,total_depreciation_and_amortization:r.total_depreciation_and_amortization,interest_expense:r.interest_expense,profit_tax:r.profit_tax,net_income:r.net_income}}])); if(ffYear) renderFinancialFlow(ffYear.value);
       const basis=document.querySelector('.card .meta:nth-child(2)');
       const metas=document.querySelectorAll('.card .meta');
-      if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; if(metas[3]) metas[3].textContent='Data center construction start year: '+(infra==='rent_gpu_only'?'N/A':csy); }}
+      if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; if(metas[3]) metas[3].textContent='Data center construction start: '+(infra==='rent_gpu_only'?'N/A':(csy+'-'+String(csm).padStart(2,'0'))); }}
       const bad=(payload.rows||[]).find(r=>Math.abs(Number(r.balance_check)||0)>1); if(st) st.textContent=(funding==='mix'&&Math.abs(eqShare-1.0)<EPS)?('Applied '+infra+' / mix with 100% equity and 0% revolver. Matches equity_only. Monthly Detail updated.'):((funding==='mix'&&Math.abs(eqShare)<EPS)?('Applied '+infra+' / mix with 0% equity and 100% revolver. Matches revolver_only. Monthly Detail updated.'):((funding==='mix'&&Math.abs(eqShare-defaultEq)<EPS)?('Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver. Uses precomputed YAML/default mix. Monthly Detail updated.'):((funding==='mix'?'Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver. Monthly Detail updated.':'Applied '+infra+' / '+funding+'. Monthly Detail updated.'))))+(bad?' Warning: balance check differs by '+Number(bad.balance_check).toFixed(2)+' in '+bad.year+'.':'');
       renderOwnedDcDiagnostic(payload);
     }};
@@ -2753,14 +2767,14 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     recalc();
   }}
   try {{
-    const baseInfra={json.dumps(report_base_infra)}; const baseFunding={json.dumps(report_base_funding)}; const baseEq={float(report_base_mix_equity_pct)}; const baseCsy={int(base_construction_year)};
-    const infra=document.getElementById('report_infra_scenario'),fund=document.getElementById('report_funding_scenario'),csy=document.getElementById('report_construction_start_year'),eq=document.getElementById('report_mix_equity_share'),rev=document.getElementById('report_mix_revolver_share'),st=document.getElementById('report_scenario_status');
+    const baseInfra={json.dumps(report_base_infra)}; const baseFunding={json.dumps(report_base_funding)}; const baseEq={float(report_base_mix_equity_pct)}; const baseCsy={int(base_construction_year)}; const baseCsm={int(report_base_construction_month)};
+    const infra=document.getElementById('report_infra_scenario'),fund=document.getElementById('report_funding_scenario'),csy=document.getElementById('report_construction_start_year'),csm=document.getElementById('report_construction_start_month'),eq=document.getElementById('report_mix_equity_share'),rev=document.getElementById('report_mix_revolver_share'),st=document.getElementById('report_scenario_status');
     const sync=()=>{{ if(!fund||!eq||!rev) return; if(fund.value==='equity_only') eq.value='100'; else if(fund.value==='revolver_only') eq.value='0'; eq.disabled=fund.value!=='mix'; const v=Math.min(100,Math.max(0,Number(eq.value)||0)); eq.value=String(v); rev.textContent=(100-v).toFixed(0)+'%'; }};
-    if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState();
-    if(fund) fund.addEventListener('change',()=>{{sync(); updateInvestmentScenarioControlState();}}); if(eq) eq.addEventListener('input',()=>{{sync(); updateInvestmentScenarioControlState();}}); if(infra) infra.addEventListener('change',updateInvestmentScenarioControlState);
+    if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(csm) csm.value=String(baseCsm); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState();
+    if(fund) fund.addEventListener('change',()=>{{sync(); updateInvestmentScenarioControlState();}}); if(eq) eq.addEventListener('input',()=>{{sync(); updateInvestmentScenarioControlState();}}); if(infra) infra.addEventListener('change',updateInvestmentScenarioControlState); if(csy) csy.addEventListener('change',updateInvestmentScenarioControlState);
     const apply=document.getElementById('report_apply_scenario'), reset=document.getElementById('report_reset_scenario');
     if(apply) apply.addEventListener('click',()=>{{ sync(); applyReportScenario(); }});
-    if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState(); applyReportScenario(); if(st) st.textContent='Reset to YAML base investment scenario.'; }});
+    if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(csm) csm.value=String(baseCsm); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState(); applyReportScenario(); if(st) st.textContent='Reset to YAML base investment scenario. Monthly Detail updated.'; }});
     applyReportScenario();
     const mdy=document.getElementById('monthly_detail_year'); const mds=document.getElementById('monthly_detail_section'); if(mdy) mdy.addEventListener('change',renderMonthlyDetail); if(mds) mds.addEventListener('change',renderMonthlyDetail); renderMonthlyDetail();
   }} catch(_e) {{}}
