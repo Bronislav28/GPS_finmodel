@@ -15,6 +15,8 @@ OUT_DIR = Path("output")
 OUT_HTML = OUT_DIR / "gps_finmodel.html"
 OUT_CSV = OUT_DIR / "gps_finmodel_results.csv"
 OUT_AUDIT = OUT_DIR / "gps_finmodel_audit.csv"
+OUT_MONTHLY_PREVIEW = OUT_DIR / "monthly_assumptions_preview.csv"
+ENABLE_MONTHLY_PREVIEW = False
 TARGET_YEARS = [2026, 2027, 2028, 2029, 2030]
 
 
@@ -47,6 +49,82 @@ def to_year_map(src: dict[Any, Any] | None) -> dict[int, Any]:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def build_monthly_calendar(start_year: int = 2026, end_year: int = 2030) -> list[dict[str, Any]]:
+    import calendar
+    from datetime import date
+    out: list[dict[str, Any]] = []
+    idx = 0
+    for y in range(start_year, end_year + 1):
+        diy = 366 if calendar.isleap(y) else 365
+        for m in range(1, 13):
+            dim = calendar.monthrange(y, m)[1]
+            wd = sum(1 for d in range(1, dim + 1) if date(y, m, d).weekday() < 5)
+            out.append({"month_key": f"{y:04d}-{m:02d}", "year": y, "month": m, "month_index": idx, "days_in_month": dim, "calendar_days_in_year": diy, "working_days": wd, "year_fraction": dim / diy})
+            idx += 1
+    return out
+
+
+def expand_annual_to_monthly(annual_map: dict[int, float], months: list[dict[str, Any]], method: str = "step") -> dict[str, float]:
+    ym = {int(k): float(v) for k, v in (annual_map or {}).items()}
+    out: dict[str, float] = {}
+    for mo in months:
+        y = int(mo["year"]); m = int(mo["month"]); mk = str(mo["month_key"])
+        cur = ym.get(y, 0.0); nxt = ym.get(y + 1, cur)
+        if method == "step":
+            out[mk] = cur
+        elif method == "linear":
+            out[mk] = cur + (nxt - cur) * ((m - 1) / 12.0)
+        elif method == "annual_to_monthly_amount":
+            out[mk] = cur / 12.0
+        elif method == "index":
+            out[mk] = (1.0 + cur) ** (1.0 / 12.0) - 1.0
+        else:
+            out[mk] = cur
+    return out
+
+
+def build_monthly_assumptions(assumptions: dict[str, Any], months: list[dict[str, Any]]) -> dict[str, Any]:
+    years = sorted({int(m["year"]) for m in months})
+    usage = assumptions.get("usage_assumptions", {}) or {}
+    token = assumptions.get("token_load_model", {}) or {}
+    revenue = assumptions.get("revenue", {}) or {}
+    compute = assumptions.get("compute_model", {}) or {}
+    capex = assumptions.get("capex", {}) or {}
+    opex = assumptions.get("opex", {}) or {}
+    inflation = ((assumptions.get("inflation", {}) or {}).get("index") or {})
+    mm = (compute.get("model_mix", {}) or {})
+    util = ((compute.get("infra", {}) or {}).get("utilization") or {})
+    ymap = lambda v: {y: float(as_float(year_value(v, y, 0.0)) or 0.0) for y in years}
+    return {
+        "workplace_activation_rate": expand_annual_to_monthly(ymap((usage.get("Workplace.ai", {}) or {}).get("activation_rate")), months, "step"),
+        "workplace_tokens_per_active_user_per_day": expand_annual_to_monthly(ymap((token.get("Workplace.ai", {}) or {}).get("tokens_per_active_user_per_day")), months, "step"),
+        "contact_center_automation_rate": expand_annual_to_monthly(ymap((usage.get("Contact_Center.ai", {}) or {}).get("automation_rate")), months, "step"),
+        "contact_center_tokens_per_interaction": expand_annual_to_monthly(ymap((((token.get("Contact_Center.ai", {}) or {}).get("tokens_per_interaction", {}) or {}).get("value"))), months, "step"),
+        "target_contribution_margin": expand_annual_to_monthly(ymap((((revenue.get("target_contribution_margin", {}) or {}).get("base")))), months, "step"),
+        "utilization": expand_annual_to_monthly(ymap(util), months, "step"),
+        "gpu_unit_cost": expand_annual_to_monthly(ymap((capex.get("gpu", {}) or {}).get("unit_cost")), months, "step"),
+        "gpu_rental_price_per_gpu_per_year": expand_annual_to_monthly(ymap(((opex.get("gpu_rental", {}) or {}).get("rental_price_per_gpu_per_year"))), months, "annual_to_monthly_amount"),
+        "inflation_index": expand_annual_to_monthly(ymap(inflation), months, "step"),
+        "model_mix_frontier": expand_annual_to_monthly({y: float(as_float((mm.get(str(y), {}) or {}).get("frontier")) or 0.0) for y in years}, months, "step"),
+        "model_mix_large": expand_annual_to_monthly({y: float(as_float((mm.get(str(y), {}) or {}).get("large")) or 0.0) for y in years}, months, "step"),
+        "model_mix_medium": expand_annual_to_monthly({y: float(as_float((mm.get(str(y), {}) or {}).get("medium")) or 0.0) for y in years}, months, "step"),
+        "model_mix_small": expand_annual_to_monthly({y: float(as_float((mm.get(str(y), {}) or {}).get("small")) or 0.0) for y in years}, months, "step"),
+    }
+
+
+def write_monthly_preview(assumptions: dict[str, Any], output: Path) -> None:
+    months = build_monthly_calendar()
+    ma = build_monthly_assumptions(assumptions, months)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    cols = sorted(ma.keys())
+    with output.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["month_key", "year", "month"] + cols)
+        for m in months:
+            mk = m["month_key"]
+            w.writerow([mk, m["year"], m["month"]] + [ma[c].get(mk) for c in cols])
 
 
 def as_float(value: Any) -> float | None:
@@ -2873,6 +2951,8 @@ def main() -> None:
     write_csv(rows, assumptions, OUT_CSV)
     write_html(rows, assumptions, OUT_HTML)
     write_audit_csv(rows, assumptions, OUT_AUDIT)
+    if ENABLE_MONTHLY_PREVIEW:
+        write_monthly_preview(assumptions, OUT_MONTHLY_PREVIEW)
 
     print("year | total_annual_tokens | required_gpu | total_capex | total_opex")
     print("-" * 90)
@@ -2884,6 +2964,8 @@ def main() -> None:
     print(f"\nCSV: {OUT_CSV}")
     print(f"HTML: {OUT_HTML}")
     print(f"AUDIT: {OUT_AUDIT}")
+    if ENABLE_MONTHLY_PREVIEW:
+        print(f"MONTHLY PREVIEW: {OUT_MONTHLY_PREVIEW}")
 
 
 if __name__ == "__main__":
