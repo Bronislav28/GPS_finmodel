@@ -1797,6 +1797,10 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         blocks = "".join(tables_by_title.get(n, "") for n in names if n in tables_by_title)
         if blocks:
             sections_html.append(f"<section><h2>{sec}</h2>{blocks}</section>")
+    owned_dc_diag_html = """
+<div class='card' id='owned_dc_diag'><h3>Owned DC Economics Diagnostic</h3><div id='owned_dc_diag_current'></div><div class='table-wrap'><table id='owned_dc_diag_cmp'><thead><tr><th>Scenario</th><th>NPV</th><th>Required Investments</th><th>Total CAPEX</th><th>DC Construction CAPEX</th><th>GPU Infra CAPEX</th><th>GPU Rental OPEX</th><th>Datacenter OPEX</th><th>Total D&A</th><th>2030 EBITDA</th><th>2030 FCF</th><th>Discounted payback</th></tr></thead><tbody></tbody></table></div><div id='owned_dc_diag_note' class='note'></div></div>
+"""
+    sections_html = [s.replace("</section>", owned_dc_diag_html + "</section>") if "<h2>Investment Case</h2>" in s else s for s in sections_html]
 
     latest = rows[-1]
     kpis = [
@@ -2356,6 +2360,25 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       const metas=document.querySelectorAll('.card .meta');
       if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; if(metas[3]) metas[3].textContent='Data center construction start year: '+(infra==='rent_gpu_only'?'N/A':csy); }}
       const bad=(payload.rows||[]).find(r=>Math.abs(Number(r.balance_check)||0)>1); if(st) st.textContent=(funding==='mix'&&Math.abs(eqShare-1.0)<EPS)?('Applied '+infra+' / mix with 100% equity and 0% revolver. Matches equity_only.'):((funding==='mix'&&Math.abs(eqShare)<EPS)?('Applied '+infra+' / mix with 0% equity and 100% revolver. Matches revolver_only.'):((funding==='mix'&&Math.abs(eqShare-defaultEq)<EPS)?('Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver. Uses precomputed YAML/default mix.'):((funding==='mix'?'Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver.':'Applied '+infra+' / '+funding+'.'))))+(bad?' Warning: balance check differs by '+Number(bad.balance_check).toFixed(2)+' in '+bad.year+'.':'');
+      renderOwnedDcDiagnostic(payload);
+    }};
+    const summarizeOwned=(p)=>{{
+      const rows=p?.rows||[]; const y2030=rows.find(r=>String(r.year)==='2030')||{{}};
+      const sum=(k)=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
+      return {{npv:Number(p?.executive_summary?.npv||0), reqInv:Number(p?.executive_summary?.required_investments||0), capex:sum('total_capex'), dcCapex:sum('datacenter_construction_capex'), gpuCapex:sum('gpu_infra_capex'), rentOpex:sum('gpu_rental_opex'), dcOpex:sum('total_datacenter_opex'), da:sum('total_depreciation_and_amortization'), ebitda2030:Number(y2030.ebitda||0), fcf2030:Number(y2030.free_cash_flow||0), discountedPayback:p?.custom_metrics?.discounted_payback||p?.tables?.['Investment Metrics']?.discounted_payback?.[YEARS[0]]||'N/A'}};
+    }};
+    const renderOwnedDcDiagnostic=(currentPayload)=>{{
+      const cur=document.getElementById('owned_dc_diag_current'); const body=document.querySelector('#owned_dc_diag_cmp tbody'); const note=document.getElementById('owned_dc_diag_note');
+      if(!cur||!body) return;
+      const scenarios=[['rent_gpu_only','rent_gpu_only|mix'],['build_own_dc','build_own_dc|mix'],['hybrid 2026','hybrid|mix|2026'],['hybrid 2027','hybrid|mix|2027'],['hybrid 2028','hybrid|mix|2028'],['hybrid 2029','hybrid|mix|2029'],['hybrid 2030','hybrid|mix|2030']];
+      const rows=scenarios.map(([n,k])=>{{ const p=REPORT_SCENARIO_RESULTS[k]; const s=summarizeOwned(p); return [n,s]; }}).filter(x=>x[1]);
+      const fmt=(v)=>Number(v||0).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}});
+      const c=summarizeOwned(currentPayload);
+      cur.innerHTML=`<div class='grid'><div class='kpi'><div class='k'>NPV</div><div class='v'>${{fmt(c.npv)}}</div></div><div class='kpi'><div class='k'>Required Investments</div><div class='v'>${{fmt(c.reqInv)}}</div></div><div class='kpi'><div class='k'>Total CAPEX</div><div class='v'>${{fmt(c.capex)}}</div></div><div class='kpi'><div class='k'>Datacenter construction CAPEX</div><div class='v'>${{fmt(c.dcCapex)}}</div></div><div class='kpi'><div class='k'>GPU infra CAPEX</div><div class='v'>${{fmt(c.gpuCapex)}}</div></div><div class='kpi'><div class='k'>GPU rental OPEX</div><div class='v'>${{fmt(c.rentOpex)}}</div></div><div class='kpi'><div class='k'>Datacenter OPEX</div><div class='v'>${{fmt(c.dcOpex)}}</div></div><div class='kpi'><div class='k'>D&A</div><div class='v'>${{fmt(c.da)}}</div></div><div class='kpi'><div class='k'>Free Cash Flow (2030)</div><div class='v'>${{fmt(c.fcf2030)}}</div></div></div>`;
+      body.innerHTML=rows.map(([n,s])=>`<tr><td>${{n}}</td><td>${{fmt(s.npv)}}</td><td>${{fmt(s.reqInv)}}</td><td>${{fmt(s.capex)}}</td><td>${{fmt(s.dcCapex)}}</td><td>${{fmt(s.gpuCapex)}}</td><td>${{fmt(s.rentOpex)}}</td><td>${{fmt(s.dcOpex)}}</td><td>${{fmt(s.da)}}</td><td>${{fmt(s.ebitda2030)}}</td><td>${{fmt(s.fcf2030)}}</td><td>${{s.discountedPayback}}</td></tr>`).join('');
+      const rent=rows.find(r=>r[0]==='rent_gpu_only')?.[1]; const own=rows.find(r=>r[0]==='build_own_dc')?.[1];
+      if(note&&rent&&own&&own.npv<rent.npv) note.textContent='Top NPV drag vs rent_gpu_only: (1) higher CAPEX burden, (2) D&A/timing impact on cash generation, (3) datacenter OPEX and financing burden. No terminal/residual value is currently included. Owned DC scenarios may be understated on a 2026–2030 horizon.';
+      else if(note) note.textContent='Owned DC economics summary for selected scenario.';
     }};
   const recalc = () => {{
     if(!input) return;
