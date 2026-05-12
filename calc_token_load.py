@@ -202,6 +202,7 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
     rev_share = 1.0 - eq_share
     discount_annual = as_float((((ass.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}).get(min(by_year))) or 0.2) or 0.2
     discount_monthly = (1.0 + discount_annual) ** (1.0 / 12.0) - 1.0
+    tax_rate_assumption = as_float((((ass.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}).get("value")) or 0.0) or 0.0
     out: list[dict[str, Any]] = []
     prev_cash = 0.0; prev_rev = 0.0; prev_pic = 0.0; prev_re = 0.0; cum_dcf = 0.0; cum_fcf = 0.0
     prev_gppe = 0.0; prev_accdep = 0.0; prev_gia = 0.0; prev_accam = 0.0; prev_owned = 0.0
@@ -305,7 +306,7 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
             "ebit": ebit,
             "opening_cash": prev_cash, "opening_revolver_balance": prev_rev, "opening_paid_in_capital": prev_pic, "opening_retained_earnings": prev_re,
             "interest_expense": interest, "ebt": ebt, "profit_tax": taxm, "net_income": ni,
-            "minimum_cash_balance": min_cash, "revolver_interest_rate": annual_interest_rate, "profit_tax_rate": (as_float(r.get("profit_tax_rate")) or 0.0), "discount_rate": discount_annual,
+            "minimum_cash_balance": min_cash, "revolver_interest_rate": annual_interest_rate, "profit_tax_rate": tax_rate_assumption, "discount_rate": discount_annual,
             "infrastructure_scenario": infra, "construction_start_year": csy, "construction_start_month": csm, "construction_flag": 1 if mk >= ckey else 0,
             "gpu_capex": gpu_capex_m, "gpu_infra_capex": gpu_infra_m, "datacenter_construction_capex": dc_const_m, "office_capex": office_capex_m, "intangible_capex": int_capex, "monthly_tangible_capex": tang_capex, "monthly_intangible_capex": int_capex, "total_capex": capex_month,
             "monthly_ppe_depreciation": ppe_dep, "monthly_ip_amortization": ip_am,
@@ -2409,6 +2410,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     report_base_funding = str((assumptions.get("funding", {}) or {}).get("active_scenario", "mix"))
     report_base_mix_equity_pct = (as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) * 100.0)
     report_base_construction_month = int(as_float((((assumptions.get("capex", {}).get("strategy_scenarios", {}).get("scenarios", {}).get("hybrid", {}) or {}).get("construction_start_month"))) or 1) or 1)
+    config_profit_tax_rate = float(as_float((((assumptions.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}).get("value")) or 0.0) or 0.0)
     operating_scenario_results: dict[str, Any] = {}
     base_construction_year = int(as_float(rows[-1].get("construction_start_year")) or 2028) if rows else 2028
     operating_variants: list[tuple[str, str, int | None, int | None]] = [
@@ -2440,6 +2442,9 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
             missing.append("discount_rate")
         if missing:
             raise ValueError(f"OPERATING_SCENARIO_RESULTS missing required finance fields for {k}: {', '.join(missing)}")
+        row_tax = as_float(first.get("profit_tax_rate"))
+        if config_profit_tax_rate > 0 and (row_tax is None or abs(row_tax) < 1e-12):
+            raise ValueError(f"OPERATING_SCENARIO_RESULTS invalid profit_tax_rate for {k}: row={row_tax}, config={config_profit_tax_rate}")
     operating_scenario_json = json.dumps(operating_scenario_results, separators=(",", ":"))
     funding_cfg = assumptions.get("funding", {}) or {}
     scenarios_cfg = funding_cfg.get("scenarios", {}) or {}
@@ -2670,7 +2675,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     const getAnnualDiscountRate=(row)=> firstNum(row?.discount_rate_annual,row?.discount_rate,window.REPORT_SCENARIO_CONFIG?.discount_rate);
     const getMonthlyDiscountRate=(row)=>{{ const dm=firstNum(row?.discount_rate_monthly); if(dm!==null) return dm; const da=getAnnualDiscountRate(row); return da===null?null:(Math.pow(1+da,1/12)-1); }};
     const getAnnualRevolverRate=(row)=> firstNum(row?.revolver_interest_rate,window.REPORT_SCENARIO_CONFIG?.revolver_interest_rate);
-    const getProfitTaxRate=(row)=> firstNum(row?.profit_tax_rate,window.REPORT_SCENARIO_CONFIG?.profit_tax_rate);
+    const getProfitTaxRate=(row)=>{{ const rowRate=firstNum(row?.profit_tax_rate); const cfgRate=firstNum(window.REPORT_SCENARIO_CONFIG?.profit_tax_rate); if(rowRate===0 && cfgRate!==null && cfgRate>0) return cfgRate; return firstNum(rowRate,cfgRate); }};
     const buildCurrentMonthlyRowsFromControls=()=>{{ const infra=document.getElementById('report_infra_scenario')?.value; const funding=document.getElementById('report_funding_scenario')?.value; const constructionYear=Number(document.getElementById('report_construction_start_year')?.value); const constructionMonth=Number(document.getElementById('report_construction_start_month')?.value); const equitySharePct=Number(document.getElementById('report_mix_equity_share')?.value); const operatingKey=getOperatingScenarioKey(infra,constructionYear,constructionMonth); const operatingPayload=window.OPERATING_SCENARIO_RESULTS?.[operatingKey]; if(!operatingPayload||!Array.isArray(operatingPayload.rows)) throw new Error(`Missing OPERATING_SCENARIO_RESULTS payload for ${{operatingKey}}`); const fundedRows=buildFundedMonthlyRows(operatingPayload.rows,funding,equitySharePct,operatingKey); return {{operatingKey,funding,equitySharePct,rows:fundedRows}}; }};
     const updateMonthlyDetailFromControls=()=>{{ const st=document.getElementById('monthly_detail_status'); const m=buildCurrentMonthlyRowsFromControls(); currentMonthlyRows=m.rows; const s=getFundingShares(m.funding,m.equitySharePct); const maxAbs=Math.max(0,...(currentMonthlyRows||[]).map(r=>Math.abs(Number(r.balance_check||0)))); if(st) st.textContent=`Monthly Detail: ${{m.operatingKey}}, ${{m.funding}}, ${{(s.equityShare*100).toFixed(0)}}% equity / ${{(s.revolverShare*100).toFixed(0)}}% revolver. Balance check: ${{maxAbs>1?'WARNING':'OK'}} (max abs ${{maxAbs.toFixed(4)}}).`; renderMonthlyDetail(); return {{...m,maxAbsBalanceCheck:maxAbs}}; }};
     const buildScenarioFromOperatingPayload=()=>{{ const monthlyState=buildCurrentMonthlyRowsFromControls(); const annualRows=aggregateMonthlyRowsToAnnual(monthlyState.rows); const summary=buildAnnualInvestmentSummaryFromMonthly(monthlyState.rows,annualRows); return {{operatingKey:monthlyState.operatingKey,funding:monthlyState.funding,equitySharePct:monthlyState.equitySharePct,rowsMonthly:monthlyState.rows,rowsAnnual:annualRows,summary}}; }};
