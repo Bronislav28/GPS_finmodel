@@ -21,6 +21,7 @@ ENABLE_MONTHLY_DEBUG_OUTPUT = True
 OUT_MONTHLY_ROWS_PREVIEW = OUT_DIR / "monthly_rows_preview.csv"
 OUT_MONTHLY_VS_ANNUAL_AUDIT = OUT_DIR / "monthly_vs_annual_audit.csv"
 OUT_MONTHLY_VALIDATION = OUT_DIR / "monthly_validation_checks.csv"
+OUT_MONTHLY_BS_DEBUG = OUT_DIR / "monthly_balance_sheet_debug.csv"
 TARGET_YEARS = [2026, 2027, 2028, 2029, 2030]
 
 
@@ -158,7 +159,9 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
         total = wp_month + cc_month
         annual_interest_rate = as_float(r.get("revolver_interest_rate")) or 0.0
         monthly_interest_rate = annual_interest_rate / 12.0  # keep simple split for Step 3 consistency
-        da = (as_float(r.get("total_depreciation_and_amortization")) or 0.0) / 12.0
+        ppe_dep = ((as_float(r.get("gpu_depreciation")) or as_float(r.get("gpu_infra_depreciation")) or 0.0) + (as_float(r.get("datacenter_depreciation")) or 0.0) + (as_float(r.get("office_depreciation")) or as_float(r.get("office_capex_depreciation")) or 0.0)) / 12.0
+        ip_am = ((as_float(r.get("ip_amortization")) or 0.0) if as_float(r.get("ip_amortization")) is not None else ((as_float(r.get("workplace_ai_amortization")) or 0.0) + (as_float(r.get("contact_center_ai_amortization")) or 0.0))) / 12.0
+        da = ppe_dep + ip_am
         ebit = (as_float(r.get("ebit")) or 0.0) / 12.0
         tang_capex = ((as_float(r.get("gpu_infra_capex")) or 0.0) + (as_float(r.get("datacenter_construction_capex")) or 0.0) + (as_float(r.get("office_capex")) or 0.0)) / 12.0
         int_capex = (as_float(r.get("intangible_capex")) or 0.0) / 12.0
@@ -198,8 +201,6 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
         dcf = fcf / ((1.0 + discount_monthly) ** int(mo["month_index"]))
         cum_dcf += dcf; cum_fcf += fcf
         close_cash = cash_after - repay
-        ppe_dep = ((as_float(r.get("gpu_infra_depreciation")) or 0.0) + (as_float(r.get("datacenter_depreciation")) or 0.0) + (as_float(r.get("office_depreciation")) or 0.0)) / 12.0
-        ip_am = ((as_float(r.get("workplace_ai_amortization")) or 0.0) + (as_float(r.get("contact_center_ai_amortization")) or 0.0)) / 12.0
         gppe = prev_gppe + tang_capex
         accdep = prev_accdep + ppe_dep
         net_ppe = gppe - accdep
@@ -230,6 +231,7 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
             "opening_cash": prev_cash, "opening_revolver_balance": prev_rev, "opening_paid_in_capital": prev_pic, "opening_retained_earnings": prev_re,
             "interest_expense": interest, "ebt": ebt, "profit_tax": taxm, "net_income": ni,
             "gpu_capex": (as_float(r.get("gpu_capex")) or 0.0) / 12.0, "gpu_infra_capex": (as_float(r.get("gpu_infra_capex")) or 0.0) / 12.0, "datacenter_construction_capex": (as_float(r.get("datacenter_construction_capex")) or 0.0) / 12.0, "office_capex": (as_float(r.get("office_capex")) or 0.0) / 12.0, "intangible_capex": int_capex, "monthly_tangible_capex": tang_capex, "monthly_intangible_capex": int_capex, "total_capex": capex_month,
+            "monthly_ppe_depreciation": ppe_dep, "monthly_ip_amortization": ip_am,
             "operating_cash_flow": ocf, "investing_cash_flow": icf, "closing_cash_before_funding": pre, "funding_need": need, "equity_injection": eq, "revolver_drawdown": draw, "cash_after_drawdown": cash_after, "revolver_repayment": repay, "revolver_balance": rev_bal, "average_revolver_balance": avg_rev, "financing_cash_flow": eq + draw - repay, "net_cash_flow": ocf + icf + (eq + draw - repay), "closing_cash_after_funding": close_cash, "closing_cash": close_cash, "cumulative_cash": close_cash, "cash": close_cash, "free_cash_flow": fcf,
             "paid_in_capital": prev_pic + eq, "retained_earnings": prev_re + ni, "total_equity": (prev_pic + eq) + (prev_re + ni), "total_liabilities": rev_bal,
             "gross_ppe": gppe, "accumulated_depreciation": accdep, "net_ppe": net_ppe, "gross_intangible_assets": gia, "accumulated_amortization": accam, "net_intangible_assets": net_int, "total_assets": close_cash + net_ppe + net_int,
@@ -309,6 +311,15 @@ def write_monthly_validation_checks(monthly_rows: list[dict[str, Any]], output: 
             cdf = as_float(r.get("cumulative_discounted_fcf")) or 0.0; d = as_float(r.get("discounted_fcf")) or 0.0
             w.writerow([mk, "dcf_rollforward", prev_cdf + d, cdf, cdf - (prev_cdf + d), "OK" if abs(cdf - (prev_cdf + d)) <= 1e-6 else "WARNING"])
             prev_cdf = cdf
+
+
+def write_monthly_balance_sheet_debug(monthly_rows: list[dict[str, Any]], output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    cols = ["month_key","cash","net_ppe","net_intangible_assets","total_assets","revolver_balance","paid_in_capital","retained_earnings","total_equity","monthly_tangible_capex","monthly_intangible_capex","monthly_ppe_depreciation","monthly_ip_amortization","equity_injection","net_income","balance_check"]
+    with output.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=cols); w.writeheader()
+        for r in monthly_rows:
+            w.writerow({c: r.get(c) for c in cols})
 
 
 def as_float(value: Any) -> float | None:
@@ -3140,6 +3151,7 @@ def main() -> None:
         write_monthly_rows_preview(months_rows, OUT_MONTHLY_ROWS_PREVIEW)
         write_monthly_vs_annual_audit(rows, aggregate_monthly_to_annual(months_rows), OUT_MONTHLY_VS_ANNUAL_AUDIT)
         write_monthly_validation_checks(months_rows, OUT_MONTHLY_VALIDATION)
+        write_monthly_balance_sheet_debug(months_rows, OUT_MONTHLY_BS_DEBUG)
     if ENABLE_MONTHLY_PREVIEW:
         write_monthly_preview(assumptions, OUT_MONTHLY_PREVIEW)
 
@@ -3159,6 +3171,7 @@ def main() -> None:
         print(f"MONTHLY ROWS: {OUT_MONTHLY_ROWS_PREVIEW}")
         print(f"MONTHLY VS ANNUAL AUDIT: {OUT_MONTHLY_VS_ANNUAL_AUDIT}")
         print(f"MONTHLY VALIDATION: {OUT_MONTHLY_VALIDATION}")
+        print(f"MONTHLY BS DEBUG: {OUT_MONTHLY_BS_DEBUG}")
 
 
 if __name__ == "__main__":
