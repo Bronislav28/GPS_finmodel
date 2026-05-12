@@ -17,6 +17,9 @@ OUT_CSV = OUT_DIR / "gps_finmodel_results.csv"
 OUT_AUDIT = OUT_DIR / "gps_finmodel_audit.csv"
 OUT_MONTHLY_PREVIEW = OUT_DIR / "monthly_assumptions_preview.csv"
 ENABLE_MONTHLY_PREVIEW = False
+ENABLE_MONTHLY_DEBUG_OUTPUT = True
+OUT_MONTHLY_ROWS_PREVIEW = OUT_DIR / "monthly_rows_preview.csv"
+OUT_MONTHLY_VS_ANNUAL_AUDIT = OUT_DIR / "monthly_vs_annual_audit.csv"
 TARGET_YEARS = [2026, 2027, 2028, 2029, 2030]
 
 
@@ -101,7 +104,7 @@ def build_monthly_assumptions(assumptions: dict[str, Any], months: list[dict[str
         "workplace_activation_rate": expand_annual_to_monthly(ymap((usage.get("Workplace.ai", {}) or {}).get("activation_rate")), months, "step"),
         "workplace_tokens_per_active_user_per_day": expand_annual_to_monthly(ymap((token.get("Workplace.ai", {}) or {}).get("tokens_per_active_user_per_day")), months, "step"),
         "contact_center_automation_rate": expand_annual_to_monthly(ymap((usage.get("Contact_Center.ai", {}) or {}).get("automation_rate")), months, "step"),
-        "contact_center_tokens_per_interaction": expand_annual_to_monthly(ymap((((token.get("Contact_Center.ai", {}) or {}).get("tokens_per_interaction", {}) or {}).get("value"))), months, "step"),
+        "contact_center_tokens_per_interaction": expand_annual_to_monthly(ymap(((token.get("Contact_Center.ai", {}) or {}).get("tokens_per_interaction"))), months, "step"),
         "target_contribution_margin": expand_annual_to_monthly(ymap((((revenue.get("target_contribution_margin", {}) or {}).get("base")))), months, "step"),
         "utilization": expand_annual_to_monthly(ymap(util), months, "step"),
         "gpu_unit_cost": expand_annual_to_monthly(ymap((capex.get("gpu", {}) or {}).get("unit_cost")), months, "step"),
@@ -125,6 +128,85 @@ def write_monthly_preview(assumptions: dict[str, Any], output: Path) -> None:
         for m in months:
             mk = m["month_key"]
             w.writerow([mk, m["year"], m["month"]] + [ma[c].get(mk) for c in cols])
+
+
+def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    ass = copy.deepcopy(assumptions)
+    if scenario_overrides:
+        ass.update(scenario_overrides)
+    annual_rows = calculate(ass)
+    by_year = {int(r["year"]): r for r in annual_rows}
+    months = build_monthly_calendar(min(by_year), max(by_year))
+    ma = build_monthly_assumptions(ass, months)
+    out: list[dict[str, Any]] = []
+    for mo in months:
+        y = int(mo["year"]); mk = mo["month_key"]; r = by_year[y]
+        wp_daily = (as_float(r.get("workplace_annual_tokens")) or 0.0) / max((as_float(r.get("working_days_per_year")) or 250), 1)
+        cc_daily = (as_float(r.get("contact_center_annual_tokens")) or 0.0) / max((as_float(r.get("calendar_days_per_year")) or 365), 1)
+        wp_month = wp_daily * float(mo["working_days"]); cc_month = cc_daily * float(mo["days_in_month"]); total = wp_month + cc_month
+        monthly = {
+            **mo,
+            "active_users": (as_float(r.get("workplace_active_users")) or 0.0) / 12.0,
+            "workplace_daily_tokens": wp_daily, "workplace_monthly_tokens": wp_month,
+            "automated_interactions_per_day": (as_float(r.get("automated_interactions_per_day")) or 0.0),
+            "contact_center_daily_tokens": cc_daily, "contact_center_monthly_tokens": cc_month, "total_monthly_tokens": total,
+            "weighted_throughput": as_float(r.get("weighted_throughput")) or 0.0,
+            "tokens_per_second": total / max(float(mo["working_days"]) * 8 * 3600, 1),
+            "required_gpu": (as_float(r.get("required_gpu")) or 0.0),
+            "workplace_ai_revenue": (as_float(r.get("workplace_ai_revenue")) or 0.0) / 12.0,
+            "contact_center_ai_revenue": (as_float(r.get("contact_center_ai_revenue")) or 0.0) / 12.0,
+            "total_revenue": (as_float(r.get("total_revenue")) or 0.0) / 12.0,
+            "total_team_opex": (as_float(r.get("total_team_opex")) or 0.0) / 12.0,
+            "total_sga": (as_float(r.get("total_sga")) or 0.0) / 12.0,
+            "monthly_gpu_rental_cost": (as_float(r.get("gpu_rental_opex")) or 0.0) / 12.0,
+            "total_datacenter_opex": (as_float(r.get("total_datacenter_opex")) or 0.0) / 12.0,
+            "total_cogs": (as_float(r.get("total_cogs")) or 0.0) / 12.0,
+            "gross_profit": (as_float(r.get("gross_profit")) or 0.0) / 12.0,
+            "ebitda": (as_float(r.get("ebitda")) or 0.0) / 12.0,
+            "total_depreciation_and_amortization": (as_float(r.get("total_depreciation_and_amortization")) or 0.0) / 12.0,
+            "ebit": (as_float(r.get("ebit")) or 0.0) / 12.0,
+            "interest_expense": (as_float(r.get("interest_expense")) or 0.0) / 12.0,  # TODO monthly funding model
+            "ebt": (as_float(r.get("ebt")) or 0.0) / 12.0, "profit_tax": (as_float(r.get("profit_tax")) or 0.0) / 12.0, "net_income": (as_float(r.get("net_income")) or 0.0) / 12.0,
+            "gpu_capex": (as_float(r.get("gpu_capex")) or 0.0) / 12.0, "gpu_infra_capex": (as_float(r.get("gpu_infra_capex")) or 0.0) / 12.0, "datacenter_construction_capex": (as_float(r.get("datacenter_construction_capex")) or 0.0) / 12.0, "office_capex": (as_float(r.get("office_capex")) or 0.0) / 12.0, "intangible_capex": (as_float(r.get("intangible_capex")) or 0.0) / 12.0, "total_capex": (as_float(r.get("total_capex")) or 0.0) / 12.0,
+            "operating_cash_flow": (as_float(r.get("operating_cash_flow")) or 0.0) / 12.0, "investing_cash_flow": (as_float(r.get("investing_cash_flow")) or 0.0) / 12.0, "free_cash_flow": (as_float(r.get("free_cash_flow")) or 0.0) / 12.0,
+            "utilization": ma["utilization"].get(mk, 0.0), "target_contribution_margin": ma["target_contribution_margin"].get(mk, 0.0),
+        }
+        out.append(monthly)
+    return out
+
+
+def aggregate_monthly_to_annual(monthly_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by: dict[int, list[dict[str, Any]]] = {}
+    for r in monthly_rows: by.setdefault(int(r["year"]), []).append(r)
+    out: list[dict[str, Any]] = []
+    for y, rows in sorted(by.items()):
+        s = lambda k: sum((as_float(r.get(k)) or 0.0) for r in rows)
+        mx = lambda k: max((as_float(r.get(k)) or 0.0) for r in rows)
+        out.append({"year": y, "workplace_annual_tokens": s("workplace_monthly_tokens"), "contact_center_annual_tokens": s("contact_center_monthly_tokens"), "total_annual_tokens": s("total_monthly_tokens"), "required_gpu": mx("required_gpu"), "total_revenue": s("total_revenue"), "total_cogs": s("total_cogs"), "ebitda": s("ebitda"), "ebit": s("ebit"), "net_income": s("net_income"), "total_capex": s("total_capex"), "operating_cash_flow": s("operating_cash_flow"), "investing_cash_flow": s("investing_cash_flow"), "free_cash_flow": s("free_cash_flow")})
+    return out
+
+
+def write_monthly_rows_preview(monthly_rows: list[dict[str, Any]], output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    cols = sorted({k for r in monthly_rows for k in r.keys()})
+    with output.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=cols); w.writeheader(); w.writerows(monthly_rows)
+
+
+def write_monthly_vs_annual_audit(annual_rows: list[dict[str, Any]], monthly_annual_rows: list[dict[str, Any]], output: Path) -> None:
+    am = {int(r["year"]): r for r in annual_rows}; mm = {int(r["year"]): r for r in monthly_annual_rows}
+    metrics = ["total_annual_tokens", "required_gpu", "total_revenue", "total_cogs", "ebitda", "ebit", "net_income", "total_capex", "operating_cash_flow", "investing_cash_flow", "free_cash_flow"]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f); w.writerow(["metric", "year", "annual_value", "monthly_aggregated_value", "difference", "pct_difference", "status"])
+        for y in sorted(am):
+            for m in metrics:
+                av = as_float(am[y].get(m)); mv = as_float((mm.get(y) or {}).get(m))
+                if av is None or mv is None: w.writerow([m, y, av, mv, None, None, "N/A"]); continue
+                diff = mv - av; pct = (diff / av * 100.0) if abs(av) > 1e-9 else 0.0
+                tol = 5.0 if m == "required_gpu" else 1.0
+                ok = abs(pct) <= tol if m != "required_gpu" else (abs(diff) <= 1 or abs(pct) <= 5)
+                w.writerow([m, y, av, mv, diff, pct, "OK" if ok else "WARNING"])
 
 
 def as_float(value: Any) -> float | None:
@@ -2951,6 +3033,10 @@ def main() -> None:
     write_csv(rows, assumptions, OUT_CSV)
     write_html(rows, assumptions, OUT_HTML)
     write_audit_csv(rows, assumptions, OUT_AUDIT)
+    if ENABLE_MONTHLY_DEBUG_OUTPUT:
+        months_rows = calculate_monthly(assumptions)
+        write_monthly_rows_preview(months_rows, OUT_MONTHLY_ROWS_PREVIEW)
+        write_monthly_vs_annual_audit(rows, aggregate_monthly_to_annual(months_rows), OUT_MONTHLY_VS_ANNUAL_AUDIT)
     if ENABLE_MONTHLY_PREVIEW:
         write_monthly_preview(assumptions, OUT_MONTHLY_PREVIEW)
 
@@ -2966,6 +3052,9 @@ def main() -> None:
     print(f"AUDIT: {OUT_AUDIT}")
     if ENABLE_MONTHLY_PREVIEW:
         print(f"MONTHLY PREVIEW: {OUT_MONTHLY_PREVIEW}")
+    if ENABLE_MONTHLY_DEBUG_OUTPUT:
+        print(f"MONTHLY ROWS: {OUT_MONTHLY_ROWS_PREVIEW}")
+        print(f"MONTHLY VS ANNUAL AUDIT: {OUT_MONTHLY_VS_ANNUAL_AUDIT}")
 
 
 if __name__ == "__main__":
