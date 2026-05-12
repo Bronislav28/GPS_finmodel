@@ -125,6 +125,45 @@ def build_monthly_assumptions(assumptions: dict[str, Any], months: list[dict[str
     }
 
 
+OPERATING_MONTHLY_WHITELIST = {
+    "month_key", "year", "month", "month_index",
+    "active_users", "workplace_daily_tokens", "workplace_monthly_tokens", "automated_interactions_per_day", "contact_center_daily_tokens", "contact_center_monthly_tokens", "total_monthly_tokens",
+    "active_scenario", "construction_start_year", "construction_start_month", "construction_flag", "required_gpu", "owned_gpu", "rented_gpu", "owned_gpu_increment", "peak_required_gpu",
+    "gpu_capex", "gpu_infra_capex", "datacenter_construction_capex", "office_capex", "intangible_capex", "tangible_capex", "total_capex",
+    "monthly_gpu_rental_cost", "annual_gpu_rental_cost", "total_datacenter_opex", "total_team_opex", "total_sga", "total_cogs",
+    "workplace_ai_revenue", "contact_center_ai_revenue", "total_revenue", "gross_profit", "ebitda", "total_depreciation_and_amortization", "ebit",
+    "minimum_cash_balance", "revolver_interest_rate", "profit_tax_rate", "discount_rate",
+    "gross_ppe", "accumulated_depreciation", "net_ppe", "gross_intangible_assets", "accumulated_amortization", "net_intangible_assets",
+    "monthly_tangible_capex", "monthly_intangible_capex", "monthly_ppe_depreciation", "monthly_ip_amortization",
+}
+GPU_INT_FIELDS = {"year", "month", "month_index", "construction_start_year", "construction_start_month", "construction_flag", "required_gpu", "owned_gpu", "rented_gpu", "owned_gpu_increment", "peak_required_gpu", "active_users"}
+RATE_FIELDS = {"revolver_interest_rate", "profit_tax_rate", "discount_rate"}
+
+
+def compact_monthly_operating_rows(monthly_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def clean_value(k: str, v: Any) -> Any:
+        if isinstance(v, float):
+            if math.isnan(v) or math.isinf(v):
+                return None
+            if k in RATE_FIELDS:
+                return round(v, 6)
+            if k in GPU_INT_FIELDS:
+                return int(round(v))
+            return round(v, 2)
+        if isinstance(v, int):
+            return int(v)
+        return v
+
+    out: list[dict[str, Any]] = []
+    for row in monthly_rows:
+        item: dict[str, Any] = {}
+        for k in OPERATING_MONTHLY_WHITELIST:
+            if k in row:
+                item[k] = clean_value(k, row.get(k))
+        out.append(item)
+    return out
+
+
 def write_monthly_preview(assumptions: dict[str, Any], output: Path) -> None:
     months = build_monthly_calendar()
     ma = build_monthly_assumptions(assumptions, months)
@@ -2367,6 +2406,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     report_base_construction_month = int(as_float((((assumptions.get("capex", {}).get("strategy_scenarios", {}).get("scenarios", {}).get("hybrid", {}) or {}).get("construction_start_month"))) or 1) or 1)
     report_scenario_results: dict[str, Any] = {}
     monthly_scenario_results: dict[str, Any] = {}
+    operating_scenario_results: dict[str, Any] = {}
     base_construction_year = int(as_float(rows[-1].get("construction_start_year")) or 2028) if rows else 2028
     for infra in ["build_own_dc", "rent_gpu_only", "hybrid"]:
         year_variants = [2026, 2027, 2028, 2029, 2030] if infra == "hybrid" else [None]
@@ -2433,6 +2473,33 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                 }
                 keep = {"month_key","year","month","active_users","workplace_daily_tokens","workplace_monthly_tokens","automated_interactions_per_day","contact_center_daily_tokens","contact_center_monthly_tokens","total_monthly_tokens","required_gpu","owned_gpu","rented_gpu","owned_gpu_increment","construction_flag","gpu_capex","gpu_infra_capex","datacenter_construction_capex","office_capex","intangible_capex","total_capex","monthly_gpu_rental_cost","total_datacenter_opex","total_team_opex","total_sga","total_cogs","total_revenue","gross_profit","ebitda","total_depreciation_and_amortization","ebit","interest_expense","ebt","profit_tax","net_income","operating_cash_flow","investing_cash_flow","free_cash_flow","funding_need","equity_injection","revolver_drawdown","revolver_repayment","revolver_balance","closing_cash_after_funding","closing_cash","cash","net_ppe","net_intangible_assets","total_assets","total_liabilities","paid_in_capital","retained_earnings","total_equity","balance_check","discount_factor","discounted_fcf","cumulative_discounted_fcf","minimum_cash_balance","discount_rate_monthly"}
                 monthly_scenario_results[mkey] = {"rows": [{k: v for k, v in mr.items() if k in keep} for mr in mrows]}
+    operating_variants: list[tuple[str, str, int | None, int | None]] = [
+        ("rent_gpu_only", "rent_gpu_only", None, None),
+        ("build_own_dc", "build_own_dc", None, None),
+        ("hybrid|2026-10", "hybrid", 2026, 10),
+        ("hybrid|2026-11", "hybrid", 2026, 11),
+        ("hybrid|2026-12", "hybrid", 2026, 12),
+    ] + [(f"hybrid|{yy}-{mm:02d}", "hybrid", yy, mm) for yy in range(2027, 2031) for mm in range(1, 13)]
+    for op_key, infra, csy, csm in operating_variants:
+        ass = copy.deepcopy(assumptions)
+        ass.setdefault("capex", {}).setdefault("strategy_scenarios", {})["active_scenario"] = infra
+        if infra == "hybrid" and csy is not None and csm is not None:
+            ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_year"] = int(csy)
+            ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_month"] = int(csm)
+        ass.setdefault("funding", {})["active_scenario"] = "mix"
+        mrows = calculate_monthly(ass, scenario_overrides={"infrastructure_scenario": infra, "funding_scenario": "mix", "construction_start_year": csy or base_construction_year, "construction_start_month": int(csm or 1)})
+        operating_scenario_results[op_key] = {"rows": compact_monthly_operating_rows(mrows)}
+    report_scenario_json = json.dumps(report_scenario_results, separators=(",", ":"))
+    monthly_scenario_json = json.dumps(monthly_scenario_results, separators=(",", ":"))
+    operating_scenario_json = json.dumps(operating_scenario_results, separators=(",", ":"))
+    funding_cfg = assumptions.get("funding", {}) or {}
+    scenarios_cfg = funding_cfg.get("scenarios", {}) or {}
+    mix_cfg = scenarios_cfg.get("mix", {}) or {}
+    base_eq_share = float(as_float(((mix_cfg.get("equity_share", {}) or {}).get("value")) or 0.5) or 0.5)
+    base_rev_share = float(as_float(((mix_cfg.get("revolver_share", {}) or {}).get("value")) or 0.5) or 0.5)
+    print(f"[size] REPORT_SCENARIO_RESULTS JSON: {len(report_scenario_json.encode('utf-8'))} bytes")
+    print(f"[size] MONTHLY_SCENARIO_RESULTS JSON: {len(monthly_scenario_json.encode('utf-8'))} bytes")
+    print(f"[size] OPERATING_SCENARIO_RESULTS JSON: {len(operating_scenario_json.encode('utf-8'))} bytes")
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
 body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
@@ -2593,13 +2660,26 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     }}
   }};
   const current = {{npv:0}};
-  const REPORT_SCENARIO_RESULTS = {json.dumps(report_scenario_results)};
+  const REPORT_SCENARIO_RESULTS = {report_scenario_json};
   const MONTHLY_REPORT_DATA = {{base: {{rows: {json.dumps(monthly_rows_base)}}}}};
-  const MONTHLY_SCENARIO_RESULTS = {json.dumps(monthly_scenario_results)};
+  const MONTHLY_SCENARIO_RESULTS = {monthly_scenario_json};
+  const OPERATING_SCENARIO_RESULTS = {operating_scenario_json};
   window.MONTHLY_SCENARIO_RESULTS = MONTHLY_SCENARIO_RESULTS;
   window.MONTHLY_REPORT_DATA = MONTHLY_REPORT_DATA;
   let currentMonthlyRows = (MONTHLY_REPORT_DATA.base||{{}}).rows || [];
   window.REPORT_SCENARIO_RESULTS = REPORT_SCENARIO_RESULTS;
+  window.OPERATING_SCENARIO_RESULTS = OPERATING_SCENARIO_RESULTS;
+  window.REPORT_SCENARIO_CONFIG = Object.assign({{}}, window.REPORT_SCENARIO_CONFIG||{{}}, {{
+    years: [2026, 2027, 2028, 2029, 2030],
+    forecast_start_month: "2026-10",
+    base_infra: {json.dumps(report_base_infra)},
+    base_funding: {json.dumps(report_base_funding)},
+    base_construction_year: {int(base_construction_year)},
+    base_construction_month: {int(report_base_construction_month)},
+    base_equity_share: {base_eq_share},
+    base_revolver_share: {base_rev_share},
+    generated_at: {json.dumps(ts)}
+  }});
   let FIN_FLOW = {json.dumps(financial_flow_data)};
   const ffPlot = document.getElementById('financial-flow-plot');
   const ffLabels = document.getElementById('financial-flow-labels');
@@ -3046,7 +3126,180 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
 
 def write_html(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(build_html(rows, assumptions), encoding="utf-8")
+    html = build_html(rows, assumptions)
+    output.write_text(html, encoding="utf-8")
+    print(f"[size] Final HTML file: {output.stat().st_size} bytes")
+
+
+def write_audit_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
+    years, metric_store, inv_metrics = build_metric_store(rows, assumptions)
+    by_year = {int(r["year"]): r for r in rows}
+    usage = assumptions.get("usage_assumptions", {})
+    token_model = assumptions.get("token_load_model", {})
+    compute = assumptions.get("compute_model", {})
+    capex = assumptions.get("capex", {})
+    revenue_cfg = assumptions.get("revenue", {})
+    pnl_cfg = assumptions.get("pnl", {})
+    funding_cfg = assumptions.get("funding", {})
+
+    wp_usage = (usage.get("Workplace.ai", {}) or {})
+    cc_usage = (usage.get("Contact_Center.ai", {}) or {})
+    wp_activation = to_year_map(wp_usage.get("activation_rate"))
+    wp_tokens_per_user = to_year_map(((token_model.get("Workplace.ai", {}) or {}).get("tokens_per_active_user_per_day")))
+    cc_automation = to_year_map(cc_usage.get("automation_rate"))
+    cc_tokens_per_interaction = as_float(((token_model.get("Contact_Center.ai", {}) or {}).get("tokens_per_interaction")))
+    working_days = as_float(((token_model.get("time_assumptions", {}) or {}).get("working_days_per_year"))) or 0.0
+    calendar_days = as_float(((token_model.get("time_assumptions", {}) or {}).get("calendar_days_per_year"))) or 0.0
+    util_map = to_year_map(((compute.get("infra", {}) or {}).get("utilization")))
+    peak_factor = as_float(((compute.get("infra", {}) or {}).get("peak_factor")) or 1.0) or 1.0
+    gpu_unit_cost = as_float((((capex.get("gpu", {}) or {}).get("unit_cost"))) or 0.0)
+    infra_multiplier = as_float((((capex.get("infra_multiplier", {}) or {}).get("value"))) or 0.0)
+    contribution_margin_map = to_year_map(((revenue_cfg.get("target_contribution_margin", {}) or {}).get(str(revenue_cfg.get("active_scenario", "base")), {})))
+    tax_rate = as_float((((pnl_cfg.get("tax", {}) or {}).get("profit_tax_rate", {}) or {}).get("value")) or 0.0)
+    min_cash_months = as_float((((funding_cfg.get("minimum_cash_balance", {}) or {}).get("months_of_fixed_costs", {}) or {}).get("value")))
+    if min_cash_months is None:
+        min_cash_months = as_float((((((funding_cfg.get("revolver", {}) or {}).get("repayment_logic", {}) or {}).get("minimum_cash_balance", {}) or {}).get("months_of_fixed_costs", {}) or {}).get("value")))
+    min_cash_months = 0.0 if min_cash_months is None else min_cash_months
+    report_rows: list[dict[str, Any]] = []
+    ok = warn = na = 0
+
+    def add_check(name: str, year: Any, formula: str, expected: Any, actual: Any, tolerance: float = 1.0, notes: str = "", exact: bool = False) -> None:
+        nonlocal ok, warn, na
+        ev, av = as_float(expected), as_float(actual)
+        if exact:
+            if expected is None or actual is None:
+                status, diff = "N/A", ""
+                na += 1
+            else:
+                same = str(expected) == str(actual)
+                status = "OK" if same else "WARNING"
+                diff = 0 if same else "mismatch"
+                ok += 1 if same else 0
+                warn += 0 if same else 1
+        elif ev is None or av is None or math.isnan(ev) or math.isnan(av):
+            status, diff = "N/A", ""
+            na += 1
+        else:
+            d = av - ev
+            status = "OK" if abs(d) < tolerance else "WARNING"
+            diff = d
+            ok += 1 if status == "OK" else 0
+            warn += 1 if status == "WARNING" else 0
+        report_rows.append({"Check": name, "Year": year, "Formula": formula, "Expected": expected, "Actual": actual, "Difference": diff, "Status": status, "Notes": notes})
+
+    prev_owned = 0.0
+    for i, y in enumerate(years):
+        r = by_year[y]
+        # Token load
+        act_users_exp = (as_float(wp_usage.get("total_employees")) or 0.0) * (as_float(wp_activation.get(y)) or 0.0)
+        add_check("active_users_check", y, "total_employees*activation_rate", act_users_exp, r.get("active_users"), 0.01)
+        wp_ann_exp = act_users_exp * (as_float(wp_tokens_per_user.get(y)) or 0.0) * float(working_days or 0.0)
+        add_check("workplace_annual_tokens_check", y, "active_users*tokens_per_active_user_per_day*working_days", wp_ann_exp, r.get("workplace_annual_tokens"), 1.0)
+        auto_int_exp = (as_float(cc_usage.get("interactions_per_day")) or 0.0) * (as_float(cc_automation.get(y)) or 0.0)
+        add_check("automated_interactions_check", y, "interactions_per_day*automation_rate", auto_int_exp, r.get("automated_interactions"), 0.01)
+        cc_ann_exp = auto_int_exp * (cc_tokens_per_interaction or 0.0) * float(calendar_days or 0.0)
+        add_check("contact_center_annual_tokens_check", y, "automated_interactions*tokens_per_interaction*calendar_days", cc_ann_exp, r.get("contact_center_annual_tokens"), 1.0)
+        add_check("total_annual_tokens_check", y, "workplace_annual_tokens+contact_center_annual_tokens", (as_float(r.get("workplace_annual_tokens")) or 0.0)+(as_float(r.get("contact_center_annual_tokens")) or 0.0), r.get("total_annual_tokens"), 1.0)
+        # GPU sizing
+        seconds = (working_days or 0.0) * (as_float((compute.get("infra", {}) or {}).get("working_hours_per_day")) or 0.0) * 3600.0
+        tps_exp = (as_float(r.get("total_annual_tokens")) or 0.0) / seconds if seconds > 0 else None
+        add_check("tokens_per_second_check", y, "total_annual_tokens/(working_days*working_hours*3600)", tps_exp, r.get("tokens_per_second"), 0.01)
+        util = as_float(util_map.get(y)) or 0.0
+        wt = as_float(r.get("weighted_throughput")) or 0.0
+        req_exp = math.ceil((tps_exp or 0.0) / (wt * util) * peak_factor) if wt > 0 and util > 0 else None
+        add_check("required_gpu_check", y, "ceil(tokens_per_second/(weighted_throughput*utilization)*peak_factor)", req_exp, r.get("required_gpu"), 0.01)
+        # Infrastructure
+        csy = as_float(r.get("construction_start_year"))
+        cflag_exp = 1 if csy is not None and y == int(csy) else 0
+        add_check("construction_flag_check", y, "1 if year==construction_start_year else 0", cflag_exp, r.get("construction_flag"), exact=True)
+        if str(r.get("active_scenario")) == "hybrid":
+            req = as_float(r.get("required_gpu")) or 0.0
+            add_check("owned_gpu_check", y, "required_gpu if year>=construction_start_year else 0", req if y >= int(csy or 9999) else 0, r.get("owned_gpu"), 0.01)
+            add_check("rented_gpu_check", y, "required_gpu if year<construction_start_year else 0", req if y < int(csy or 9999) else 0, r.get("rented_gpu"), 0.01)
+        owned = as_float(r.get("owned_gpu")) or 0.0
+        own_inc_exp = owned if i == 0 else max(owned - prev_owned, 0.0)
+        add_check("owned_gpu_increment_check", y, "owned first year else max(delta,0)", own_inc_exp, r.get("owned_gpu_increment"), 0.01)
+        prev_owned = owned
+        # CAPEX
+        add_check("gpu_capex_check", y, "owned_gpu_increment*gpu_unit_cost", (as_float(r.get("owned_gpu_increment")) or 0.0) * float(gpu_unit_cost or 0.0), r.get("gpu_capex"), 1.0)
+        add_check("gpu_infra_capex_check", y, "gpu_capex*infra_multiplier", (as_float(r.get("gpu_capex")) or 0.0) * float(infra_multiplier or 0.0), r.get("gpu_infra_capex"), 1.0)
+        tangible_exp = (as_float(r.get("gpu_infra_capex")) or 0.0) + (as_float(r.get("datacenter_construction_capex")) or 0.0) + (as_float(r.get("office_capex")) or 0.0)
+        add_check("tangible_capex_check", y, "gpu_infra+dc+office", tangible_exp, r.get("tangible_capex"), 1.0)
+        intang_exp = (as_float(r.get("workplace_ai_ip_value")) or 0.0) + (as_float(r.get("contact_center_ai_ip_value")) or 0.0)
+        add_check("intangible_capex_check", y, "workplace_ai_ip_value+contact_center_ai_ip_value", intang_exp, r.get("intangible_capex"), 1.0)
+        add_check("total_capex_check", y, "tangible_capex+intangible_capex", tangible_exp + intang_exp, r.get("total_capex"), 1.0)
+        add_check("datacenter_construction_capex_check", y, "total_component_rub*construction_flag", (as_float(r.get("total_component_rub")) or 0.0)*(as_float(r.get("construction_flag")) or 0.0), r.get("datacenter_construction_capex"), 1.0)
+        # D&A
+        add_check("office_capex_depreciation_check", y, "sum office depreciation components", (as_float(r.get("office_server_depreciation")) or 0.0)+(as_float(r.get("employee_laptops_depreciation")) or 0.0)+(as_float(r.get("executive_laptops_depreciation")) or 0.0)+(as_float(r.get("mfu_depreciation")) or 0.0)+(as_float(r.get("meeting_rooms_depreciation")) or 0.0)+(as_float(r.get("office_furniture_depreciation")) or 0.0), r.get("office_capex_depreciation"), 1.0)
+        add_check("total_ppe_depreciation_check", y, "gpu_depreciation+datacenter_depreciation+office_capex_depreciation", (as_float(r.get("gpu_depreciation")) or 0.0)+(as_float(r.get("datacenter_depreciation")) or 0.0)+(as_float(r.get("office_capex_depreciation")) or 0.0), r.get("total_ppe_depreciation"), 1.0)
+        add_check("ip_amortization_check", y, "workplace_ai_amortization+contact_center_ai_amortization", (as_float(r.get("workplace_ai_amortization")) or 0.0)+(as_float(r.get("contact_center_ai_amortization")) or 0.0), r.get("ip_amortization"), 1.0)
+        add_check("total_depreciation_and_amortization_check", y, "total_ppe_depreciation+ip_amortization", (as_float(r.get("total_ppe_depreciation")) or 0.0)+(as_float(r.get("ip_amortization")) or 0.0), r.get("total_depreciation_and_amortization"), 1.0)
+        # OPEX / Revenue / P&L / CF / Funding / BS
+        add_check("gpu_rental_opex_check", y, "rented_gpu*rental_price_per_gpu_per_year", (as_float(r.get("rented_gpu")) or 0.0)*(as_float(r.get("rental_price_per_gpu_per_year")) or 0.0), r.get("annual_gpu_rental_cost"), 1.0)
+        add_check("electricity_cost_check", y, "electricity_kwh*electricity_price_t", (as_float(r.get("electricity_kwh")) or 0.0)*(as_float(r.get("electricity_price_t")) or 0.0), r.get("electricity_cost"), 1.0)
+        add_check("total_datacenter_opex_check", y, "electricity+maintenance+network+land+other", (as_float(r.get("electricity_cost")) or 0.0)+(as_float(r.get("maintenance_cost")) or 0.0)+(as_float(r.get("network_cost")) or 0.0)+(as_float(r.get("land_rent")) or 0.0)+(as_float(r.get("other_datacenter_opex")) or 0.0), r.get("total_datacenter_opex"), 1.0)
+        add_check("team_opex_check", y, "annual_core_team_cash_cost-capitalized_core_team_cost", (as_float(r.get("annual_core_team_cash_cost")) or 0.0)-(as_float(r.get("capitalized_core_team_cost")) or 0.0), r.get("total_team_opex"), 1.0)
+        add_check("total_sga_check", y, "annual_fixed_sga+annual_office_rent", (as_float(r.get("annual_fixed_sga")) or 0.0)+(as_float(r.get("annual_office_rent")) or 0.0), r.get("total_sga"), 1.0)
+        pricing_base_exp = (as_float(r.get("total_cogs")) or 0.0) + (as_float(r.get("total_depreciation_and_amortization")) or 0.0)
+        add_check("pricing_base_check", y, "total_cogs+total_depreciation_and_amortization", pricing_base_exp, r.get("pricing_base"), 1.0)
+        total_tokens = as_float(r.get("total_annual_tokens")) or 0.0
+        add_check("workplace_token_share_check", y, "workplace_annual_tokens/total_annual_tokens", (as_float(r.get("workplace_annual_tokens")) or 0.0)/total_tokens if total_tokens else None, r.get("workplace_token_share"), 0.01)
+        add_check("contact_center_token_share_check", y, "contact_center_annual_tokens/total_annual_tokens", (as_float(r.get("contact_center_annual_tokens")) or 0.0)/total_tokens if total_tokens else None, r.get("contact_center_token_share"), 0.01)
+        margin = as_float(contribution_margin_map.get(y))
+        denom = (1.0 - margin) if margin is not None and margin < 1 else None
+        wp_rev_exp = None if denom in (None, 0) else ((pricing_base_exp * (as_float(r.get("workplace_token_share")) or 0.0)) / denom) * (as_float(r.get("workplace_revenue_availability_factor")) or 0.0)
+        cc_rev_exp = None if denom in (None, 0) else ((pricing_base_exp * (as_float(r.get("contact_center_token_share")) or 0.0)) / denom) * (as_float(r.get("contact_center_revenue_availability_factor")) or 0.0)
+        add_check("workplace_revenue_check", y, "workplace_pricing_base/(1-margin)*availability", wp_rev_exp, r.get("workplace_ai_revenue"), 1.0)
+        add_check("contact_center_revenue_check", y, "contact_center_pricing_base/(1-margin)*availability", cc_rev_exp, r.get("contact_center_ai_revenue"), 1.0)
+        add_check("total_revenue_check", y, "workplace_ai_revenue+contact_center_ai_revenue", (as_float(r.get("workplace_ai_revenue")) or 0.0)+(as_float(r.get("contact_center_ai_revenue")) or 0.0), r.get("total_revenue"), 1.0)
+        add_check("total_cogs_check", y, "total_datacenter_opex+total_team_opex+annual_gpu_rental_cost", (as_float(r.get("total_datacenter_opex")) or 0.0)+(as_float(r.get("total_team_opex")) or 0.0)+(as_float(r.get("annual_gpu_rental_cost")) or 0.0), r.get("total_cogs"), 1.0)
+        add_check("gross_profit_check", y, "total_revenue-total_cogs", (as_float(r.get("total_revenue")) or 0.0)-(as_float(r.get("total_cogs")) or 0.0), r.get("gross_profit"), 1.0)
+        add_check("ebitda_check", y, "gross_profit-total_sga", (as_float(r.get("gross_profit")) or 0.0)-(as_float(r.get("total_sga")) or 0.0), r.get("ebitda"), 1.0)
+        add_check("ebit_check", y, "ebitda-total_depreciation_and_amortization", (as_float(r.get("ebitda")) or 0.0)-(as_float(r.get("total_depreciation_and_amortization")) or 0.0), r.get("ebit"), 1.0)
+        add_check("ebt_check", y, "ebit-interest_expense", (as_float(r.get("ebit")) or 0.0)-(as_float(r.get("interest_expense")) or 0.0), r.get("ebt"), 1.0)
+        add_check("profit_tax_check", y, "max(ebt,0)*tax_rate", max((as_float(r.get("ebt")) or 0.0), 0.0)*float(tax_rate or 0.0), r.get("profit_tax"), 1.0)
+        add_check("net_income_check", y, "ebt-profit_tax", (as_float(r.get("ebt")) or 0.0)-(as_float(r.get("profit_tax")) or 0.0), r.get("net_income"), 1.0)
+        add_check("operating_cash_flow_check", y, "net_income+total_depreciation_and_amortization", (as_float(r.get("net_income")) or 0.0)+(as_float(r.get("total_depreciation_and_amortization")) or 0.0), r.get("operating_cash_flow"), 1.0)
+        add_check("investing_cash_flow_check", y, "-gpu_infra-dc-office-intangible", -((as_float(r.get("gpu_infra_capex")) or 0.0)+(as_float(r.get("datacenter_construction_capex")) or 0.0)+(as_float(r.get("office_capex")) or 0.0)+(as_float(r.get("intangible_capex")) or 0.0)), r.get("investing_cash_flow"), 1.0)
+        add_check("pre_financing_cash_flow_check", y, "operating_cash_flow+investing_cash_flow", (as_float(r.get("operating_cash_flow")) or 0.0)+(as_float(r.get("investing_cash_flow")) or 0.0), r.get("pre_financing_cash_flow"), 1.0)
+        add_check("financing_cash_flow_check", y, "equity_injection+revolver_drawdown-revolver_repayment", (as_float(r.get("equity_injection")) or 0.0)+(as_float(r.get("revolver_drawdown")) or 0.0)-(as_float(r.get("revolver_repayment")) or 0.0), r.get("financing_cash_flow"), 1.0)
+        add_check("net_cash_flow_check", y, "pre_financing_cash_flow+financing_cash_flow", (as_float(r.get("pre_financing_cash_flow")) or 0.0)+(as_float(r.get("financing_cash_flow")) or 0.0), r.get("net_cash_flow"), 1.0)
+        add_check("funding_need_check", y, "max(-closing_cash_before_funding,0)", max(-((as_float(r.get("closing_cash_before_funding")) or 0.0)), 0.0), r.get("funding_need"), 1.0)
+        add_check("minimum_cash_balance_check", y, "(total_team_opex+total_sga+annual_gpu_rental_cost)/12*months_of_fixed_costs", ((as_float(r.get("total_team_opex")) or 0.0)+(as_float(r.get("total_sga")) or 0.0)+(as_float(r.get("annual_gpu_rental_cost")) or 0.0))/12.0*float(min_cash_months), r.get("minimum_cash_balance"), 1.0)
+        add_check("revolver_balance_check", y, "opening_revolver_balance+drawdown-repayment", (as_float(r.get("opening_revolver_balance")) or 0.0)+(as_float(r.get("revolver_drawdown")) or 0.0)-(as_float(r.get("revolver_repayment")) or 0.0), r.get("revolver_balance"), 1.0)
+        add_check("interest_expense_check", y, "average_revolver_balance*revolver_interest_rate", (as_float(r.get("average_revolver_balance")) or 0.0)*(as_float(r.get("revolver_interest_rate")) or 0.0), r.get("interest_expense"), 1.0)
+        add_check("closing_cash_after_funding_check", y, "cash_after_drawdown-revolver_repayment", (as_float(r.get("cash_after_drawdown")) or 0.0)-(as_float(r.get("revolver_repayment")) or 0.0), r.get("closing_cash_after_funding"), 1.0)
+        add_check("net_ppe_check", y, "gross_ppe-accumulated_depreciation", (as_float(r.get("gross_ppe")) or 0.0)-(as_float(r.get("accumulated_depreciation")) or 0.0), r.get("net_ppe"), 1.0)
+        add_check("net_intangible_assets_check", y, "gross_intangible_assets-accumulated_amortization", (as_float(r.get("gross_intangible_assets")) or 0.0)-(as_float(r.get("accumulated_amortization")) or 0.0), r.get("net_intangible_assets"), 1.0)
+        add_check("total_assets_check", y, "cash+net_ppe+net_intangible_assets", (as_float(r.get("cash")) or 0.0)+(as_float(r.get("net_ppe")) or 0.0)+(as_float(r.get("net_intangible_assets")) or 0.0), r.get("total_assets"), 1.0)
+        add_check("total_equity_check", y, "paid_in_capital+retained_earnings", (as_float(r.get("paid_in_capital")) or 0.0)+(as_float(r.get("retained_earnings")) or 0.0), r.get("total_equity"), 1.0)
+        add_check("balance_check", y, "0", 0.0, r.get("balance_check"), 1.0)
+        add_check("free_cash_flow_check", y, "operating_cash_flow+investing_cash_flow", (as_float(r.get("operating_cash_flow")) or 0.0)+(as_float(r.get("investing_cash_flow")) or 0.0), r.get("free_cash_flow"), 1.0)
+        dr = as_float(metric_store.get("discount_rate", {}).get(years[0])) or 0.0
+        df_exp = 1.0 / ((1.0 + dr) ** i)
+        add_check("discount_factor_check", y, "1/(1+discount_rate)^year_index", df_exp, metric_store.get("discount_factor", {}).get(y), 0.01)
+        add_check("discounted_fcf_check", y, "free_cash_flow*discount_factor", (as_float(r.get("free_cash_flow")) or 0.0) * df_exp, metric_store.get("discounted_fcf", {}).get(y), 1.0)
+
+    npv_exp = sum((as_float(metric_store.get("discounted_fcf", {}).get(y)) or 0.0) for y in years)
+    npv_act = as_float(metric_store.get("npv", {}).get(years[0]))
+    add_check("npv_check", "Total", "sum(discounted_fcf)", npv_exp, npv_act, 1.0)
+    sc = build_scenario_comparison(assumptions)
+    active = str(rows[-1].get("active_scenario"))
+    add_check("scenario_comparison_active_npv_check", "Total", "scenario row npv == base npv", as_float(sc.get(active, {}).get("npv")), npv_act, 1.0)
+    wt, cm, matrix = build_sensitivity_matrix(assumptions, rows)
+    add_check("sensitivity_base_cell_check", "Total", "sensitivity(1.00,1.00)==base npv", matrix.get((1.0, 1.0)), npv_act, 1.0)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["Check", "Year", "Formula", "Expected", "Actual", "Difference", "Status", "Notes"])
+        writer.writeheader()
+        writer.writerows(report_rows)
+
+    print(f"Audit checks: {ok} OK, {warn} WARNING, {na} N/A")
+    if warn > 0:
+        for r in report_rows:
+            if r["Status"] == "WARNING":
+                print(f"WARNING AUDIT: {r['Check']} year={r['Year']} diff={r['Difference']}")
 
 
 def write_audit_csv(rows: list[dict[str, Any]], assumptions: dict[str, Any], output: Path) -> None:
