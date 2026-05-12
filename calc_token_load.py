@@ -1983,10 +1983,10 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         {"key":"contact_center_automation_rate","section":"Contact_Center.ai","label":"Automation rate","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(infer_cc_auto(y)) for y in years}},
         {"key":"contact_center_tokens_per_interaction","section":"Contact_Center.ai","label":"Tokens per interaction","unit":"tokens/interaction","input_mode":"base_only","value_type":"tokens","values_by_year":{str(y):infer_cc_tpi(y) for y in years}},
         {"key":"target_contribution_margin","section":"Revenue / Pricing","label":"Target contribution margin","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(yv("target_contribution_margin", y)) for y in years}},
-        {"key":"model_mix_frontier","section":"Compute / GPU","label":"Model mix — frontier","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("frontier")) or 0.0) for y in years}},
-        {"key":"model_mix_large","section":"Compute / GPU","label":"Model mix — large","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("large")) or 0.0) for y in years}},
-        {"key":"model_mix_medium","section":"Compute / GPU","label":"Model mix — medium","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("medium")) or 0.0) for y in years}},
-        {"key":"model_mix_small","section":"Compute / GPU","label":"Model mix — small","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("small")) or 0.0) for y in years}},
+        {"key":"model_mix_frontier","section":"Compute / GPU","label":"Model mix — frontier","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float(((mix_cfg.get(str(y)) or mix_cfg.get(y) or {}) or {}).get("frontier")) or 0.0) for y in years}},
+        {"key":"model_mix_large","section":"Compute / GPU","label":"Model mix — large","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float(((mix_cfg.get(str(y)) or mix_cfg.get(y) or {}) or {}).get("large")) or 0.0) for y in years}},
+        {"key":"model_mix_medium","section":"Compute / GPU","label":"Model mix — medium","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float(((mix_cfg.get(str(y)) or mix_cfg.get(y) or {}) or {}).get("medium")) or 0.0) for y in years}},
+        {"key":"model_mix_small","section":"Compute / GPU","label":"Model mix — small","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float(((mix_cfg.get(str(y)) or mix_cfg.get(y) or {}) or {}).get("small")) or 0.0) for y in years}},
         {"key":"throughput_frontier","section":"Compute / GPU","label":"Throughput per GPU — frontier","unit":"tokens/sec/GPU","input_mode":"base_only","value_type":"number","values_by_year":{str(y):float(as_float(tput_cfg.get("frontier")) or 0.0) for y in years}},
         {"key":"throughput_large","section":"Compute / GPU","label":"Throughput per GPU — large","unit":"tokens/sec/GPU","input_mode":"base_only","value_type":"number","values_by_year":{str(y):float(as_float(tput_cfg.get("large")) or 0.0) for y in years}},
         {"key":"throughput_medium","section":"Compute / GPU","label":"Throughput per GPU — medium","unit":"tokens/sec/GPU","input_mode":"base_only","value_type":"number","values_by_year":{str(y):float(as_float(tput_cfg.get("medium")) or 0.0) for y in years}},
@@ -2042,6 +2042,9 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         }
         for r in rows
     }
+    report_base_infra = str((assumptions.get("capex", {}).get("strategy_scenarios", {}) or {}).get("active_scenario", "hybrid"))
+    report_base_funding = str((assumptions.get("funding", {}) or {}).get("active_scenario", "mix"))
+    report_base_mix_equity_pct = (as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) * 100.0)
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
 body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
@@ -2079,40 +2082,40 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .ka-empty{{background:transparent}}
 .ka-readonly{{color:#475569;background:transparent;font-weight:600}}
 .ka-section h4{{margin-top:14px;margin-bottom:6px;color:#334155}}
+.ka-section table{{table-layout:fixed}}
 .ka-section table th,.ka-section table td{{vertical-align:middle}}
-.ka-section input{{width:90px;padding:5px 6px;border:1px solid #d1d5db;border-radius:6px}}
+.ka-section th:nth-child(1),.ka-section td:nth-child(1){{width:30%;text-align:left}}
+.ka-section th:nth-child(2),.ka-section td:nth-child(2){{width:12%;text-align:left}}
+.ka-section th:nth-child(n+3),.ka-section td:nth-child(n+3){{width:11.6%;text-align:center}}
+.ka-section input{{width:80px;text-align:center;padding:5px 6px;border:1px solid #d1d5db;border-radius:6px}}
 </style><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script></head><body><div class='nav'><strong>GPS Finmodel Report</strong></div><div class='container'>
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
 <div class='card'>
   <h3>Report Basis</h3>
   <div class='meta'>Official report: YAML base case</div>
-  <div class='meta'>Infrastructure scenario: {active_scenario}</div>
-  <div class='meta'>Revenue scenario: {assumptions.get("revenue",{}).get("active_scenario","base")}</div>
-  <div class='meta'>Funding scenario: {assumptions.get("funding",{}).get("active_scenario","mix")}</div>
+  <div class='meta'>Selected infrastructure scenario: {active_scenario}</div>
+  <div class='meta'>Selected funding scenario: {assumptions.get("funding",{}).get("active_scenario","mix")}</div>
   <div class='meta'>Discount rate: {render_value(metric_store.get("discount_rate", {}).get(years[0]), "discount_rate")}</div>
   <div class='meta'>Generated timestamp: {ts}</div>
-  <div class='note'>The main report is read-only. To change official values, edit assumptions.yaml and regenerate the report.</div>
+  <div class='note'>The main report shows the YAML base-case investment scenario. Investment scenario controls are prepared but full report switching is pending.</div>
 </div>
-<div class='card' style='display:none'>
-  <h3>Controls</h3>
+<div class='card'>
+  <h3>Investment Scenario Controls</h3>
   <div class='controls'>
-    <div class='ctrl'><label>Revenue scenario</label><select id='top_revenue' disabled title='Not enabled in Scenario Lab v1'><option>base</option></select><small class='note'>Not enabled in Scenario Lab v1</small></div>
-    <div class='ctrl'><label>Infrastructure scenario</label><select id='top_infra'><option>build_own_dc</option><option>rent_gpu_only</option><option selected>hybrid</option></select><small class='note'>Scenario Lab only</small></div>
-    <div class='ctrl'><label>Construction start year</label><input id='top_csy' type='number' value='2028' disabled title='Not enabled in Scenario Lab v1'/><small class='note'>Not enabled in Scenario Lab v1</small></div>
-    <div class='ctrl'><label>Funding scenario</label><select id='top_funding'><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select><small class='note'>Scenario Lab only</small></div>
-    <div class='ctrl'><label>Funding mix (equity %)</label><input id='top_eq_mix' value='50' disabled title='Not enabled in Scenario Lab v1'/><small class='note'>Not enabled in Scenario Lab v1</small></div>
-    <div class='ctrl'><label>Funding mix (revolver %)</label><input id='top_rev_mix' value='50' disabled title='Not enabled in Scenario Lab v1'/><small class='note'>Not enabled in Scenario Lab v1</small></div>
-    <div class='ctrl'><label>Discount rate (%)</label><input id='discount-rate-input' type='number' value='30' step='0.1' min='0'/></div>
+    <div class='ctrl'><label>Infrastructure scenario</label><select id='report_infra_scenario'><option>build_own_dc</option><option>rent_gpu_only</option><option selected>hybrid</option></select></div>
+    <div class='ctrl'><label>Funding scenario</label><select id='report_funding_scenario'><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select></div>
+    <div class='ctrl'><label>Funding mix equity share (%)</label><input id='report_mix_equity_share' type='number' min='0' max='100' value='50' step='1'/></div>
+    <div class='ctrl'><label>Funding mix revolver share</label><div id='report_mix_revolver_share' class='note'>50%</div></div>
   </div>
-  <div class='note'>Scenario controls affect Scenario Lab only. The official report tables remain the Python-calculated YAML base case.</div>
-  <div class='note'>To make a scenario official, copy the selected assumptions into assumptions.yaml and regenerate the report.</div>
-  <div class='note'>Discount rate updates official DCF display and Scenario Lab. Other top controls affect Scenario Lab only.</div>
+  <div style='margin-top:8px'><button id='report_apply_scenario'>Apply Investment Scenario</button> <button id='report_reset_scenario'>Reset to YAML Base Scenario</button></div>
+  <div id='report_scenario_status' class='note'></div>
+  <div class='note'>These controls switch the main report investment scenario. Workbench assumptions remain separate and do not change official report tables until exported to YAML and regenerated.</div>
 </div>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
 <section><h2>Financial Flow — P&L Bridge</h2>
 <div class='card'>
   <div class='ctrl' style='max-width:220px'><label>Year</label><select id='ff_year'>{''.join(f"<option {'selected' if y==years[-1] else ''}>{y}</option>" for y in years)}</select></div>
-  <div class='note'>Financial Flow uses official Python-calculated base-case values. Workbench changes do not affect this chart.</div>
+  <div class='note'>Financial Flow uses the YAML base-case investment scenario. Workbench changes do not affect this chart until exported to YAML and regenerated.</div>
   <div class='financial-flow-wrap'><div class='financial-flow-plot-wrap'><div id='financial-flow-plot'></div><div id='financial-flow-labels'></div></div></div>
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
@@ -2134,7 +2137,6 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'>The Workbench is a browser-side what-if tool. The official report tables remain the Python-calculated YAML base case.</div>
   <div class='note'>To make a scenario official, copy/export the selected assumptions into assumptions.yaml and regenerate the report.</div>
   <div class='note'>The Workbench changes model-engine assumptions only. Investment scenario switching is controlled in the main report above.</div>
-  <div class='card'><h3>Key Assumptions Planner</h3><div class='note'>Editable assumptions affect the Workbench scenario only. Official report tables remain unchanged until assumptions.yaml is updated and the report is regenerated.</div><div id='sl_key_assumptions_table' class='table-wrap'></div></div>
   <div class='grid' style='display:none'>
     <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin_multiplier</label><input id='sl_margin' type='number' step='0.01' value='1.00'/></div></div>
     <div class='card'><h3>Compute & GPU</h3><div class='ctrl'><label>weighted_throughput_multiplier</label><input id='sl_wt' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>utilization_multiplier</label><input id='sl_util' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>gpu_unit_cost</label><input id='sl_gpu_cost' type='number' step='1' value='{sl_gpu_cost_default:.0f}'/></div><div class='ctrl'><label>gpu_rental_price_per_gpu_per_year</label><input id='sl_rent' type='number' step='1' value='{sl_rent_default:.0f}'/></div></div>
@@ -2158,9 +2160,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   const YEARS = {json.dumps(years)};
   const FREE_CASH_FLOW = {json.dumps([as_float(metric_store.get("free_cash_flow", {}).get(y)) or 0.0 for y in years])};
   const DEFAULT_RATE = {float(as_float(metric_store.get("discount_rate", {}).get(years[0])) or 0.30)};
-  const input = document.getElementById('discount-rate-input');
-  if(!input) return;
-  input.value = (DEFAULT_RATE * 100).toFixed(2);
+  const input = null;
   const fmtNum = (v)=> Number(v).toLocaleString(undefined, {{minimumFractionDigits:2, maximumFractionDigits:2}});
   const fmtPct = (v)=> (v*100).toFixed(2) + "%";
   const setCellClass = (td, val) => {{
@@ -2224,11 +2224,12 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       customdata:linkVals.map((v,i)=>names[[0,1,2,2,4,4,6,6,6,6][i]]+' → '+names[[2,2,3,4,5,6,7,8,9,10][i]]+'<br>Value: '+ffFmt(v)),hovertemplate:'%{{customdata}}<extra></extra>'}}
     }};
     const pos=[[2,16],[2,55],[25,40],[45,8],[45,54],[63,28],[63,58],[83,10],[83,34],[83,56],[83,78]];
-    if(ffLabels){{ ffLabels.innerHTML=names.map((nm,i)=>'<div class=\"ff-label\" style=\"left:'+pos[i][0]+'%;top:'+pos[i][1]+'%\"><div class=\"name\">'+nm+'</div><div class=\"value\">'+ffFmt(vals[i])+'</div>'+(margins[i]?'<div class=\"margin\">'+margins[i]+'</div>':'')+'</div>').join(''); }}
+    if(ffLabels){{ ffLabels.innerHTML=names.map((nm,i)=>'<div class=\"ff-label\" style=\"left:'+(Math.max(2,pos[i][0]-3))+'%;top:'+pos[i][1]+'%\"><div class=\"name\">'+nm+'</div><div class=\"value\">'+ffFmt(vals[i])+'</div>'+(margins[i]?'<div class=\"margin\">'+margins[i]+'</div>':'')+'</div>').join(''); }}
     Plotly.react(ffPlot,[sankey],{{margin:{{l:20,r:20,t:8,b:8}},height:400,font:{{size:10}},paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
   }};
   if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
   const recalc = () => {{
+    if(!input) return;
     try {{
       let r = Number(input.value);
       if(!Number.isFinite(r)) return;
@@ -2254,8 +2255,20 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       console.warn('Discount rate recalculation failed:', err);
     }}
   }};
-  input.addEventListener('input', recalc);
-  recalc();
+  if(input) {{
+    input.addEventListener('input', recalc);
+    recalc();
+  }}
+  try {{
+    const baseInfra={json.dumps(report_base_infra)}; const baseFunding={json.dumps(report_base_funding)}; const baseEq={float(report_base_mix_equity_pct)};
+    const infra=document.getElementById('report_infra_scenario'),fund=document.getElementById('report_funding_scenario'),eq=document.getElementById('report_mix_equity_share'),rev=document.getElementById('report_mix_revolver_share'),st=document.getElementById('report_scenario_status');
+    const sync=()=>{{ if(!fund||!eq||!rev) return; if(fund.value==='equity_only') eq.value='100'; else if(fund.value==='revolver_only') eq.value='0'; eq.disabled=fund.value!=='mix'; const v=Math.min(100,Math.max(0,Number(eq.value)||0)); eq.value=String(v); rev.textContent=(100-v).toFixed(0)+'%'; }};
+    if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(eq) eq.value=String(Math.round(baseEq)); sync();
+    if(fund) fund.addEventListener('change',sync); if(eq) eq.addEventListener('input',sync);
+    const apply=document.getElementById('report_apply_scenario'), reset=document.getElementById('report_reset_scenario');
+    if(apply) apply.addEventListener('click',()=>{{ sync(); if(st) st.textContent='Scenario controls prepared; full report switching will be wired in the next step.'; }});
+    if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(eq) eq.value=String(Math.round(baseEq)); sync(); if(st) st.textContent='Reset to YAML base scenario values.'; }});
+  }} catch(_e) {{}}
 
   __SCENARIO_LAB_JS__
 }})();
@@ -2298,7 +2311,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       years.forEach(y=>{ const mf=(out.model_mix_frontier||{})[y]||0, ml=(out.model_mix_large||{})[y]||0, mm=(out.model_mix_medium||{})[y]||0, ms=(out.model_mix_small||{})[y]||0;
         const shares=[mf,ml,mm,ms].map(v=>Math.max(v,0)/100.0); const sum=shares.reduce((a,b)=>a+b,0); if(sum>0&&Math.abs(sum-1.0)>0.001) warns.push(`Model mix for ${y} sums to ${(sum*100).toFixed(1)}%; normalized for Workbench calculation.`);
         const norm=sum>0?shares.map(v=>v/sum):[0,0,0,0];
-        const tf=Math.max((out.throughput_per_gpu_frontier||{})[y]||0,1e-9), tl=Math.max((out.throughput_per_gpu_large||{})[y]||0,1e-9), tm=Math.max((out.throughput_per_gpu_medium||{})[y]||0,1e-9), ts=Math.max((out.throughput_per_gpu_small||{})[y]||0,1e-9);
+      const tf=Math.max((out.throughput_frontier||{})[y]||0,1e-9), tl=Math.max((out.throughput_large||{})[y]||0,1e-9), tm=Math.max((out.throughput_medium||{})[y]||0,1e-9), ts=Math.max((out.throughput_small||{})[y]||0,1e-9);
         const wt=1.0/((norm[0]/tf)+(norm[1]/tl)+(norm[2]/tm)+(norm[3]/ts)); if(!out.weighted_throughput) out.weighted_throughput={}; out.weighted_throughput[y]=Number.isFinite(wt)?wt:0;
       });
       years.forEach(y=>{ const c=document.querySelector(".ka-readonly[data-assumption-key='weighted_throughput'][data-year='"+y+"']"); if(c) c.textContent=(out.weighted_throughput[y]||0).toFixed(2); });
@@ -2326,10 +2339,9 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     const renderTeamTables=()=>{
       const host=document.getElementById('sl_team_tables'); if(!host) return;
       const tableHtml=(title,key)=>{ const roles=((SL_BASE.team_planner||{})[key]||{}).roles||[];
-        return "<div class='card'><h3>"+title+"</h3><div class='table-wrap'><table><thead><tr><th>Role</th><th>Monthly Salary 2026</th>"+years.map(y=>"<th>FTE "+y+"</th>").join("")+"</tr></thead><tbody>"+
-        roles.map((r,i)=>"<tr><td>"+r.name+"</td><td><input data-plan='"+key+"' data-idx='"+i+"' data-fld='salary' type='number' step='1' value='"+Number(r.monthly_salary_2026||0)+"'/></td>"+
-        years.map(y=>"<td><input data-plan='"+key+"' data-idx='"+i+"' data-fld='fte_"+y+"' type='number' step='0.1' value='"+Number((r.fte_by_year||{})[y]||0)+"'/></td>").join("")+"</tr>").join("")+
-        "</tbody></table></div></div>"; };
+        const groups={}; roles.forEach((r,i)=>{ const p=String(r.name||'').split('/'); const g=p.length>1?p[0]:'other'; if(!groups[g]) groups[g]=[]; groups[g].push({r,i,short:p.length>1?p.slice(1).join('/'):String(r.name||'')}); });
+        const body=Object.entries(groups).map(([g,items])=>"<tr><td colspan='"+(2+years.length)+"' style='font-weight:700;background:#f8fafc'>"+g+"</td></tr>"+items.map(({r,i,short})=>"<tr><td>"+short+"</td><td><input data-plan='"+key+"' data-idx='"+i+"' data-fld='salary' type='number' step='1' value='"+Number(r.monthly_salary_2026||0)+"'/></td>"+years.map(y=>"<td><input data-plan='"+key+"' data-idx='"+i+"' data-fld='fte_"+y+"' type='number' step='0.1' value='"+Number((r.fte_by_year||{})[y]||0)+"'/></td>").join("")+"</tr>").join("")).join("");
+        return "<div class='card'><h3>"+title+"</h3><div class='table-wrap'><table><thead><tr><th>Role</th><th>Monthly Salary 2026</th>"+years.map(y=>"<th>FTE "+y+"</th>").join("")+"</tr></thead><tbody>"+body+"</tbody></table></div></div>"; };
       host.innerHTML=tableHtml("Core Team Planner","core_team")+tableHtml("SG&A Team Planner","sga");
     };
     const readTeamPlan=(key)=>{ const roles=JSON.parse(JSON.stringify((((SL_BASE.team_planner||{})[key]||{}).roles)||[]));
@@ -2339,7 +2351,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     const getKeyAssumptionsState=()=>({rows: (((SL_BASE.key_assumptions||{}).rows)||[]).map(r=>({key:r.key,values_by_year:(readKeyAssumptions()[r.key]||{})}))});
     const applyKeyAssumptionsState=(st)=>{ const mapRows=Array.isArray(st?.rows)?st.rows:[]; mapRows.forEach(r=>{ Object.entries(r.values_by_year||{}).forEach(([y,v])=>{ const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y+"']"); if(e) e.value=Number(v)||0;});}); };
     const resetKeyAssumptionsToBase=()=>{ (((SL_BASE.key_assumptions||{}).rows)||[]).forEach(r=>{ years.forEach(y=>{ const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y+"']"); if(e) e.value=Number((r.values_by_year||{})[y]||0);});}); };
-    const getScenarioLabState=()=>({ scalar_inputs: read(), scenario_switches:{infra:(document.getElementById('sl_infra_scenario')||{}).value||SL_BASE.active_infrastructure_scenario,funding:(document.getElementById('sl_funding_scenario')||{}).value||SL_BASE.active_funding_scenario}, key_assumptions:getKeyAssumptionsState(), core_team_planner:{roles:readTeamPlan('core_team')}, sga_team_planner:{roles:readTeamPlan('sga')}, scalars: read(), infra:(document.getElementById('sl_infra_scenario')||{}).value||SL_BASE.active_infrastructure_scenario, funding:(document.getElementById('sl_funding_scenario')||{}).value||SL_BASE.active_funding_scenario, core_team: readTeamPlan('core_team'), sga: readTeamPlan('sga') });
+    const getScenarioLabState=()=>({ scalar_inputs: read(), scenario_switches:{infra:SL_BASE.active_infrastructure_scenario,funding:SL_BASE.active_funding_scenario}, key_assumptions:getKeyAssumptionsState(), core_team_planner:{roles:readTeamPlan('core_team')}, sga_team_planner:{roles:readTeamPlan('sga')}, scalars: read(), infra:SL_BASE.active_infrastructure_scenario, funding:SL_BASE.active_funding_scenario, core_team: readTeamPlan('core_team'), sga: readTeamPlan('sga') });
     const applyScenarioLabState=(st)=>{ if(!st) return; Object.entries((st.scalar_inputs||st.scalars||{})).forEach(([k,v])=>{ const e=document.getElementById(k); if(e) e.value=String(v); });
       renderTeamTables();
       const applyPlan=(key,roles)=>{ (roles||[]).forEach((r,i)=>{ const s=document.querySelector("input[data-plan='"+key+"'][data-idx='"+i+"'][data-fld='salary']"); if(s) s.value=Number(r.monthly_salary_2026||0);
@@ -2347,7 +2359,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       });};
       applyPlan('core_team', (st.core_team_planner||{}).roles || st.core_team); applyPlan('sga', (st.sga_team_planner||{}).roles || st.sga);
       if(st.key_assumptions?.rows) applyKeyAssumptionsState(st.key_assumptions); else if(st.key_assumptions) Object.entries(st.key_assumptions||{}).forEach(([k,ym])=>{ Object.entries(ym||{}).forEach(([y,v])=>{ const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+k+"'][data-year='"+y+"']"); if(e) e.value=Number(v)||0; }); });
-      const sw=st.scenario_switches||{}; const i=document.getElementById('sl_infra_scenario'); if(i&&(sw.infra||st.infra)) i.value=(sw.infra||st.infra); const f=document.getElementById('sl_funding_scenario'); if(f&&(sw.funding||st.funding)) f.value=(sw.funding||st.funding);
+      const sw=st.scenario_switches||{};
     };
     const getScenarioLabOutputsSnapshot=(out)=>({scenario_npv:out.npv,delta_npv:out.npv-SL_BASE.base_npv,revenue_2030:out.rev2030,ebitda_2030:out.ebitda2030,total_capex:out.totalCapex,required_gpu_2030:out.req2030,owned_gpu_2030:out.owned2030,rented_gpu_2030:out.rented2030,revolver_balance_2030:out.revBal2030});
     const loadPresets=()=>{ try{return JSON.parse(localStorage.getItem(PRESET_KEY)||'[]');}catch(_e){return [];} };
@@ -2415,7 +2427,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
         investment_metrics:{discount_rate:{value:valueByMode("discount_rate", true)}}
       };
       years.forEach(y=>{ s.compute_model.model_mix[y]={frontier:((ka.model_mix_frontier||{})[y]||0)/100,large:((ka.model_mix_large||{})[y]||0)/100,medium:((ka.model_mix_medium||{})[y]||0)/100,small:((ka.model_mix_small||{})[y]||0)/100}; });
-      s.compute_model.throughput_per_gpu={frontier:Number((ka.throughput_per_gpu_frontier||{})[years[0]]||0),large:Number((ka.throughput_per_gpu_large||{})[years[0]]||0),medium:Number((ka.throughput_per_gpu_medium||{})[years[0]]||0),small:Number((ka.throughput_per_gpu_small||{})[years[0]]||0)};
+      s.compute_model.throughput_per_gpu={frontier:Number((ka.throughput_frontier||{})[years[0]]||0),large:Number((ka.throughput_large||{})[years[0]]||0),medium:Number((ka.throughput_medium||{})[years[0]]||0),small:Number((ka.throughput_small||{})[years[0]]||0)};
       return "# Workbench Key Assumptions override\\n# Paste relevant blocks into assumptions.yaml, then run:\\n# python calc_token_load.py\\n# Note: official report values change only after regeneration.\\n\\n# weighted_throughput is calculated by the model from model_mix and throughput_per_gpu.\\n# It is shown in the Workbench as a read-only calculated result and should not be pasted as a direct YAML input.\\n\\n"+toYaml(s);
     };
     let lastOut=null;
@@ -2443,7 +2455,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
         const wt=(ka.weighted_throughput||{})[y]||r.weighted_throughput||1;
         const util=((ka.utilization||{})[y]||((r.utilization||0.5)*100))/100.0;
         const peak=(ka.peak_factor||{})[y]||r.peak_factor||1;
-        const req=(wt>0&&util>0)?Math.ceil(tps/(wt*util)*peak):Math.ceil(r.required_gpu||0);
+        const req=(wt>0&&util>0)?Math.ceil(tps/(wt*util)*peak):Math.ceil(r.required_gpu||0); reqPeak=Math.max(reqPeak,req);
         let owned=0, rented=0; const csy=Math.round(SL_BASE.construction_start_year||2028);
         if(infra==='build_own_dc'){owned=req; rented=0;} else if(infra==='rent_gpu_only'){owned=0; rented=req;} else { if((r.year||0)<csy){owned=0; rented=req;} else {owned=req; rented=0;} }
         const s=(r.owned_gpu||0)>0?owned/(r.owned_gpu||1):1;
@@ -2479,9 +2491,9 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
         const dr=((ka.discount_rate||{})[years[0]]||((ka.discount_rate||{})['2026'])||(p.sl_dr*100))/100.0;
         npv+=fcf/Math.pow(1+dr,idx); totalCapex+=(gi+dcc+(r.office_capex||0)+(r.intangible_capex||0));
         if(idx===SL_BASE.rows.length-1){rev2030=rev;ebitda2030=(rev-cogs)-sga;req2030=req;revBal2030=revBal;owned2030=owned;rented2030=rented;coreFte2030=coreFte;coreCash2030=coreCash;teamOpex2030=team;sgaFte2030=sgaFte;sgaPayroll2030=sgaPayroll;totalSga2030=sga;}
-      }); lastOut={npv,totalCapex,rev2030,ebitda2030,req2030,revBal2030,owned2030,rented2030,infra,funding,coreFte2030,coreCash2030,teamOpex2030,sgaFte2030,sgaPayroll2030,totalSga2030}; render(lastOut); };
+      }); lastOut={npv,totalCapex,rev2030,ebitda2030,req2030,reqPeak,revBal2030,owned2030,rented2030,infra,funding,coreFte2030,coreCash2030,teamOpex2030,sgaFte2030,sgaPayroll2030,totalSga2030}; render(lastOut); };
     document.getElementById('sl_recalc').addEventListener('click',calc);
-    document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); if(e) e.value=e.defaultValue;}); renderTeamTables(); resetKeyAssumptionsToBase(); const i=document.getElementById('sl_infra_scenario'); if(i) i.value=SL_BASE.active_infrastructure_scenario; const f=document.getElementById('sl_funding_scenario'); if(f) f.value=SL_BASE.active_funding_scenario; calc();});
+    document.getElementById('sl_reset').addEventListener('click',()=>{ slIds.forEach(id=>{ const e=document.getElementById(id); if(e) e.value=e.defaultValue;}); renderTeamTables(); resetKeyAssumptionsToBase(); calc();});
     document.getElementById('sl_copy_yaml').addEventListener('click', async ()=>{ const txt=buildTeamYamlSnippet(); const ta=document.getElementById('sl_yaml_snippet'); const st=document.getElementById('sl_yaml_status'); if(ta) ta.value=txt;
       if(ta) ta.style.display='block';
       try{ if(navigator.clipboard&&navigator.clipboard.writeText){ await navigator.clipboard.writeText(txt); if(st) st.textContent='Copied to clipboard'; }
