@@ -2092,6 +2092,10 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                 },
                 "financial_flow": financial_flow,
                 "tables": table_values,
+                "rows": srows,
+                "years": years,
+                "profit_tax_rate": as_float((((ass.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}).get("value")) or 0.0),
+                "discount_rate": as_float(smv("discount_rate", years[0])) or 0.0,
             }
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
@@ -2285,23 +2289,48 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       if(['required_gpu','owned_gpu','rented_gpu'].includes(metric)||metric.endsWith('_year')) return `<span class='${{fv<0?'neg':(Math.abs(fv)<1e-12?'zero':'')}}'>${{Math.round(fv)}}</span>`;
       return `<span class='${{fv<0?'neg':(Math.abs(fv)<1e-12?'zero':'')}}'>${{fv.toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})}}</span>`;
     }};
+    const buildCustomFundingPayload=(basePayload,equityShare,revolverShare)=>{{
+      const rows=JSON.parse(JSON.stringify(basePayload.rows||[])); const years=(basePayload.years||YEARS).map(String);
+      const tax=Number(basePayload.profit_tax_rate||0); const dr=Number(basePayload.discount_rate||0.2);
+      let prevCash=0, prevRev=0, paidIn=0, re=0; const fcf=[];
+      rows.forEach((r,idx)=>{{
+        const openCash=idx===0?(Number(r.opening_cash)||0):prevCash; const openRev=idx===0?0:prevRev;
+        const ebit=Number(r.ebit)||0; const interest=openRev*(Number(r.revolver_interest_rate)||0);
+        const ebt=ebit-interest; const taxAmt=Math.max(ebt,0)*tax; const ni=ebt-taxAmt;
+        const ocf=ni+(Number(r.total_depreciation_and_amortization)||0); const icf=Number(r.investing_cash_flow)||0;
+        const minCash=Number(r.minimum_cash_balance)||0; const pre=openCash+ocf+icf; const need=Math.max(minCash-pre,0);
+        const eq=need*equityShare, draw=need*revolverShare; const cashAfter=pre+eq+draw;
+        const repay=Math.min(openRev, Math.max(cashAfter-minCash,0)); const revBal=openRev+draw-repay; const close=cashAfter-repay;
+        const fin=eq+draw-repay; const free=ocf+icf; fcf.push(free);
+        paidIn += eq; re += ni;
+        const cash=close, netPpe=Number(r.net_ppe)||0, netInt=Number(r.net_intangible_assets)||0; const assets=cash+netPpe+netInt;
+        const liab=revBal, eqTot=paidIn+re, bal=assets-liab-eqTot;
+        Object.assign(r,{{opening_cash:openCash,interest_expense:interest,ebt:ebt,profit_tax:taxAmt,net_income:ni,operating_cash_flow:ocf,funding_need:need,equity_injection:eq,revolver_drawdown:draw,revolver_repayment:repay,revolver_balance:revBal,financing_cash_flow:fin,closing_cash_after_funding:close,closing_cash:close,cash:cash,cumulative_cash:close,total_assets:assets,total_liabilities:liab,paid_in_capital:paidIn,retained_earnings:re,total_equity:eqTot,balance_check:bal,free_cash_flow:free,net_cash_flow:ocf+icf+fin}});
+        prevCash=close; prevRev=revBal;
+      }});
+      let npv=0,cumD=0,cum=0,sp='Not reached',dp='Not reached';
+      rows.forEach((r,idx)=>{{ const df=1/Math.pow(1+dr,idx); const d=(Number(r.free_cash_flow)||0)*df; npv+=d; cumD+=d; cum+=(Number(r.free_cash_flow)||0); r.discount_rate=dr; r.discount_factor=df; r.discounted_fcf=d; r.cumulative_discounted_fcf=cumD; if(sp==='Not reached'&&cum>0) sp=String(r.year); if(dp==='Not reached'&&cumD>0) dp=String(r.year); }});
+      return {{...basePayload, rows, executive_summary:{{...basePayload.executive_summary,npv:npv,payback:sp}}, custom_metrics:{{npv, simple_payback:sp, discounted_payback:dp}}}};
+    }};
     const applyReportScenario=()=>{{
       const infra=(document.getElementById('report_infra_scenario')||{{}}).value||'hybrid';
       const funding=(document.getElementById('report_funding_scenario')||{{}}).value||'mix';
       const eqEl=document.getElementById('report_mix_equity_share'); const st=document.getElementById('report_scenario_status');
-      const key=infra+'|'+funding; const payload=REPORT_SCENARIO_RESULTS[key];
+      const key=infra+'|'+funding; let payload=REPORT_SCENARIO_RESULTS[key];
       if(!payload){{ if(st) st.textContent='Scenario payload not found.'; return; }}
-      if(funding==='mix'&&eqEl){{ const eq=Number(eqEl.value)||0; const baseEq=(payload.funding_mix.equity_share||0)*100; if(Math.abs(eq-baseEq)>0.01&&st) st.textContent='Custom mix shares are not recalculated in V1; using YAML/default mix shares.'; eqEl.value=String(Math.round(baseEq)); const rv=document.getElementById('report_mix_revolver_share'); if(rv) rv.textContent=(100-baseEq).toFixed(0)+'%'; }}
+      let eqShare=funding==='equity_only'?1.0:(funding==='revolver_only'?0.0:Math.min(1,Math.max(0,(Number(eqEl?.value)||0)/100)));
+      let revShare=1-eqShare; if(eqEl&&funding!=='mix') eqEl.value=String(Math.round(eqShare*100)); const rv=document.getElementById('report_mix_revolver_share'); if(rv) rv.textContent=(revShare*100).toFixed(0)+'%';
+      if(funding==='mix') payload=buildCustomFundingPayload(REPORT_SCENARIO_RESULTS[infra+'|mix'],eqShare,revShare);
       const hk=document.querySelector("section h2 + .grid .kpi .k");
       document.querySelectorAll('#financial-flow-plot').forEach(()=>{{}});
       const map={{'NPV':'npv','IRR':'irr','Required Investments':'required_investments','Peak Required GPU':'peak_required_gpu','Payback':'payback'}};
       document.querySelectorAll('section .kpi').forEach(card=>{{ const k=(card.querySelector('.k')?.textContent||'').trim(); const m=map[k]; if(!m) return; const v=payload.executive_summary[m]; const el=card.querySelector('.v'); if(!el) return; if(k==='Payback') el.textContent=(v===null||v===undefined)?'N/A':String(v); else el.innerHTML=formatReportValue(m==='peak_required_gpu'?'required_gpu':m,v); }});
-      document.querySelectorAll('td[data-card][data-metric][data-year]').forEach(td=>{{ const card=td.getAttribute('data-card'); const metric=td.getAttribute('data-metric'); const year=td.getAttribute('data-year'); const v=payload.tables?.[card]?.[metric]?.[year]; td.innerHTML=formatReportValue(metric, v); }});
-      FIN_FLOW = payload.financial_flow || FIN_FLOW; if(ffYear) renderFinancialFlow(ffYear.value);
+      document.querySelectorAll('td[data-card][data-metric][data-year]').forEach(td=>{{ const card=td.getAttribute('data-card'); const metric=td.getAttribute('data-metric'); const year=td.getAttribute('data-year'); let v=payload.tables?.[card]?.[metric]?.[year]; if((v===undefined||v===null) && payload.rows){{ const rr=(payload.rows||[]).find(x=>String(x.year)===String(year)); if(rr) v=rr[metric]; }} td.innerHTML=formatReportValue(metric, v); }});
+      FIN_FLOW = Object.fromEntries((payload.rows||[]).map(r=>[String(r.year),{{workplace_ai_revenue:r.workplace_ai_revenue,contact_center_ai_revenue:r.contact_center_ai_revenue,total_revenue:r.total_revenue,total_cogs:r.total_cogs,gross_profit:r.gross_profit,total_sga:r.total_sga,ebitda:r.ebitda,total_depreciation_and_amortization:r.total_depreciation_and_amortization,interest_expense:r.interest_expense,profit_tax:r.profit_tax,net_income:r.net_income}}])); if(ffYear) renderFinancialFlow(ffYear.value);
       const basis=document.querySelector('.card .meta:nth-child(2)');
       const metas=document.querySelectorAll('.card .meta');
       if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; }}
-      if(st) st.textContent='Applied investment scenario: '+key+'.';
+      const bad=(payload.rows||[]).find(r=>Math.abs(Number(r.balance_check)||0)>1); if(st) st.textContent=(funding==='mix'?'Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver.':'Applied '+infra+' / '+funding+'.')+(bad?' Warning: balance check differs by '+Number(bad.balance_check).toFixed(2)+' in '+bad.year+'.':'');
     }};
   const recalc = () => {{
     if(!input) return;
