@@ -2291,7 +2291,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       host.innerHTML="<div class='note'>Rows with annual assumptions can be edited by year. Rows marked Base 2026 are entered once; later years are kept constant for Workbench calculation.</div>"+sections.map(sec=>{
         const rs=rows.filter(r=>(r.section||'Other')===sec);
         return "<div class='ka-section'><h4>"+sec+"</h4><table><thead><tr><th>Assumption</th><th>Unit</th><th>2026</th><th>2027</th><th>2028</th><th>2029</th><th>2030</th></tr></thead><tbody>"+
-        rs.map(r=>"<tr><td>"+r.label+"</td><td>"+r.unit+"</td>"+years.map((y,idx)=>{ if(r.input_mode==='base_only'&&idx>0) return "<td class='ka-empty'></td>"; if(r.input_mode==='readonly') return "<td class='ka-readonly'>"+Number((r.values_by_year||{})[y]||0).toFixed(2)+"</td>"; return "<td><input class='sl-key-assumption-input' data-assumption-key='"+r.key+"' data-year='"+y+"' type='number' step='0.01' value='"+Number((r.values_by_year||{})[y]||0)+"'/></td>"; }).join("")+"</tr>").join("")+
+        rs.map(r=>"<tr><td>"+r.label+"</td><td>"+r.unit+"</td>"+years.map((y,idx)=>{ if(r.input_mode==='base_only'&&idx>0) return "<td class='ka-empty'></td>"; if(r.input_mode==='readonly') return "<td class='ka-readonly' data-assumption-key='"+r.key+"' data-year='"+y+"'>"+Number((r.values_by_year||{})[y]||0).toFixed(2)+"</td>"; return "<td><input class='sl-key-assumption-input' data-assumption-key='"+r.key+"' data-year='"+y+"' type='number' step='0.01' value='"+Number((r.values_by_year||{})[y]||0)+"'/></td>"; }).join("")+"</tr>").join("")+
         "</tbody></table></div>";
       }).join("");
     };
@@ -2394,26 +2394,41 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     };
     const buildKeyYamlSnippet=()=>{
       const ka=readKeyAssumptions();
-      const dec=(obj)=>Object.fromEntries(Object.entries(obj||{}).map(([y,v])=>[y,(Number(v)||0)/100.0]));
-      const yearly=(obj)=>Object.fromEntries(years.map(y=>[y,Number((obj||{})[y]||0)]));
+      const kaRows=((SL_BASE.key_assumptions||{}).rows)||[];
+      const kaByKey=Object.fromEntries(kaRows.map(r=>[r.key,r]));
+      const getKaRow=(key)=>kaByKey[key]||null;
+      const isBaseOnly=(key)=>((getKaRow(key)||{}).input_mode)==='base_only';
+      const getKaBaseValue=(key)=>Number(((ka[key]||{})[years[0]])||0);
+      const getKaYearlyValues=(key)=>Object.fromEntries(years.map(y=>[y,Number(((ka[key]||{})[y])||0)]));
+      const decYearly=(key)=>Object.fromEntries(years.map(y=>[y,getKaBaseValue(key.replace('__year__', y))]));
+      const yearlyFromKey=(key)=>getKaYearlyValues(key);
+      const decFromKey=(key)=>Object.fromEntries(years.map(y=>[y,(Number(((ka[key]||{})[y])||0))/100.0]));
+      const valueByMode=(key, asPercent=false)=>{
+        if(isBaseOnly(key)){
+          const base=getKaBaseValue(key);
+          return asPercent ? (base/100.0) : base;
+        }
+        const vals=getKaYearlyValues(key);
+        return asPercent ? Object.fromEntries(Object.entries(vals).map(([y,v])=>[y,v/100.0])) : vals;
+      };
       const s={
         usage_assumptions:{
-          "Workplace.ai":{activation_rate:dec(ka.workplace_activation_rate)},
-          "Contact_Center.ai":{automation_rate:dec(ka.contact_center_automation_rate)}
+          "Workplace.ai":{activation_rate:valueByMode("workplace_activation_rate", true)},
+          "Contact_Center.ai":{automation_rate:valueByMode("contact_center_automation_rate", true)}
         },
         token_load_model:{
-          "Workplace.ai":{tokens_per_active_user_per_day:yearly(ka.workplace_tokens_per_active_user_per_day)},
-          "Contact_Center.ai":{tokens_per_interaction:{value:Number((ka.contact_center_tokens_per_interaction||{})[years[0]]||0)}}
+          "Workplace.ai":{tokens_per_active_user_per_day:valueByMode("workplace_tokens_per_active_user_per_day", false)},
+          "Contact_Center.ai":{tokens_per_interaction:{value:valueByMode("contact_center_tokens_per_interaction", false)}}
         },
-        revenue:{target_contribution_margin:{base:dec(ka.target_contribution_margin)}},
-        compute_model:{model_mix:{},throughput_per_gpu:{},infra:{utilization:dec(ka.utilization),peak_factor:yearly(ka.peak_factor)}},
-        capex:{gpu:{unit_cost:Number((ka.gpu_unit_cost||{})[years[0]]||0)}},
-        opex:{gpu_rental:{rental_price_per_gpu_per_year:yearly(ka.gpu_rental_price_per_gpu_per_year)}},
-        manual_review_required:{weighted_throughput_calculated:"weighted_throughput is calculated from model_mix and throughput_per_gpu; do not paste as direct YAML input.",discount_rate_path_uncertain:{discount_rate_2026_decimal:(Number((ka.discount_rate||{})[years[0]]||0))/100.0}}
+        revenue:{target_contribution_margin:{base:valueByMode("target_contribution_margin", true)}},
+        compute_model:{model_mix:{},throughput_per_gpu:{},infra:{utilization:valueByMode("gpu_utilization", true),peak_factor:valueByMode("peak_factor", false)}},
+        capex:{gpu:{unit_cost:valueByMode("gpu_unit_cost", false)}},
+        opex:{gpu_rental:{rental_price_per_gpu_per_year:valueByMode("gpu_rental_price_per_gpu_per_year", false)}},
+        investment_metrics:{discount_rate:{value:valueByMode("discount_rate", true)}}
       };
       years.forEach(y=>{ s.compute_model.model_mix[y]={frontier:((ka.model_mix_frontier||{})[y]||0)/100,large:((ka.model_mix_large||{})[y]||0)/100,medium:((ka.model_mix_medium||{})[y]||0)/100,small:((ka.model_mix_small||{})[y]||0)/100}; });
       s.compute_model.throughput_per_gpu={frontier:Number((ka.throughput_per_gpu_frontier||{})[years[0]]||0),large:Number((ka.throughput_per_gpu_large||{})[years[0]]||0),medium:Number((ka.throughput_per_gpu_medium||{})[years[0]]||0),small:Number((ka.throughput_per_gpu_small||{})[years[0]]||0)};
-      return "# Scenario Lab Key Assumptions override\\n# Paste relevant blocks into assumptions.yaml, then run:\\n# python calc_token_load.py\\n\\n"+toYaml(s);
+      return "# Workbench Key Assumptions override\\n# Paste relevant blocks into assumptions.yaml, then run:\\n# python calc_token_load.py\\n# Note: official report values change only after regeneration.\\n\\n# weighted_throughput is calculated by the model from model_mix and throughput_per_gpu.\\n# It is shown in the Workbench as a read-only calculated result and should not be pasted as a direct YAML input.\\n\\n"+toYaml(s);
     };
     let lastOut=null;
     const calc=()=>{ const p=read(); const ka=readKeyAssumptions(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
