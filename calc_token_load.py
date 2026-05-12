@@ -2354,6 +2354,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         }
         for r in rows
     }
+    monthly_rows_base = calculate_monthly(assumptions)
     report_base_infra = str((assumptions.get("capex", {}).get("strategy_scenarios", {}) or {}).get("active_scenario", "hybrid"))
     report_base_funding = str((assumptions.get("funding", {}) or {}).get("active_scenario", "mix"))
     report_base_mix_equity_pct = (as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) * 100.0)
@@ -2494,6 +2495,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
 </div></section>
+<section><h2>Monthly Detail</h2><div class='card'><h3>Monthly Detail — Selected Year</h3><div class='controls'><div class='ctrl'><label>Year</label><select id='monthly_detail_year'>{''.join(f"<option>{y}</option>" for y in years)}</select></div><div class='ctrl'><label>Section</label><select id='monthly_detail_section'><option>Demand & Tokens</option><option>Infrastructure / GPU</option><option>CAPEX</option><option>Operating Costs</option><option>P&L</option><option>Cash Flow & Funding</option><option>Balance Sheet</option><option>DCF</option></select></div></div><div class='table-wrap' id='monthly_detail_table'></div><div class='note'>Monthly Detail uses the internal monthly engine for diagnostics. The main report above remains the annual official view until monthly mode is explicitly promoted.</div></div></section>
 <section><h2>NPV Workbench — Scenario Builder</h2>
 <div class='card'>
   <div class='card'>
@@ -2575,6 +2577,8 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   }};
   const current = {{npv:0}};
   const REPORT_SCENARIO_RESULTS = {json.dumps(report_scenario_results)};
+  const MONTHLY_REPORT_DATA = {{base: {{rows: {json.dumps(monthly_rows_base)}}}}};
+  window.MONTHLY_REPORT_DATA = MONTHLY_REPORT_DATA;
   window.REPORT_SCENARIO_RESULTS = REPORT_SCENARIO_RESULTS;
   let FIN_FLOW = {json.dumps(financial_flow_data)};
   const ffPlot = document.getElementById('financial-flow-plot');
@@ -2603,6 +2607,19 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     if(ffLabels){{ ffLabels.innerHTML=names.map((nm,i)=>'<div class=\"ff-label\" style=\"left:'+(Math.max(2,pos[i][0]-3))+'%;top:'+pos[i][1]+'%\"><div class=\"name\">'+nm+'</div><div class=\"value\">'+ffFmt(vals[i])+'</div>'+(margins[i]?'<div class=\"margin\">'+margins[i]+'</div>':'')+'</div>').join(''); }}
     Plotly.react(ffPlot,[sankey],{{margin:{{l:20,r:20,t:8,b:8}},height:400,font:{{size:10}},paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
   }};
+    const formatMonthlyValue=(metric,v)=>{{ if(v===null||v===undefined||Number.isNaN(Number(v))) return "<span class='na'>N/A</span>"; const n=Number(v); if(['required_gpu','owned_gpu','rented_gpu','owned_gpu_increment','construction_flag'].includes(metric)) return String(Math.round(n)); return n.toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}}); }};
+    const monthlyMetricAggregationType=(m)=>{{ const sum=new Set(['workplace_monthly_tokens','contact_center_monthly_tokens','total_monthly_tokens','gpu_capex','gpu_infra_capex','datacenter_construction_capex','office_capex','intangible_capex','total_capex','monthly_gpu_rental_cost','total_datacenter_opex','total_team_opex','total_sga','total_cogs','total_revenue','gross_profit','ebitda','total_depreciation_and_amortization','ebit','interest_expense','ebt','profit_tax','net_income','operating_cash_flow','investing_cash_flow','free_cash_flow','funding_need','equity_injection','revolver_drawdown','revolver_repayment','discounted_fcf']); const max=new Set(['required_gpu','construction_flag']); const avg=new Set(['workplace_daily_tokens','contact_center_daily_tokens','automated_interactions_per_day']); if(sum.has(m)) return 'sum'; if(max.has(m)) return 'max'; if(avg.has(m)) return 'avg'; return 'eop'; }};
+    const MONTH_METRICS={{
+      'Demand & Tokens':['active_users','workplace_daily_tokens','workplace_monthly_tokens','automated_interactions_per_day','contact_center_daily_tokens','contact_center_monthly_tokens','total_monthly_tokens'],
+      'Infrastructure / GPU':['required_gpu','owned_gpu','rented_gpu','owned_gpu_increment','construction_flag'],
+      'CAPEX':['gpu_capex','gpu_infra_capex','datacenter_construction_capex','office_capex','intangible_capex','total_capex'],
+      'Operating Costs':['monthly_gpu_rental_cost','total_datacenter_opex','total_team_opex','total_sga','total_cogs'],
+      'P&L':['total_revenue','gross_profit','ebitda','total_depreciation_and_amortization','ebit','interest_expense','ebt','profit_tax','net_income'],
+      'Cash Flow & Funding':['operating_cash_flow','investing_cash_flow','free_cash_flow','funding_need','equity_injection','revolver_drawdown','revolver_repayment','revolver_balance','closing_cash_after_funding','closing_cash'],
+      'Balance Sheet':['cash','net_ppe','net_intangible_assets','total_assets','total_liabilities','paid_in_capital','retained_earnings','total_equity','balance_check'],
+      'DCF':['free_cash_flow','discount_factor','discounted_fcf','cumulative_discounted_fcf'],
+    }};
+    const renderMonthlyDetail=()=>{{ const y=String((document.getElementById('monthly_detail_year')||{{}}).value||YEARS[0]); const sec=String((document.getElementById('monthly_detail_section')||{{}}).value||'Demand & Tokens'); const host=document.getElementById('monthly_detail_table'); if(!host) return; const rows=(MONTHLY_REPORT_DATA.base.rows||[]).filter(r=>String(r.year)===y).sort((a,b)=>Number(a.month)-Number(b.month)); const metrics=MONTH_METRICS[sec]||[]; const mons=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const head='<tr><th class=\"sticky\">Metric</th>'+mons.map(m=>'<th>'+m+'</th>').join('')+'<th>FY Total / YE</th></tr>'; const body=metrics.map(m=>{{ const vals=rows.map(r=>Number(r[m])||0); const t=monthlyMetricAggregationType(m); const agg=t==='sum'?vals.reduce((a,b)=>a+b,0):t==='max'?Math.max(...vals,0):t==='avg'?(vals.reduce((a,b)=>a+b,0)/Math.max(vals.length,1)):(vals.length?vals[vals.length-1]:0); return '<tr><td class=\"sticky\">'+m+'</td>'+vals.map(v=>'<td class=\"num\">'+formatMonthlyValue(m,v)+'</td>').join('')+'<td class=\"num\">'+formatMonthlyValue(m,agg)+'</td></tr>'; }}).join(''); host.innerHTML='<table class=\"sensitivity\"><thead>'+head+'</thead><tbody>'+body+'</tbody></table>'; }};
     if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
     const formatReportValue=(metric,v)=>{{
       if(v===null||v===undefined||Number.isNaN(Number(v))) return "<span class='na'>N/A</span>";
@@ -2729,6 +2746,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     if(apply) apply.addEventListener('click',()=>{{ sync(); applyReportScenario(); }});
     if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState(); applyReportScenario(); if(st) st.textContent='Reset to YAML base investment scenario.'; }});
     applyReportScenario();
+    const mdy=document.getElementById('monthly_detail_year'); const mds=document.getElementById('monthly_detail_section'); if(mdy) mdy.addEventListener('change',renderMonthlyDetail); if(mds) mds.addEventListener('change',renderMonthlyDetail); renderMonthlyDetail();
   }} catch(_e) {{}}
 
   __SCENARIO_LAB_JS__
