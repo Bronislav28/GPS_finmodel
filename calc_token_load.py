@@ -2298,7 +2298,16 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     const PRESET_KEY='gps_finmodel_scenario_lab_presets';
     const read=()=>Object.fromEntries(slIds.map(id=>[id,Number(document.getElementById(id).value)]));
     const parseInputNumber=(value, fallback)=>{ const n=Number(value); return Number.isFinite(n)?n:fallback; };
-    const readKeyAssumptions=()=>{ const out={}; (((SL_BASE.key_assumptions||{}).rows)||[]).forEach(r=>{ out[r.key]={}; if(r.input_mode==='base_only'){ const y0=years[0]; const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y0+"']"); const base=parseInputNumber(e?e.value:undefined, Number((r.values_by_year||{})[y0]||0)); years.forEach(y=>{ out[r.key][y]=base; }); } else { years.forEach(y=>{ const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y+"']"); out[r.key][y]=parseInputNumber(e?e.value:undefined, Number((r.values_by_year||{})[y]||0)); }); } }); if(out.gpu_utilization&&!out.utilization) out.utilization=out.gpu_utilization; return out; };
+    const readKeyAssumptions=()=>{ const out={}; const warns=[]; (((SL_BASE.key_assumptions||{}).rows)||[]).forEach(r=>{ out[r.key]={}; if(r.input_mode==='readonly'){ years.forEach(y=>{ out[r.key][y]=Number((r.values_by_year||{})[y]||0);}); return; } if(r.input_mode==='base_only'){ const y0=years[0]; const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y0+"']"); const base=parseInputNumber(e?e.value:undefined, Number((r.values_by_year||{})[y0]||0)); years.forEach(y=>{ out[r.key][y]=base; }); } else { years.forEach(y=>{ const e=document.querySelector(".sl-key-assumption-input[data-assumption-key='"+r.key+"'][data-year='"+y+"']"); out[r.key][y]=parseInputNumber(e?e.value:undefined, Number((r.values_by_year||{})[y]||0)); }); } });
+      years.forEach(y=>{ const mf=(out.model_mix_frontier||{})[y]||0, ml=(out.model_mix_large||{})[y]||0, mm=(out.model_mix_medium||{})[y]||0, ms=(out.model_mix_small||{})[y]||0;
+        const shares=[mf,ml,mm,ms].map(v=>Math.max(v,0)/100.0); const sum=shares.reduce((a,b)=>a+b,0); if(sum>0&&Math.abs(sum-1.0)>0.001) warns.push(`Model mix for ${y} sums to ${(sum*100).toFixed(1)}%; normalized for Workbench calculation.`);
+        const norm=sum>0?shares.map(v=>v/sum):[0,0,0,0];
+        const tf=Math.max((out.throughput_per_gpu_frontier||{})[y]||0,1e-9), tl=Math.max((out.throughput_per_gpu_large||{})[y]||0,1e-9), tm=Math.max((out.throughput_per_gpu_medium||{})[y]||0,1e-9), ts=Math.max((out.throughput_per_gpu_small||{})[y]||0,1e-9);
+        const wt=1.0/((norm[0]/tf)+(norm[1]/tl)+(norm[2]/tm)+(norm[3]/ts)); if(!out.weighted_throughput) out.weighted_throughput={}; out.weighted_throughput[y]=Number.isFinite(wt)?wt:0;
+      });
+      years.forEach(y=>{ const c=document.querySelector(".ka-readonly[data-assumption-key='weighted_throughput'][data-year='"+y+"']"); if(c) c.textContent=(out.weighted_throughput[y]||0).toFixed(2); });
+      const w=document.getElementById('sl_warn'); if(w&&warns.length) w.textContent=warns.join(' ');
+      if(out.gpu_utilization&&!out.utilization) out.utilization=out.gpu_utilization; return out; };
     const fm=(v)=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
     const fi=(v)=>String(Math.round(v));
     const render=(out)=>{ const d=out.npv-SL_BASE.base_npv; const cls=d>=0?'ok':'neg';
@@ -2397,11 +2406,13 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
           "Contact_Center.ai":{tokens_per_interaction:{value:Number((ka.contact_center_tokens_per_interaction||{})[years[0]]||0)}}
         },
         revenue:{target_contribution_margin:{base:dec(ka.target_contribution_margin)}},
-        compute_model:{infra:{weighted_throughput:yearly(ka.weighted_throughput),utilization:dec(ka.utilization),peak_factor:yearly(ka.peak_factor)}},
+        compute_model:{model_mix:{},throughput_per_gpu:{},infra:{utilization:dec(ka.utilization),peak_factor:yearly(ka.peak_factor)}},
         capex:{gpu:{unit_cost:Number((ka.gpu_unit_cost||{})[years[0]]||0)}},
         opex:{gpu_rental:{rental_price_per_gpu_per_year:yearly(ka.gpu_rental_price_per_gpu_per_year)}},
-        manual_review_required:{discount_rate_path_uncertain:{discount_rate_2026_decimal:(Number((ka.discount_rate||{})[years[0]]||0))/100.0}}
+        manual_review_required:{weighted_throughput_calculated:"weighted_throughput is calculated from model_mix and throughput_per_gpu; do not paste as direct YAML input.",discount_rate_path_uncertain:{discount_rate_2026_decimal:(Number((ka.discount_rate||{})[years[0]]||0))/100.0}}
       };
+      years.forEach(y=>{ s.compute_model.model_mix[y]={frontier:((ka.model_mix_frontier||{})[y]||0)/100,large:((ka.model_mix_large||{})[y]||0)/100,medium:((ka.model_mix_medium||{})[y]||0)/100,small:((ka.model_mix_small||{})[y]||0)/100}; });
+      s.compute_model.throughput_per_gpu={frontier:Number((ka.throughput_per_gpu_frontier||{})[years[0]]||0),large:Number((ka.throughput_per_gpu_large||{})[years[0]]||0),medium:Number((ka.throughput_per_gpu_medium||{})[years[0]]||0),small:Number((ka.throughput_per_gpu_small||{})[years[0]]||0)};
       return "# Scenario Lab Key Assumptions override\\n# Paste relevant blocks into assumptions.yaml, then run:\\n# python calc_token_load.py\\n\\n"+toYaml(s);
     };
     let lastOut=null;
