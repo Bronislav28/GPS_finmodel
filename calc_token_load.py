@@ -231,11 +231,13 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
         gia = prev_gia + int_capex
         accam = prev_accam + ip_am
         net_int = gia - accam
+        rental_price_y = as_float(year_value(((ass.get("opex", {}) or {}).get("gpu_rental", {}) or {}).get("rental_price_per_gpu_per_year"), y, 0.0)) or 0.0
+        monthly_rental = rented_gpu * rental_price_y / 12.0
         monthly = {
             **mo,
-            "active_users": (as_float(r.get("workplace_active_users")) or 0.0) / 12.0,
+            "active_users": (as_float(r.get("active_users")) or as_float(r.get("workplace_active_users")) or 0.0),
             "workplace_daily_tokens": wp_daily, "workplace_monthly_tokens": wp_month,
-            "automated_interactions_per_day": (as_float(r.get("automated_interactions_per_day")) or 0.0),
+            "automated_interactions_per_day": (as_float(r.get("automated_interactions_per_day")) or ((as_float(r.get("automated_interactions")) or 0.0) / max((as_float(r.get("calendar_days_per_year")) or 365), 1))),
             "contact_center_daily_tokens": cc_daily, "contact_center_monthly_tokens": cc_month, "total_monthly_tokens": total,
             "weighted_throughput": as_float(r.get("weighted_throughput")) or 0.0,
             "tokens_per_second": total / max(float(mo["working_days"]) * 8 * 3600, 1),
@@ -245,7 +247,7 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
             "total_revenue": (as_float(r.get("total_revenue")) or 0.0) / 12.0,
             "total_team_opex": (as_float(r.get("total_team_opex")) or 0.0) / 12.0,
             "total_sga": (as_float(r.get("total_sga")) or 0.0) / 12.0,
-            "monthly_gpu_rental_cost": ((as_float(r.get("gpu_rental_opex")) or 0.0) / max(req_gpu, 1.0) / 12.0) * rented_gpu if req_gpu > 0 else 0.0,
+            "monthly_gpu_rental_cost": monthly_rental,
             "total_datacenter_opex": ((as_float(r.get("total_datacenter_opex")) or 0.0) / max(req_gpu, 1.0) / 12.0) * owned_gpu if req_gpu > 0 else 0.0,
             "total_cogs": (as_float(r.get("total_cogs")) or 0.0) / 12.0,
             "gross_profit": (as_float(r.get("gross_profit")) or 0.0) / 12.0,
@@ -301,15 +303,23 @@ def write_monthly_rows_preview(monthly_rows: list[dict[str, Any]], output: Path)
         w = csv.DictWriter(f, fieldnames=cols); w.writeheader(); w.writerows(monthly_rows)
 
 
-def write_monthly_vs_annual_audit(annual_rows: list[dict[str, Any]], monthly_annual_rows: list[dict[str, Any]], output: Path) -> None:
+def write_monthly_vs_annual_audit(annual_rows: list[dict[str, Any]], monthly_annual_rows: list[dict[str, Any]], output: Path, assumptions: dict[str, Any] | None = None) -> None:
     am = {int(r["year"]): r for r in annual_rows}; mm = {int(r["year"]): r for r in monthly_annual_rows}
     metrics = ["total_annual_tokens", "required_gpu", "total_revenue", "total_cogs", "ebitda", "ebit", "net_income", "total_capex", "operating_cash_flow", "investing_cash_flow", "free_cash_flow", "funding_need", "equity_injection", "revolver_drawdown", "revolver_repayment", "revolver_balance", "interest_expense", "closing_cash", "balance_check", "discounted_fcf"]
     output.parent.mkdir(parents=True, exist_ok=True)
+    dcf_map: dict[int, float] = {}
+    if assumptions is not None:
+        dr = as_float((((assumptions.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}).get(min(am))) or 0.2) or 0.2
+        for i, y in enumerate(sorted(am)):
+            fcf = as_float((am[y] or {}).get("free_cash_flow")) or 0.0
+            dcf_map[y] = fcf / ((1.0 + dr) ** i)
     with output.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f); w.writerow(["metric", "year", "annual_value", "monthly_aggregated_value", "difference", "pct_difference", "status"])
         for y in sorted(am):
             for m in metrics:
                 av = as_float(am[y].get(m)); mv = as_float((mm.get(y) or {}).get(m))
+                if av is None and m == "discounted_fcf":
+                    av = dcf_map.get(y)
                 if av is None or mv is None: w.writerow([m, y, av, mv, None, None, "N/A"]); continue
                 diff = mv - av; pct = (diff / av * 100.0) if abs(av) > 1e-9 else 0.0
                 tol = 5.0 if m == "required_gpu" else 1.0
@@ -3174,7 +3184,7 @@ def main() -> None:
     if ENABLE_MONTHLY_DEBUG_OUTPUT:
         months_rows = calculate_monthly(assumptions)
         write_monthly_rows_preview(months_rows, OUT_MONTHLY_ROWS_PREVIEW)
-        write_monthly_vs_annual_audit(rows, aggregate_monthly_to_annual(months_rows), OUT_MONTHLY_VS_ANNUAL_AUDIT)
+        write_monthly_vs_annual_audit(rows, aggregate_monthly_to_annual(months_rows), OUT_MONTHLY_VS_ANNUAL_AUDIT, assumptions)
         write_monthly_validation_checks(months_rows, OUT_MONTHLY_VALIDATION)
         write_monthly_balance_sheet_debug(months_rows, OUT_MONTHLY_BS_DEBUG)
     if ENABLE_MONTHLY_PREVIEW:
