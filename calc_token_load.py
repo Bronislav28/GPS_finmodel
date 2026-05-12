@@ -1936,11 +1936,56 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     tput_cfg = compute_model.get("throughput_per_gpu", {}) if isinstance(compute_model.get("throughput_per_gpu"), dict) else {}
     util_map = to_year_map(((compute_model.get("infra", {}) or {}).get("utilization")))
     def pct(v: float) -> float: return float(v) * 100.0
+    def infer_wp_activation(y: int) -> float:
+        from_yaml = as_float(wp_act_map.get(y))
+        if from_yaml is not None:
+            return float(from_yaml)
+        r = rows_by_year.get(y) or {}
+        act = as_float(r.get("workplace_activation_rate"))
+        if act is not None and act > 0:
+            return float(act)
+        active = as_float(r.get("workplace_active_users")) or 0.0
+        total_emp = as_float(r.get("workplace_total_employees")) or as_float(r.get("total_employees")) or 0.0
+        if total_emp > 0:
+            return active / total_emp
+        return 0.0
+    def infer_wp_tokens(y: int) -> float:
+        from_yaml = as_float(wp_tok_map.get(y))
+        if from_yaml is not None and from_yaml > 0:
+            return float(from_yaml)
+        r = rows_by_year.get(y) or {}
+        v = as_float(r.get("workplace_tokens_per_active_user_per_day"))
+        if v is not None and v > 0:
+            return float(v)
+        daily = as_float(r.get("workplace_daily_tokens")) or 0.0
+        active = as_float(r.get("workplace_active_users")) or 0.0
+        return (daily / active) if active > 0 else 0.0
+    def infer_cc_auto(y: int) -> float:
+        from_yaml = as_float(cc_auto_map.get(y))
+        if from_yaml is not None:
+            return float(from_yaml)
+        r = rows_by_year.get(y) or {}
+        v = as_float(r.get("contact_center_automation_rate"))
+        if v is not None and v > 0:
+            return float(v)
+        auto = as_float(r.get("automated_interactions_per_day")) or as_float(r.get("automated_interactions")) or 0.0
+        total = as_float(r.get("interactions_per_day")) or as_float(r.get("contact_center_interactions_per_day")) or 0.0
+        return (auto / total) if total > 0 else 0.0
+    def infer_cc_tpi(y: int) -> float:
+        if cc_tok and cc_tok > 0:
+            return float(cc_tok)
+        r = rows_by_year.get(y) or {}
+        v = as_float(r.get("contact_center_tokens_per_interaction"))
+        if v is not None and v > 0:
+            return float(v)
+        daily = as_float(r.get("contact_center_daily_tokens")) or 0.0
+        auto = as_float(r.get("automated_interactions_per_day")) or as_float(r.get("automated_interactions")) or 0.0
+        return (daily / auto) if auto > 0 else 0.0
     key_assumptions_rows = [
-        {"key":"workplace_activation_rate","section":"Workplace.ai","label":"Activation rate","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(wp_act_map.get(y, yv("workplace_activation_rate", y))) for y in years}},
-        {"key":"workplace_tokens_per_active_user_per_day","section":"Workplace.ai","label":"Tokens per active user per day","unit":"tokens/user/day","input_mode":"yearly","value_type":"tokens","values_by_year":{str(y):float(wp_tok_map.get(y, yv("workplace_tokens_per_active_user_per_day", y))) for y in years}},
-        {"key":"contact_center_automation_rate","section":"Contact_Center.ai","label":"Automation rate","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(cc_auto_map.get(y, yv("contact_center_automation_rate", y))) for y in years}},
-        {"key":"contact_center_tokens_per_interaction","section":"Contact_Center.ai","label":"Tokens per interaction","unit":"tokens/interaction","input_mode":"base_only","value_type":"tokens","values_by_year":{str(y):float(cc_tok or yv("contact_center_tokens_per_interaction", y)) for y in years}},
+        {"key":"workplace_activation_rate","section":"Workplace.ai","label":"Activation rate","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(infer_wp_activation(y)) for y in years}},
+        {"key":"workplace_tokens_per_active_user_per_day","section":"Workplace.ai","label":"Tokens per active user per day","unit":"tokens/user/day","input_mode":"yearly","value_type":"tokens","values_by_year":{str(y):infer_wp_tokens(y) for y in years}},
+        {"key":"contact_center_automation_rate","section":"Contact_Center.ai","label":"Automation rate","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(infer_cc_auto(y)) for y in years}},
+        {"key":"contact_center_tokens_per_interaction","section":"Contact_Center.ai","label":"Tokens per interaction","unit":"tokens/interaction","input_mode":"base_only","value_type":"tokens","values_by_year":{str(y):infer_cc_tpi(y) for y in years}},
         {"key":"target_contribution_margin","section":"Revenue / Pricing","label":"Target contribution margin","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(yv("target_contribution_margin", y)) for y in years}},
         {"key":"model_mix_frontier","section":"Compute / GPU","label":"Model mix — frontier","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("frontier")) or 0.0) for y in years}},
         {"key":"model_mix_large","section":"Compute / GPU","label":"Model mix — large","unit":"%","input_mode":"yearly","value_type":"percent","values_by_year":{str(y):pct(as_float((mix_cfg.get(str(y), {}) or {}).get("large")) or 0.0) for y in years}},
@@ -2241,6 +2286,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     }
     const slIds=['sl_wp_tok','sl_cc_tok','sl_wp_act','sl_cc_auto','sl_margin','sl_wt','sl_util','sl_gpu_cost','sl_rent','sl_dr'];
     const renderKeyAssumptionsTable=()=>{ const host=document.getElementById('sl_key_assumptions_table'); if(!host) return; const rows=((SL_BASE.key_assumptions||{}).rows)||[];
+      ['workplace_activation_rate','workplace_tokens_per_active_user_per_day','contact_center_automation_rate','contact_center_tokens_per_interaction'].forEach(k=>{ const row=rows.find(r=>r.key===k); if(row){ years.forEach(y=>{ const v=Number((row.values_by_year||{})[y]||0); if(!Number.isFinite(v)||v===0) console.warn('Key assumption missing/zero',k,y); }); }});
       const sections=[...new Set(rows.map(r=>r.section||'Other'))];
       host.innerHTML="<div class='note'>Rows with annual assumptions can be edited by year. Rows marked Base 2026 are entered once; later years are kept constant for Workbench calculation.</div>"+sections.map(sec=>{
         const rs=rows.filter(r=>(r.section||'Other')===sec);
