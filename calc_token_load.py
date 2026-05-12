@@ -2295,17 +2295,15 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       let prevCash=0, prevRev=0, paidIn=0, re=0; const fcf=[];
       rows.forEach((r,idx)=>{{
         const openCash=idx===0?(Number(r.opening_cash)||0):prevCash; const openRev=idx===0?0:prevRev;
-        const ebit=Number(r.ebit)||0; const interest=openRev*(Number(r.revolver_interest_rate)||0);
-        const ebt=ebit-interest; const taxAmt=Math.max(ebt,0)*tax; const ni=ebt-taxAmt;
-        const ocf=ni+(Number(r.total_depreciation_and_amortization)||0); const icf=Number(r.investing_cash_flow)||0;
-        const minCash=Number(r.minimum_cash_balance)||0; const pre=openCash+ocf+icf; const need=Math.max(minCash-pre,0);
-        const eq=need*equityShare, draw=need*revolverShare; const cashAfter=pre+eq+draw;
-        const repay=Math.min(openRev, Math.max(cashAfter-minCash,0)); const revBal=openRev+draw-repay; const close=cashAfter-repay;
-        const fin=eq+draw-repay; const free=ocf+icf; fcf.push(free);
+        const ebit=Number(r.ebit)||0; const rate=Number(r.revolver_interest_rate)||0; const da=Number(r.total_depreciation_and_amortization)||0; const icf=Number(r.investing_cash_flow)||0; const minCash=Number(r.minimum_cash_balance)||0;
+        let interest=(openRev*rate), ebt=0, taxAmt=0, ni=0, ocf=0, closeBefore=0, need=0, eq=0, draw=0, cashAfter=0, repay=0, revBal=openRev;
+        for(let it=0; it<8; it++){{ ebt=ebit-interest; taxAmt=Math.max(ebt,0)*tax; ni=ebt-taxAmt; ocf=ni+da; closeBefore=openCash+ocf+icf; need=Math.max(-closeBefore,0); eq=need*equityShare; draw=need*revolverShare; cashAfter=closeBefore+eq+draw; repay=Math.min(openRev,Math.max(cashAfter-minCash,0)); revBal=openRev+draw-repay; const avg=(openRev+revBal)/2; const newInterest=avg*rate; if(Math.abs(newInterest-interest)<0.01){{interest=newInterest; break;}} interest=newInterest; }}
+        ebt=ebit-interest; taxAmt=Math.max(ebt,0)*tax; ni=ebt-taxAmt; ocf=ni+da; closeBefore=openCash+ocf+icf; need=Math.max(-closeBefore,0); eq=need*equityShare; draw=need*revolverShare; cashAfter=closeBefore+eq+draw; repay=Math.min(openRev,Math.max(cashAfter-minCash,0)); revBal=openRev+draw-repay;
+        const close=cashAfter-repay; const fin=eq+draw-repay; const free=ocf+icf; fcf.push(free);
         paidIn += eq; re += ni;
         const cash=close, netPpe=Number(r.net_ppe)||0, netInt=Number(r.net_intangible_assets)||0; const assets=cash+netPpe+netInt;
         const liab=revBal, eqTot=paidIn+re, bal=assets-liab-eqTot;
-        Object.assign(r,{{opening_cash:openCash,interest_expense:interest,ebt:ebt,profit_tax:taxAmt,net_income:ni,operating_cash_flow:ocf,funding_need:need,equity_injection:eq,revolver_drawdown:draw,revolver_repayment:repay,revolver_balance:revBal,financing_cash_flow:fin,closing_cash_after_funding:close,closing_cash:close,cash:cash,cumulative_cash:close,total_assets:assets,total_liabilities:liab,paid_in_capital:paidIn,retained_earnings:re,total_equity:eqTot,balance_check:bal,free_cash_flow:free,net_cash_flow:ocf+icf+fin}});
+        Object.assign(r,{{opening_cash:openCash,opening_revolver_balance:openRev,interest_expense:interest,ebt:ebt,profit_tax:taxAmt,net_income:ni,operating_cash_flow:ocf,closing_cash_before_funding:closeBefore,funding_need:need,equity_injection:eq,revolver_drawdown:draw,cash_after_drawdown:cashAfter,revolver_repayment:repay,revolver_balance:revBal,average_revolver_balance:(openRev+revBal)/2,financing_cash_flow:fin,closing_cash_after_funding:close,closing_cash:close,cash:cash,cumulative_cash:close,total_assets:assets,total_liabilities:liab,paid_in_capital:paidIn,retained_earnings:re,total_equity:eqTot,balance_check:bal,free_cash_flow:free,net_cash_flow:ocf+icf+fin}});
         prevCash=close; prevRev=revBal;
       }});
       let npv=0,cumD=0,cum=0,sp='Not reached',dp='Not reached';
@@ -2316,11 +2314,16 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       const infra=(document.getElementById('report_infra_scenario')||{{}}).value||'hybrid';
       const funding=(document.getElementById('report_funding_scenario')||{{}}).value||'mix';
       const eqEl=document.getElementById('report_mix_equity_share'); const st=document.getElementById('report_scenario_status');
-      const key=infra+'|'+funding; let payload=REPORT_SCENARIO_RESULTS[key];
+      const EPS=1e-6; const key=infra+'|'+funding; let payload=REPORT_SCENARIO_RESULTS[key];
       if(!payload){{ if(st) st.textContent='Scenario payload not found.'; return; }}
       let eqShare=funding==='equity_only'?1.0:(funding==='revolver_only'?0.0:Math.min(1,Math.max(0,(Number(eqEl?.value)||0)/100)));
       let revShare=1-eqShare; if(eqEl&&funding!=='mix') eqEl.value=String(Math.round(eqShare*100)); const rv=document.getElementById('report_mix_revolver_share'); if(rv) rv.textContent=(revShare*100).toFixed(0)+'%';
-      if(funding==='mix') payload=buildCustomFundingPayload(REPORT_SCENARIO_RESULTS[infra+'|mix'],eqShare,revShare);
+      const defaultEq=((REPORT_SCENARIO_RESULTS[infra+'|mix']?.funding_mix?.equity_share)||0.5);
+      if(funding==='mix' && Math.abs(eqShare-1.0)<EPS) payload=REPORT_SCENARIO_RESULTS[infra+'|equity_only'];
+      else if(funding==='mix' && Math.abs(eqShare-0.0)<EPS) payload=REPORT_SCENARIO_RESULTS[infra+'|revolver_only'];
+      else if(funding==='mix' && Math.abs(eqShare-defaultEq)<EPS) payload=REPORT_SCENARIO_RESULTS[infra+'|mix'];
+      else if(funding==='mix') payload=buildCustomFundingPayload(REPORT_SCENARIO_RESULTS[infra+'|mix'],eqShare,revShare);
+      console.debug('Funding parity infra='+infra+' funding='+funding+' eq='+eqShare+' rev='+revShare+' defaultEq='+defaultEq+' key='+key);
       const hk=document.querySelector("section h2 + .grid .kpi .k");
       document.querySelectorAll('#financial-flow-plot').forEach(()=>{{}});
       const map={{'NPV':'npv','IRR':'irr','Required Investments':'required_investments','Peak Required GPU':'peak_required_gpu','Payback':'payback'}};
@@ -2330,7 +2333,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       const basis=document.querySelector('.card .meta:nth-child(2)');
       const metas=document.querySelectorAll('.card .meta');
       if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; }}
-      const bad=(payload.rows||[]).find(r=>Math.abs(Number(r.balance_check)||0)>1); if(st) st.textContent=(funding==='mix'?'Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver.':'Applied '+infra+' / '+funding+'.')+(bad?' Warning: balance check differs by '+Number(bad.balance_check).toFixed(2)+' in '+bad.year+'.':'');
+      const bad=(payload.rows||[]).find(r=>Math.abs(Number(r.balance_check)||0)>1); if(st) st.textContent=(funding==='mix'&&Math.abs(eqShare-1.0)<EPS)?('Applied '+infra+' / mix with 100% equity and 0% revolver. Matches equity_only.'):((funding==='mix'&&Math.abs(eqShare)<EPS)?('Applied '+infra+' / mix with 0% equity and 100% revolver. Matches revolver_only.'):((funding==='mix'&&Math.abs(eqShare-defaultEq)<EPS)?('Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver. Uses precomputed YAML/default mix.'):((funding==='mix'?'Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver.':'Applied '+infra+' / '+funding+'.'))))+(bad?' Warning: balance check differs by '+Number(bad.balance_check).toFixed(2)+' in '+bad.year+'.':'');
     }};
   const recalc = () => {{
     if(!input) return;
