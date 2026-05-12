@@ -2046,14 +2046,19 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     report_base_funding = str((assumptions.get("funding", {}) or {}).get("active_scenario", "mix"))
     report_base_mix_equity_pct = (as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) * 100.0)
     report_scenario_results: dict[str, Any] = {}
+    base_construction_year = int(as_float(rows[-1].get("construction_start_year")) or 2028) if rows else 2028
     for infra in ["build_own_dc", "rent_gpu_only", "hybrid"]:
-        for fund in ["equity_only", "revolver_only", "mix"]:
-            ass = copy.deepcopy(assumptions)
-            ass.setdefault("capex", {}).setdefault("strategy_scenarios", {})["active_scenario"] = infra
-            ass.setdefault("funding", {})["active_scenario"] = fund
-            srows, smetric = run_model(ass)
-            syears = [str(int(r.get("year", 0))) for r in srows]
-            financial_flow = {y: {
+        year_variants = [2026, 2027, 2028, 2029, 2030] if infra == "hybrid" else [None]
+        for csy in year_variants:
+            for fund in ["equity_only", "revolver_only", "mix"]:
+                ass = copy.deepcopy(assumptions)
+                ass.setdefault("capex", {}).setdefault("strategy_scenarios", {})["active_scenario"] = infra
+                if infra == "hybrid" and csy is not None:
+                    ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_year"] = int(csy)
+                ass.setdefault("funding", {})["active_scenario"] = fund
+                srows, smetric = run_model(ass)
+                syears = [str(int(r.get("year", 0))) for r in srows]
+                financial_flow = {y: {
                 "workplace_ai_revenue": as_float(r.get("workplace_ai_revenue")),
                 "contact_center_ai_revenue": as_float(r.get("contact_center_ai_revenue")),
                 "total_revenue": as_float(r.get("total_revenue")),
@@ -2065,20 +2070,22 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                 "interest_expense": as_float(r.get("interest_expense")),
                 "profit_tax": as_float(r.get("profit_tax")),
                 "net_income": as_float(r.get("net_income")),
-            } for y, r in zip(syears, srows)}
-            def smv(name: str, year: str):
-                v = smetric.get(name)
-                return (v.get(year) if isinstance(v, dict) else v)
-            table_values = {
-                t.get("title"): {
-                    m: ({y: (smetric.get(m, {}) or {}).get(y) for y in years} if isinstance(smetric.get(m), dict) else {years[0]: smetric.get(m)})
-                    for m in t.get("rows", []) if isinstance(m, str)
+                } for y, r in zip(syears, srows)}
+                def smv(name: str, year: str):
+                    v = smetric.get(name)
+                    return (v.get(year) if isinstance(v, dict) else v)
+                table_values = {
+                    t.get("title"): {
+                        m: ({y: (smetric.get(m, {}) or {}).get(y) for y in years} if isinstance(smetric.get(m), dict) else {years[0]: smetric.get(m)})
+                        for m in t.get("rows", []) if isinstance(m, str)
+                    }
+                    for t in report_tables if isinstance(t, dict) and isinstance(t.get("title"), str)
                 }
-                for t in report_tables if isinstance(t, dict) and isinstance(t.get("title"), str)
-            }
-            report_scenario_results[f"{infra}|{fund}"] = {
+                key = f"{infra}|{fund}|{csy}" if infra == "hybrid" and csy is not None else f"{infra}|{fund}"
+                report_scenario_results[key] = {
                 "infra_scenario": infra,
                 "funding_scenario": fund,
+                "construction_start_year": csy if csy is not None else "na",
                 "funding_mix": {
                     "equity_share": float((as_float((((ass.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) or 0.5)),
                     "revolver_share": float((as_float((((ass.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("revolver_share", {}) or {}).get("value")) or 0.5) or 0.5)),
@@ -2096,7 +2103,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                 "years": years,
                 "profit_tax_rate": as_float((((ass.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}).get("value")) or 0.0),
                 "discount_rate": as_float(smv("discount_rate", years[0])) or 0.0,
-            }
+                }
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
 body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
@@ -2147,6 +2154,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='meta'>Official report: YAML base case</div>
   <div class='meta'>Selected infrastructure scenario: {active_scenario}</div>
   <div class='meta'>Selected funding scenario: {assumptions.get("funding",{}).get("active_scenario","mix")}</div>
+  <div class='meta'>Data center construction start year: {base_construction_year if report_base_infra!='rent_gpu_only' else 'N/A'}</div>
   <div class='meta'>Discount rate: {render_value(metric_store.get("discount_rate", {}).get(years[0]), "discount_rate")}</div>
   <div class='meta'>Generated timestamp: {ts}</div>
   <div class='note'>The main report shows the YAML base-case investment scenario. Investment scenario controls are prepared but full report switching is pending.</div>
@@ -2156,18 +2164,20 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='controls'>
     <div class='ctrl'><label>Infrastructure scenario</label><select id='report_infra_scenario'><option>build_own_dc</option><option>rent_gpu_only</option><option selected>hybrid</option></select></div>
     <div class='ctrl'><label>Funding scenario</label><select id='report_funding_scenario'><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select></div>
+    <div class='ctrl'><label>Data center construction start year</label><select id='report_construction_start_year'><option>2026</option><option>2027</option><option selected>2028</option><option>2029</option><option>2030</option></select></div>
     <div class='ctrl'><label>Funding mix equity share (%)</label><input id='report_mix_equity_share' type='number' min='0' max='100' value='50' step='1'/></div>
     <div class='ctrl'><label>Funding mix revolver share</label><div id='report_mix_revolver_share' class='note'>50%</div></div>
   </div>
   <div style='margin-top:8px'><button id='report_apply_scenario'>Apply Investment Scenario</button> <button id='report_reset_scenario'>Reset to YAML Base Scenario</button></div>
   <div id='report_scenario_status' class='note'></div>
+  <div class='note'>Construction start year applies to the hybrid scenario. It changes CAPEX timing, owned/rented GPU split, depreciation, datacenter OPEX, funding, DCF and investment metrics.</div>
   <div class='note'>These controls switch the main report investment scenario. Workbench assumptions remain separate and do not change official report tables until exported to YAML and regenerated.</div>
 </div>
 <section><h2>Executive Summary</h2><div class='grid'>{kpi_html}</div></section>
 <section><h2>Financial Flow — P&L Bridge</h2>
 <div class='card'>
   <div class='ctrl' style='max-width:220px'><label>Year</label><select id='ff_year'>{''.join(f"<option {'selected' if y==years[-1] else ''}>{y}</option>" for y in years)}</select></div>
-  <div class='note'>Financial Flow uses the YAML base-case investment scenario. Workbench changes do not affect this chart until exported to YAML and regenerated.</div>
+  <div class='note'>Financial Flow uses the selected Investment Scenario, including construction start year for hybrid. Workbench changes do not affect this chart until exported to YAML and regenerated.</div>
   <div class='financial-flow-wrap'><div class='financial-flow-plot-wrap'><div id='financial-flow-plot'></div><div id='financial-flow-labels'></div></div></div>
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
@@ -2310,19 +2320,31 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       rows.forEach((r,idx)=>{{ const df=1/Math.pow(1+dr,idx); const d=(Number(r.free_cash_flow)||0)*df; npv+=d; cumD+=d; cum+=(Number(r.free_cash_flow)||0); r.discount_rate=dr; r.discount_factor=df; r.discounted_fcf=d; r.cumulative_discounted_fcf=cumD; if(sp==='Not reached'&&cum>0) sp=String(r.year); if(dp==='Not reached'&&cumD>0) dp=String(r.year); }});
       return {{...basePayload, rows, executive_summary:{{...basePayload.executive_summary,npv:npv,payback:sp}}, custom_metrics:{{npv, simple_payback:sp, discounted_payback:dp}}}};
     }};
+    const getReportScenarioKey=(infra,funding,csy)=> (infra==='hybrid' ? (infra+'|'+funding+'|'+csy) : (infra+'|'+funding));
+    const updateInvestmentScenarioControlState=()=>{{
+      const infra=(document.getElementById('report_infra_scenario')||{{}}).value||'hybrid';
+      const fund=(document.getElementById('report_funding_scenario')||{{}}).value||'mix';
+      const csy=document.getElementById('report_construction_start_year'); const eq=document.getElementById('report_mix_equity_share'); const rev=document.getElementById('report_mix_revolver_share');
+      if(csy) csy.disabled = infra!=='hybrid';
+      if(eq) eq.disabled = fund!=='mix';
+      if(eq&&rev){{ const v=Math.min(100,Math.max(0,Number(eq.value)||0)); eq.value=String(v); rev.textContent=(100-v).toFixed(0)+'%'; }}
+    }};
     const applyReportScenario=()=>{{
       const infra=(document.getElementById('report_infra_scenario')||{{}}).value||'hybrid';
       const funding=(document.getElementById('report_funding_scenario')||{{}}).value||'mix';
+      const csy=(document.getElementById('report_construction_start_year')||{{value:'2028'}}).value||'2028';
       const eqEl=document.getElementById('report_mix_equity_share'); const st=document.getElementById('report_scenario_status');
       const EPS=1e-6; const key=infra+'|'+funding; let payload=REPORT_SCENARIO_RESULTS[key];
+      payload = REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,funding,csy)] || payload;
       if(!payload){{ if(st) st.textContent='Scenario payload not found.'; return; }}
       let eqShare=funding==='equity_only'?1.0:(funding==='revolver_only'?0.0:Math.min(1,Math.max(0,(Number(eqEl?.value)||0)/100)));
       let revShare=1-eqShare; if(eqEl&&funding!=='mix') eqEl.value=String(Math.round(eqShare*100)); const rv=document.getElementById('report_mix_revolver_share'); if(rv) rv.textContent=(revShare*100).toFixed(0)+'%';
-      const defaultEq=((REPORT_SCENARIO_RESULTS[infra+'|mix']?.funding_mix?.equity_share)||0.5);
-      if(funding==='mix' && Math.abs(eqShare-1.0)<EPS) payload=REPORT_SCENARIO_RESULTS[infra+'|equity_only'];
-      else if(funding==='mix' && Math.abs(eqShare-0.0)<EPS) payload=REPORT_SCENARIO_RESULTS[infra+'|revolver_only'];
-      else if(funding==='mix' && Math.abs(eqShare-defaultEq)<EPS) payload=REPORT_SCENARIO_RESULTS[infra+'|mix'];
-      else if(funding==='mix') payload=buildCustomFundingPayload(REPORT_SCENARIO_RESULTS[infra+'|mix'],eqShare,revShare);
+      const baseMixPayload = REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'mix',csy)] || REPORT_SCENARIO_RESULTS[infra+'|mix'];
+      const defaultEq=((baseMixPayload?.funding_mix?.equity_share)||0.5);
+      if(funding==='mix' && Math.abs(eqShare-1.0)<EPS) payload=REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'equity_only',csy)] || REPORT_SCENARIO_RESULTS[infra+'|equity_only'];
+      else if(funding==='mix' && Math.abs(eqShare-0.0)<EPS) payload=REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'revolver_only',csy)] || REPORT_SCENARIO_RESULTS[infra+'|revolver_only'];
+      else if(funding==='mix' && Math.abs(eqShare-defaultEq)<EPS) payload=baseMixPayload;
+      else if(funding==='mix') payload=buildCustomFundingPayload(baseMixPayload,eqShare,revShare);
       console.debug('Funding parity infra='+infra+' funding='+funding+' eq='+eqShare+' rev='+revShare+' defaultEq='+defaultEq+' key='+key);
       const hk=document.querySelector("section h2 + .grid .kpi .k");
       document.querySelectorAll('#financial-flow-plot').forEach(()=>{{}});
@@ -2332,7 +2354,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       FIN_FLOW = Object.fromEntries((payload.rows||[]).map(r=>[String(r.year),{{workplace_ai_revenue:r.workplace_ai_revenue,contact_center_ai_revenue:r.contact_center_ai_revenue,total_revenue:r.total_revenue,total_cogs:r.total_cogs,gross_profit:r.gross_profit,total_sga:r.total_sga,ebitda:r.ebitda,total_depreciation_and_amortization:r.total_depreciation_and_amortization,interest_expense:r.interest_expense,profit_tax:r.profit_tax,net_income:r.net_income}}])); if(ffYear) renderFinancialFlow(ffYear.value);
       const basis=document.querySelector('.card .meta:nth-child(2)');
       const metas=document.querySelectorAll('.card .meta');
-      if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; }}
+      if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; if(metas[3]) metas[3].textContent='Data center construction start year: '+(infra==='rent_gpu_only'?'N/A':csy); }}
       const bad=(payload.rows||[]).find(r=>Math.abs(Number(r.balance_check)||0)>1); if(st) st.textContent=(funding==='mix'&&Math.abs(eqShare-1.0)<EPS)?('Applied '+infra+' / mix with 100% equity and 0% revolver. Matches equity_only.'):((funding==='mix'&&Math.abs(eqShare)<EPS)?('Applied '+infra+' / mix with 0% equity and 100% revolver. Matches revolver_only.'):((funding==='mix'&&Math.abs(eqShare-defaultEq)<EPS)?('Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver. Uses precomputed YAML/default mix.'):((funding==='mix'?'Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver.':'Applied '+infra+' / '+funding+'.'))))+(bad?' Warning: balance check differs by '+Number(bad.balance_check).toFixed(2)+' in '+bad.year+'.':'');
     }};
   const recalc = () => {{
@@ -2367,14 +2389,14 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     recalc();
   }}
   try {{
-    const baseInfra={json.dumps(report_base_infra)}; const baseFunding={json.dumps(report_base_funding)}; const baseEq={float(report_base_mix_equity_pct)};
-    const infra=document.getElementById('report_infra_scenario'),fund=document.getElementById('report_funding_scenario'),eq=document.getElementById('report_mix_equity_share'),rev=document.getElementById('report_mix_revolver_share'),st=document.getElementById('report_scenario_status');
+    const baseInfra={json.dumps(report_base_infra)}; const baseFunding={json.dumps(report_base_funding)}; const baseEq={float(report_base_mix_equity_pct)}; const baseCsy={int(base_construction_year)};
+    const infra=document.getElementById('report_infra_scenario'),fund=document.getElementById('report_funding_scenario'),csy=document.getElementById('report_construction_start_year'),eq=document.getElementById('report_mix_equity_share'),rev=document.getElementById('report_mix_revolver_share'),st=document.getElementById('report_scenario_status');
     const sync=()=>{{ if(!fund||!eq||!rev) return; if(fund.value==='equity_only') eq.value='100'; else if(fund.value==='revolver_only') eq.value='0'; eq.disabled=fund.value!=='mix'; const v=Math.min(100,Math.max(0,Number(eq.value)||0)); eq.value=String(v); rev.textContent=(100-v).toFixed(0)+'%'; }};
-    if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(eq) eq.value=String(Math.round(baseEq)); sync();
-    if(fund) fund.addEventListener('change',sync); if(eq) eq.addEventListener('input',sync);
+    if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState();
+    if(fund) fund.addEventListener('change',()=>{{sync(); updateInvestmentScenarioControlState();}}); if(eq) eq.addEventListener('input',()=>{{sync(); updateInvestmentScenarioControlState();}}); if(infra) infra.addEventListener('change',updateInvestmentScenarioControlState);
     const apply=document.getElementById('report_apply_scenario'), reset=document.getElementById('report_reset_scenario');
     if(apply) apply.addEventListener('click',()=>{{ sync(); applyReportScenario(); }});
-    if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(eq) eq.value=String(Math.round(baseEq)); sync(); applyReportScenario(); if(st) st.textContent='Reset to YAML base investment scenario.'; }});
+    if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(csy) csy.value=String(baseCsy); if(eq) eq.value=String(Math.round(baseEq)); sync(); updateInvestmentScenarioControlState(); applyReportScenario(); if(st) st.textContent='Reset to YAML base investment scenario.'; }});
     applyReportScenario();
   }} catch(_e) {{}}
 
