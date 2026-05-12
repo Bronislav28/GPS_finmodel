@@ -2599,6 +2599,16 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       else if(Math.abs(current.npv)<1e-12) v.classList.add('zero');
     }}
   }};
+  const renderScenarioInvestmentMetrics=(summary)=>{{
+    const cards=[...document.querySelectorAll('.card')];
+    const card=cards.find(c=>c.querySelector('h3') && c.querySelector('h3').textContent.trim()==='Investment Metrics');
+    if(!card) return;
+    const fmt=(k,v)=>{{ if(v===null||v===undefined||Number.isNaN(Number(v))&&k!=='simple_payback'&&k!=='discounted_payback') return "<span class='na'>N/A</span>"; if(k==='irr') return formatReportValue('irr',v); if(k==='peak_required_gpu') return formatReportValue('required_gpu',v); if(k==='simple_payback'||k==='discounted_payback') return String(v??'N/A'); return formatReportValue(k,v); }};
+    const rows=[['npv','NPV'],['irr','IRR'],['simple_payback','Simple Payback'],['discounted_payback','Discounted Payback'],['required_investments','Required Investments'],['peak_required_gpu','Peak Required GPU']];
+    const body=rows.map(([k,label])=>`<tr><td class='metric'>${{label}}</td><td class='num'>${{fmt(k,summary?.[k])}}</td></tr>`).join('');
+    const host=card.querySelector('.table-wrap')||card;
+    host.innerHTML=`<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>${{body}}</tbody></table>`;
+  }};
   const current = {{npv:0}};
   const OPERATING_SCENARIO_RESULTS = {operating_scenario_json};
   let currentMonthlyRows = [];
@@ -2743,6 +2753,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       const annualRows=scenario.rowsAnnual||[];
       const map={{'NPV':'npv','IRR':'irr','Required Investments':'required_investments','Peak Required GPU':'peak_required_gpu','Payback':'simple_payback'}};
       document.querySelectorAll('section .kpi').forEach(card=>{{ const k=(card.querySelector('.k')?.textContent||'').trim(); const m=map[k]; if(!m) return; const v=scenario.summary[m]; const el=card.querySelector('.v'); if(!el) return; if(k==='Payback') el.textContent=(v===null||v===undefined)?'N/A':String(v); else el.innerHTML=formatReportValue(m==='peak_required_gpu'?'required_gpu':m,v); }});
+      renderScenarioInvestmentMetrics(scenario.summary);
       const missingWarn=new Set();
       document.querySelectorAll('td[data-card][data-metric][data-year]').forEach(td=>{{ const metric=td.getAttribute('data-metric'); const year=td.getAttribute('data-year'); const rr=annualRows.find(x=>String(x.year)===String(year)); let v=rr?rr[metric]:undefined; if(v===undefined||v===null||Number.isNaN(Number(v))){{ td.innerHTML=\"<span class='na'>N/A</span>\"; if(!missingWarn.has(metric)){{console.warn('Missing annual metric',metric); missingWarn.add(metric);}} }} else td.innerHTML=formatReportValue(metric,v); }});
       FIN_FLOW = Object.fromEntries((annualRows||[]).map(r=>[String(r.year),{{workplace_ai_revenue:r.workplace_ai_revenue,contact_center_ai_revenue:r.contact_center_ai_revenue,total_revenue:r.total_revenue,total_cogs:r.total_cogs,gross_profit:r.gross_profit,total_sga:r.total_sga,ebitda:r.ebitda,total_depreciation_and_amortization:r.total_depreciation_and_amortization,interest_expense:r.interest_expense,profit_tax:r.profit_tax,net_income:r.net_income}}])); if(ffYear) renderFinancialFlow(ffYear.value);
