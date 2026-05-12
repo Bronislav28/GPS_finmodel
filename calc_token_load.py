@@ -1660,7 +1660,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
                         display = render_value(fv, c if c in pct_metrics or c in x_metrics else None)
                         cells.append(f"<td>{display}</td>")
                 body_rows.append(f"<tr><td>{row_name}</td>{''.join(cells)}</tr>")
-            tables_by_title[title] = f"<div class='card'><h3>{title}</h3><table><thead><tr><th>Scenario</th>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>"
+            tables_by_title[title] = f"<div class='card'><h3>Infrastructure Scenario Comparison</h3><div class='note'>Funding scenario is controlled above. Full 3×3 comparison can be added later.</div><table><thead><tr><th>Scenario</th>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>"
             continue
         body = []
         for metric in table.get("rows", []):
@@ -1674,7 +1674,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
             cells=[]
             for y in years:
                 v = vals.get(y) if vals else None
-                cells.append(f"<td class='num'>{render_value(v, metric)}</td>")
+                cells.append(f"<td class='num' data-card='{title}' data-metric='{metric}' data-year='{y}'>{render_value(v, metric)}</td>")
             body.append(f"<tr><td class='metric'>{metric}</td>{''.join(cells)}</tr>")
         tables_by_title[title] = f"<div class='card'><h3>{title}</h3><table><thead><tr><th>Metric</th>{hy}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
     wt,cm,matrix = build_sensitivity_matrix(assumptions, rows)
@@ -2045,6 +2045,54 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     report_base_infra = str((assumptions.get("capex", {}).get("strategy_scenarios", {}) or {}).get("active_scenario", "hybrid"))
     report_base_funding = str((assumptions.get("funding", {}) or {}).get("active_scenario", "mix"))
     report_base_mix_equity_pct = (as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) * 100.0)
+    report_scenario_results: dict[str, Any] = {}
+    for infra in ["build_own_dc", "rent_gpu_only", "hybrid"]:
+        for fund in ["equity_only", "revolver_only", "mix"]:
+            ass = copy.deepcopy(assumptions)
+            ass.setdefault("capex", {}).setdefault("strategy_scenarios", {})["active_scenario"] = infra
+            ass.setdefault("funding", {})["active_scenario"] = fund
+            srows, smetric = run_model(ass)
+            syears = [str(int(r.get("year", 0))) for r in srows]
+            financial_flow = {y: {
+                "workplace_ai_revenue": as_float(r.get("workplace_ai_revenue")),
+                "contact_center_ai_revenue": as_float(r.get("contact_center_ai_revenue")),
+                "total_revenue": as_float(r.get("total_revenue")),
+                "total_cogs": as_float(r.get("total_cogs")),
+                "gross_profit": as_float(r.get("gross_profit")),
+                "total_sga": as_float(r.get("total_sga")),
+                "ebitda": as_float(r.get("ebitda")),
+                "total_depreciation_and_amortization": as_float(r.get("total_depreciation_and_amortization")),
+                "interest_expense": as_float(r.get("interest_expense")),
+                "profit_tax": as_float(r.get("profit_tax")),
+                "net_income": as_float(r.get("net_income")),
+            } for y, r in zip(syears, srows)}
+            def smv(name: str, year: str):
+                v = smetric.get(name)
+                return (v.get(year) if isinstance(v, dict) else v)
+            table_values = {
+                t.get("title"): {
+                    m: ({y: (smetric.get(m, {}) or {}).get(y) for y in years} if isinstance(smetric.get(m), dict) else {years[0]: smetric.get(m)})
+                    for m in t.get("rows", []) if isinstance(m, str)
+                }
+                for t in report_tables if isinstance(t, dict) and isinstance(t.get("title"), str)
+            }
+            report_scenario_results[f"{infra}|{fund}"] = {
+                "infra_scenario": infra,
+                "funding_scenario": fund,
+                "funding_mix": {
+                    "equity_share": float((as_float((((ass.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) or 0.5)),
+                    "revolver_share": float((as_float((((ass.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("revolver_share", {}) or {}).get("value")) or 0.5) or 0.5)),
+                },
+                "executive_summary": {
+                    "npv": as_float(smv("npv", years[0])),
+                    "irr": as_float(smv("irr", years[0])),
+                    "required_investments": sum((as_float(r.get("total_capex")) or 0.0) for r in srows),
+                    "peak_required_gpu": max((as_float(r.get("required_gpu")) or 0.0) for r in srows),
+                    "payback": smv("simple_payback", years[0]),
+                },
+                "financial_flow": financial_flow,
+                "tables": table_values,
+            }
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
 body{{margin:0;background:#f6f8fb;color:#1f2937;font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}}
@@ -2200,7 +2248,9 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     }}
   }};
   const current = {{npv:0}};
-  const FIN_FLOW = {json.dumps(financial_flow_data)};
+  const REPORT_SCENARIO_RESULTS = {json.dumps(report_scenario_results)};
+  window.REPORT_SCENARIO_RESULTS = REPORT_SCENARIO_RESULTS;
+  let FIN_FLOW = {json.dumps(financial_flow_data)};
   const ffPlot = document.getElementById('financial-flow-plot');
   const ffLabels = document.getElementById('financial-flow-labels');
   const ffYear = document.getElementById('ff_year');
@@ -2227,7 +2277,32 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     if(ffLabels){{ ffLabels.innerHTML=names.map((nm,i)=>'<div class=\"ff-label\" style=\"left:'+(Math.max(2,pos[i][0]-3))+'%;top:'+pos[i][1]+'%\"><div class=\"name\">'+nm+'</div><div class=\"value\">'+ffFmt(vals[i])+'</div>'+(margins[i]?'<div class=\"margin\">'+margins[i]+'</div>':'')+'</div>').join(''); }}
     Plotly.react(ffPlot,[sankey],{{margin:{{l:20,r:20,t:8,b:8}},height:400,font:{{size:10}},paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff'}},{{responsive:true,displayModeBar:false}});
   }};
-  if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
+    if(ffYear){{ ffYear.addEventListener('change',()=>renderFinancialFlow(ffYear.value)); renderFinancialFlow(ffYear.value); }}
+    const formatReportValue=(metric,v)=>{{
+      if(v===null||v===undefined||Number.isNaN(Number(v))) return "<span class='na'>N/A</span>";
+      const fv=Number(v); const pct=new Set(['discount_rate','irr','roic','roe','roa','utilization','target_contribution_margin','contribution_margin']);
+      if(pct.has(metric)) return `<span class='${{fv<0?'neg':(Math.abs(fv)<1e-12?'zero':'')}}'>${{(fv*100).toFixed(1)}}%</span>`;
+      if(['required_gpu','owned_gpu','rented_gpu'].includes(metric)||metric.endsWith('_year')) return `<span class='${{fv<0?'neg':(Math.abs(fv)<1e-12?'zero':'')}}'>${{Math.round(fv)}}</span>`;
+      return `<span class='${{fv<0?'neg':(Math.abs(fv)<1e-12?'zero':'')}}'>${{fv.toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})}}</span>`;
+    }};
+    const applyReportScenario=()=>{{
+      const infra=(document.getElementById('report_infra_scenario')||{{}}).value||'hybrid';
+      const funding=(document.getElementById('report_funding_scenario')||{{}}).value||'mix';
+      const eqEl=document.getElementById('report_mix_equity_share'); const st=document.getElementById('report_scenario_status');
+      const key=infra+'|'+funding; const payload=REPORT_SCENARIO_RESULTS[key];
+      if(!payload){{ if(st) st.textContent='Scenario payload not found.'; return; }}
+      if(funding==='mix'&&eqEl){{ const eq=Number(eqEl.value)||0; const baseEq=(payload.funding_mix.equity_share||0)*100; if(Math.abs(eq-baseEq)>0.01&&st) st.textContent='Custom mix shares are not recalculated in V1; using YAML/default mix shares.'; eqEl.value=String(Math.round(baseEq)); const rv=document.getElementById('report_mix_revolver_share'); if(rv) rv.textContent=(100-baseEq).toFixed(0)+'%'; }}
+      const hk=document.querySelector("section h2 + .grid .kpi .k");
+      document.querySelectorAll('#financial-flow-plot').forEach(()=>{{}});
+      const map={{'NPV':'npv','IRR':'irr','Required Investments':'required_investments','Peak Required GPU':'peak_required_gpu','Payback':'payback'}};
+      document.querySelectorAll('section .kpi').forEach(card=>{{ const k=(card.querySelector('.k')?.textContent||'').trim(); const m=map[k]; if(!m) return; const v=payload.executive_summary[m]; const el=card.querySelector('.v'); if(!el) return; if(k==='Payback') el.textContent=(v===null||v===undefined)?'N/A':String(v); else el.innerHTML=formatReportValue(m==='peak_required_gpu'?'required_gpu':m,v); }});
+      document.querySelectorAll('td[data-card][data-metric][data-year]').forEach(td=>{{ const card=td.getAttribute('data-card'); const metric=td.getAttribute('data-metric'); const year=td.getAttribute('data-year'); const v=payload.tables?.[card]?.[metric]?.[year]; td.innerHTML=formatReportValue(metric, v); }});
+      FIN_FLOW = payload.financial_flow || FIN_FLOW; if(ffYear) renderFinancialFlow(ffYear.value);
+      const basis=document.querySelector('.card .meta:nth-child(2)');
+      const metas=document.querySelectorAll('.card .meta');
+      if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; }}
+      if(st) st.textContent='Applied investment scenario: '+key+'.';
+    }};
   const recalc = () => {{
     if(!input) return;
     try {{
@@ -2266,8 +2341,9 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(eq) eq.value=String(Math.round(baseEq)); sync();
     if(fund) fund.addEventListener('change',sync); if(eq) eq.addEventListener('input',sync);
     const apply=document.getElementById('report_apply_scenario'), reset=document.getElementById('report_reset_scenario');
-    if(apply) apply.addEventListener('click',()=>{{ sync(); if(st) st.textContent='Scenario controls prepared; full report switching will be wired in the next step.'; }});
-    if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(eq) eq.value=String(Math.round(baseEq)); sync(); if(st) st.textContent='Reset to YAML base scenario values.'; }});
+    if(apply) apply.addEventListener('click',()=>{{ sync(); applyReportScenario(); }});
+    if(reset) reset.addEventListener('click',()=>{{ if(infra) infra.value=baseInfra; if(fund) fund.value=baseFunding; if(eq) eq.value=String(Math.round(baseEq)); sync(); applyReportScenario(); if(st) st.textContent='Reset to YAML base investment scenario.'; }});
+    applyReportScenario();
   }} catch(_e) {{}}
 
   __SCENARIO_LAB_JS__
