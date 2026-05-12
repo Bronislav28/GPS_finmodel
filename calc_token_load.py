@@ -20,6 +20,7 @@ ENABLE_MONTHLY_PREVIEW = False
 ENABLE_MONTHLY_DEBUG_OUTPUT = True
 OUT_MONTHLY_ROWS_PREVIEW = OUT_DIR / "monthly_rows_preview.csv"
 OUT_MONTHLY_VS_ANNUAL_AUDIT = OUT_DIR / "monthly_vs_annual_audit.csv"
+OUT_MONTHLY_VALIDATION = OUT_DIR / "monthly_validation_checks.csv"
 TARGET_YEARS = [2026, 2027, 2028, 2029, 2030]
 
 
@@ -138,12 +139,60 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
     by_year = {int(r["year"]): r for r in annual_rows}
     months = build_monthly_calendar(min(by_year), max(by_year))
     ma = build_monthly_assumptions(ass, months)
+    funding_cfg = ass.get("funding", {}) or {}
+    fsc = str((scenario_overrides or {}).get("funding_scenario") or funding_cfg.get("active_scenario") or "mix")
+    mix_eq = as_float((((funding_cfg.get("scenarios", {}) or {}).get("mix", {}) or {}).get("equity_share", {}).get("value")) or 0.5) or 0.5
+    eq_share = 1.0 if fsc == "equity_only" else 0.0 if fsc == "revolver_only" else float((scenario_overrides or {}).get("equity_share", mix_eq))
+    rev_share = 1.0 - eq_share
+    discount_annual = as_float((((ass.get("investment_metrics", {}) or {}).get("discount_rate", {}) or {}).get("value", {}).get(min(by_year))) or 0.2) or 0.2
+    discount_monthly = (1.0 + discount_annual) ** (1.0 / 12.0) - 1.0
     out: list[dict[str, Any]] = []
+    prev_cash = 0.0; prev_rev = 0.0; prev_pic = 0.0; prev_re = 0.0; cum_dcf = 0.0; cum_fcf = 0.0
     for mo in months:
         y = int(mo["year"]); mk = mo["month_key"]; r = by_year[y]
         wp_daily = (as_float(r.get("workplace_annual_tokens")) or 0.0) / max((as_float(r.get("working_days_per_year")) or 250), 1)
         cc_daily = (as_float(r.get("contact_center_annual_tokens")) or 0.0) / max((as_float(r.get("calendar_days_per_year")) or 365), 1)
         wp_month = wp_daily * float(mo["working_days"]); cc_month = cc_daily * float(mo["days_in_month"]); total = wp_month + cc_month
+        annual_interest_rate = as_float(r.get("revolver_interest_rate")) or 0.0
+        monthly_interest_rate = annual_interest_rate / 12.0  # keep simple split for Step 3 consistency
+        da = (as_float(r.get("total_depreciation_and_amortization")) or 0.0) / 12.0
+        ebit = (as_float(r.get("ebit")) or 0.0) / 12.0
+        capex_month = (as_float(r.get("total_capex")) or 0.0) / 12.0
+        min_cash = (as_float(r.get("minimum_cash_balance")) or 0.0) / 12.0
+        interest = prev_rev * monthly_interest_rate
+        for _ in range(8):
+            ebt = ebit - interest
+            taxm = max(ebt, 0.0) * (as_float(r.get("profit_tax_rate")) or 0.0)
+            ni = ebt - taxm
+            ocf = ni + da
+            icf = -capex_month
+            pre = prev_cash + ocf + icf
+            need = max(-pre, 0.0)
+            eq = need * eq_share; draw = need * rev_share
+            cash_after = pre + eq + draw
+            repay = min(prev_rev, max(cash_after - min_cash, 0.0))
+            rev_bal = prev_rev + draw - repay
+            new_interest = ((prev_rev + rev_bal) / 2.0) * monthly_interest_rate
+            if abs(new_interest - interest) < 0.01:
+                interest = new_interest
+                break
+            interest = new_interest
+        ebt = ebit - interest
+        taxm = max(ebt, 0.0) * (as_float(r.get("profit_tax_rate")) or 0.0)
+        ni = ebt - taxm
+        ocf = ni + da
+        icf = -capex_month
+        pre = prev_cash + ocf + icf
+        need = max(-pre, 0.0)
+        eq = need * eq_share; draw = need * rev_share
+        cash_after = pre + eq + draw
+        repay = min(prev_rev, max(cash_after - min_cash, 0.0))
+        rev_bal = prev_rev + draw - repay
+        avg_rev = (prev_rev + rev_bal) / 2.0
+        fcf = ocf + icf
+        dcf = fcf / ((1.0 + discount_monthly) ** int(mo["month_index"]))
+        cum_dcf += dcf; cum_fcf += fcf
+        close_cash = cash_after - repay
         monthly = {
             **mo,
             "active_users": (as_float(r.get("workplace_active_users")) or 0.0) / 12.0,
@@ -164,14 +213,32 @@ def calculate_monthly(assumptions: dict[str, Any], *, scenario_overrides: dict[s
             "gross_profit": (as_float(r.get("gross_profit")) or 0.0) / 12.0,
             "ebitda": (as_float(r.get("ebitda")) or 0.0) / 12.0,
             "total_depreciation_and_amortization": (as_float(r.get("total_depreciation_and_amortization")) or 0.0) / 12.0,
-            "ebit": (as_float(r.get("ebit")) or 0.0) / 12.0,
-            "interest_expense": (as_float(r.get("interest_expense")) or 0.0) / 12.0,  # TODO monthly funding model
-            "ebt": (as_float(r.get("ebt")) or 0.0) / 12.0, "profit_tax": (as_float(r.get("profit_tax")) or 0.0) / 12.0, "net_income": (as_float(r.get("net_income")) or 0.0) / 12.0,
+            "ebit": ebit,
+            "opening_cash": prev_cash, "opening_revolver_balance": prev_rev, "opening_paid_in_capital": prev_pic, "opening_retained_earnings": prev_re,
+            "interest_expense": interest, "ebt": ebt, "profit_tax": taxm, "net_income": ni,
             "gpu_capex": (as_float(r.get("gpu_capex")) or 0.0) / 12.0, "gpu_infra_capex": (as_float(r.get("gpu_infra_capex")) or 0.0) / 12.0, "datacenter_construction_capex": (as_float(r.get("datacenter_construction_capex")) or 0.0) / 12.0, "office_capex": (as_float(r.get("office_capex")) or 0.0) / 12.0, "intangible_capex": (as_float(r.get("intangible_capex")) or 0.0) / 12.0, "total_capex": (as_float(r.get("total_capex")) or 0.0) / 12.0,
-            "operating_cash_flow": (as_float(r.get("operating_cash_flow")) or 0.0) / 12.0, "investing_cash_flow": (as_float(r.get("investing_cash_flow")) or 0.0) / 12.0, "free_cash_flow": (as_float(r.get("free_cash_flow")) or 0.0) / 12.0,
+            "operating_cash_flow": ocf, "investing_cash_flow": icf, "closing_cash_before_funding": pre, "funding_need": need, "equity_injection": eq, "revolver_drawdown": draw, "cash_after_drawdown": cash_after, "revolver_repayment": repay, "revolver_balance": rev_bal, "average_revolver_balance": avg_rev, "financing_cash_flow": eq + draw - repay, "net_cash_flow": ocf + icf + (eq + draw - repay), "closing_cash_after_funding": close_cash, "closing_cash": close_cash, "cumulative_cash": close_cash, "cash": close_cash, "free_cash_flow": fcf,
+            "paid_in_capital": prev_pic + eq, "retained_earnings": prev_re + ni, "total_equity": (prev_pic + eq) + (prev_re + ni), "total_liabilities": rev_bal, "net_ppe": (as_float(r.get("net_ppe")) or 0.0), "net_intangible_assets": (as_float(r.get("net_intangible_assets")) or 0.0), "total_assets": close_cash + (as_float(r.get("net_ppe")) or 0.0) + (as_float(r.get("net_intangible_assets")) or 0.0),
+            "balance_check": (close_cash + (as_float(r.get("net_ppe")) or 0.0) + (as_float(r.get("net_intangible_assets")) or 0.0)) - rev_bal - (((prev_pic + eq) + (prev_re + ni))),
+            "discount_rate_annual": discount_annual, "discount_rate_monthly": discount_monthly, "discount_factor": 1.0 / ((1.0 + discount_monthly) ** int(mo["month_index"])), "discounted_fcf": dcf, "cumulative_discounted_fcf": cum_dcf, "npv_to_date": cum_dcf,
             "utilization": ma["utilization"].get(mk, 0.0), "target_contribution_margin": ma["target_contribution_margin"].get(mk, 0.0),
         }
         out.append(monthly)
+        prev_cash = close_cash; prev_rev = rev_bal; prev_pic = monthly["paid_in_capital"]; prev_re = monthly["retained_earnings"]
+    # simple monthly metrics
+    def irr_bisect(cfs: list[float]) -> float | None:
+        if not cfs or not (any(v > 0 for v in cfs) and any(v < 0 for v in cfs)): return None
+        lo, hi = -0.99, 2.0
+        for _ in range(80):
+            mid = (lo + hi) / 2; npv = sum(v / ((1 + mid) ** i) for i, v in enumerate(cfs))
+            if abs(npv) < 1e-6: return mid
+            if npv > 0: lo = mid
+            else: hi = mid
+        return mid
+    mirr = irr_bisect([as_float(r.get("free_cash_flow")) or 0.0 for r in out])
+    for r in out:
+        r["monthly_irr"] = mirr
+        r["annualized_irr"] = ((1 + mirr) ** 12 - 1) if mirr is not None else None
     return out
 
 
@@ -182,7 +249,7 @@ def aggregate_monthly_to_annual(monthly_rows: list[dict[str, Any]]) -> list[dict
     for y, rows in sorted(by.items()):
         s = lambda k: sum((as_float(r.get(k)) or 0.0) for r in rows)
         mx = lambda k: max((as_float(r.get(k)) or 0.0) for r in rows)
-        out.append({"year": y, "workplace_annual_tokens": s("workplace_monthly_tokens"), "contact_center_annual_tokens": s("contact_center_monthly_tokens"), "total_annual_tokens": s("total_monthly_tokens"), "required_gpu": mx("required_gpu"), "total_revenue": s("total_revenue"), "total_cogs": s("total_cogs"), "ebitda": s("ebitda"), "ebit": s("ebit"), "net_income": s("net_income"), "total_capex": s("total_capex"), "operating_cash_flow": s("operating_cash_flow"), "investing_cash_flow": s("investing_cash_flow"), "free_cash_flow": s("free_cash_flow")})
+        out.append({"year": y, "workplace_annual_tokens": s("workplace_monthly_tokens"), "contact_center_annual_tokens": s("contact_center_monthly_tokens"), "total_annual_tokens": s("total_monthly_tokens"), "required_gpu": mx("required_gpu"), "total_revenue": s("total_revenue"), "total_cogs": s("total_cogs"), "ebitda": s("ebitda"), "ebit": s("ebit"), "interest_expense": s("interest_expense"), "ebt": s("ebt"), "profit_tax": s("profit_tax"), "net_income": s("net_income"), "total_capex": s("total_capex"), "operating_cash_flow": s("operating_cash_flow"), "investing_cash_flow": s("investing_cash_flow"), "financing_cash_flow": s("financing_cash_flow"), "free_cash_flow": s("free_cash_flow"), "equity_injection": s("equity_injection"), "revolver_drawdown": s("revolver_drawdown"), "revolver_repayment": s("revolver_repayment"), "discounted_fcf": s("discounted_fcf"), "opening_cash": as_float(rows[0].get("opening_cash")) or 0.0, "closing_cash": as_float(rows[-1].get("closing_cash")) or 0.0, "cumulative_cash": as_float(rows[-1].get("cumulative_cash")) or 0.0, "revolver_balance": as_float(rows[-1].get("revolver_balance")) or 0.0, "cash": as_float(rows[-1].get("cash")) or 0.0, "paid_in_capital": as_float(rows[-1].get("paid_in_capital")) or 0.0, "retained_earnings": as_float(rows[-1].get("retained_earnings")) or 0.0, "total_equity": as_float(rows[-1].get("total_equity")) or 0.0, "total_assets": as_float(rows[-1].get("total_assets")) or 0.0, "total_liabilities": as_float(rows[-1].get("total_liabilities")) or 0.0, "balance_check": as_float(rows[-1].get("balance_check")) or 0.0, "cumulative_discounted_fcf": as_float(rows[-1].get("cumulative_discounted_fcf")) or 0.0})
     return out
 
 
@@ -195,7 +262,7 @@ def write_monthly_rows_preview(monthly_rows: list[dict[str, Any]], output: Path)
 
 def write_monthly_vs_annual_audit(annual_rows: list[dict[str, Any]], monthly_annual_rows: list[dict[str, Any]], output: Path) -> None:
     am = {int(r["year"]): r for r in annual_rows}; mm = {int(r["year"]): r for r in monthly_annual_rows}
-    metrics = ["total_annual_tokens", "required_gpu", "total_revenue", "total_cogs", "ebitda", "ebit", "net_income", "total_capex", "operating_cash_flow", "investing_cash_flow", "free_cash_flow"]
+    metrics = ["total_annual_tokens", "required_gpu", "total_revenue", "total_cogs", "ebitda", "ebit", "net_income", "total_capex", "operating_cash_flow", "investing_cash_flow", "free_cash_flow", "funding_need", "equity_injection", "revolver_drawdown", "revolver_repayment", "revolver_balance", "interest_expense", "closing_cash", "balance_check", "discounted_fcf"]
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f); w.writerow(["metric", "year", "annual_value", "monthly_aggregated_value", "difference", "pct_difference", "status"])
@@ -207,6 +274,27 @@ def write_monthly_vs_annual_audit(annual_rows: list[dict[str, Any]], monthly_ann
                 tol = 5.0 if m == "required_gpu" else 1.0
                 ok = abs(pct) <= tol if m != "required_gpu" else (abs(diff) <= 1 or abs(pct) <= 5)
                 w.writerow([m, y, av, mv, diff, pct, "OK" if ok else "WARNING"])
+
+
+def write_monthly_validation_checks(monthly_rows: list[dict[str, Any]], output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f); w.writerow(["month_key", "check", "expected", "actual", "difference", "status"])
+        prev_cdf = 0.0
+        for r in monthly_rows:
+            mk = r["month_key"]
+            bal = as_float(r.get("balance_check")) or 0.0
+            w.writerow([mk, "balance_check", 0.0, bal, bal, "OK" if abs(bal) <= 1.0 else "WARNING"])
+            net = as_float(r.get("net_cash_flow")) or 0.0
+            ident = (as_float(r.get("operating_cash_flow")) or 0.0) + (as_float(r.get("investing_cash_flow")) or 0.0) + (as_float(r.get("financing_cash_flow")) or 0.0)
+            w.writerow([mk, "funding_identity", ident, net, net - ident, "OK" if abs(net - ident) <= 1e-6 else "WARNING"])
+            close = as_float(r.get("closing_cash")) or 0.0; open_ = as_float(r.get("opening_cash")) or 0.0
+            w.writerow([mk, "cash_rollforward", open_ + net, close, close - (open_ + net), "OK" if abs(close - (open_ + net)) <= 1e-6 else "WARNING"])
+            rev = as_float(r.get("revolver_balance")) or 0.0; orev = as_float(r.get("opening_revolver_balance")) or 0.0; draw = as_float(r.get("revolver_drawdown")) or 0.0; rep = as_float(r.get("revolver_repayment")) or 0.0
+            w.writerow([mk, "revolver_rollforward", orev + draw - rep, rev, rev - (orev + draw - rep), "OK" if abs(rev - (orev + draw - rep)) <= 1e-6 else "WARNING"])
+            cdf = as_float(r.get("cumulative_discounted_fcf")) or 0.0; d = as_float(r.get("discounted_fcf")) or 0.0
+            w.writerow([mk, "dcf_rollforward", prev_cdf + d, cdf, cdf - (prev_cdf + d), "OK" if abs(cdf - (prev_cdf + d)) <= 1e-6 else "WARNING"])
+            prev_cdf = cdf
 
 
 def as_float(value: Any) -> float | None:
@@ -3037,6 +3125,7 @@ def main() -> None:
         months_rows = calculate_monthly(assumptions)
         write_monthly_rows_preview(months_rows, OUT_MONTHLY_ROWS_PREVIEW)
         write_monthly_vs_annual_audit(rows, aggregate_monthly_to_annual(months_rows), OUT_MONTHLY_VS_ANNUAL_AUDIT)
+        write_monthly_validation_checks(months_rows, OUT_MONTHLY_VALIDATION)
     if ENABLE_MONTHLY_PREVIEW:
         write_monthly_preview(assumptions, OUT_MONTHLY_PREVIEW)
 
@@ -3055,6 +3144,7 @@ def main() -> None:
     if ENABLE_MONTHLY_DEBUG_OUTPUT:
         print(f"MONTHLY ROWS: {OUT_MONTHLY_ROWS_PREVIEW}")
         print(f"MONTHLY VS ANNUAL AUDIT: {OUT_MONTHLY_VS_ANNUAL_AUDIT}")
+        print(f"MONTHLY VALIDATION: {OUT_MONTHLY_VALIDATION}")
 
 
 if __name__ == "__main__":
