@@ -2428,6 +2428,7 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     mix_cfg = scenarios_cfg.get("mix", {}) or {}
     base_eq_share = float(as_float(((mix_cfg.get("equity_share", {}) or {}).get("value")) or 0.5) or 0.5)
     base_rev_share = float(as_float(((mix_cfg.get("revolver_share", {}) or {}).get("value")) or 0.5) or 0.5)
+    construction_month_options = "".join(f"<option value='{m}' {'selected' if m==int(report_base_construction_month) else ''}>{m} — {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]}</option>" for m in range(1,13))
     print(f"[size] OPERATING_SCENARIO_RESULTS JSON: {len(operating_scenario_json.encode('utf-8'))} bytes")
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
@@ -2491,7 +2492,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     <div class='ctrl'><label>Infrastructure scenario</label><select id='report_infra_scenario'><option>build_own_dc</option><option>rent_gpu_only</option><option selected>hybrid</option></select></div>
     <div class='ctrl'><label>Funding scenario</label><select id='report_funding_scenario'><option>equity_only</option><option>revolver_only</option><option selected>mix</option></select></div>
     <div class='ctrl'><label>Data center construction start year</label><select id='report_construction_start_year'><option>2026</option><option>2027</option><option selected>2028</option><option>2029</option><option>2030</option></select></div>
-    <div class='ctrl'><label>Data center construction start month</label><select id='report_construction_start_month'><option value='1'>1 — Jan</option><option value='2'>2 — Feb</option><option value='3'>3 — Mar</option><option value='4'>4 — Apr</option><option value='5'>5 — May</option><option value='6'>6 — Jun</option><option value='7'>7 — Jul</option><option value='8'>8 — Aug</option><option value='9'>9 — Sep</option><option value='10' selected>10 — Oct</option><option value='11'>11 — Nov</option><option value='12'>12 — Dec</option></select></div>
+    <div class='ctrl'><label>Data center construction start month</label><select id='report_construction_start_month'>{construction_month_options}</select></div>
     <div class='ctrl'><label>Funding mix equity share (%)</label><input id='report_mix_equity_share' type='number' min='0' max='100' value='50' step='1'/></div>
     <div class='ctrl'><label>Funding mix revolver share</label><div id='report_mix_revolver_share' class='note'>50%</div></div>
   </div>
@@ -2510,7 +2511,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
 </div></section>
 <section><h2>Monthly Detail</h2><div class='card'><h3>Monthly Detail — Selected Year</h3><div id='monthly_detail_status' class='note'></div><div class='controls'><div class='ctrl'><label>Year</label><select id='monthly_detail_year'>{''.join(f"<option>{y}</option>" for y in years)}</select></div><div class='ctrl'><label>Section</label><select id='monthly_detail_section'><option>Demand & Tokens</option><option>Infrastructure / GPU</option><option>CAPEX</option><option>Operating Costs</option><option>P&L</option><option>Cash Flow & Funding</option><option>Balance Sheet</option><option>DCF</option></select></div></div><div class='table-wrap' id='monthly_detail_table'></div><div class='note'>Monthly Detail uses the same selected investment scenario as the annual report. Funding is recalculated from the selected equity/revolver mix.</div><div class='note'>Monthly funding may differ from annual summary because interest, drawdown and repayment are timed monthly.</div></div></section>
-<section><h2>Monthly Aggregation Diagnostic</h2><div class='card' id='monthly_aggregation_diagnostic'><div class='note'>Stage 2 diagnostic only. Does not modify current report rendering.</div><div style='margin-top:8px'><button id='run_monthly_aggregation_diagnostic'>Run Monthly Aggregation Diagnostic</button></div><div id='monthly_aggregation_diagnostic_output' class='note' style='margin-top:10px'></div></div></section>
+<section><h2>Diagnostics</h2><div class='card' id='monthly_aggregation_diagnostic'><div class='note'>These checks use the same compact monthly operating payload and browser-side funding calculation as the main report.</div><div class='note'>Run diagnostics for the currently selected investment scenario.</div><div style='margin-top:8px'><button id='run_monthly_aggregation_diagnostic'>Run Monthly Aggregation Diagnostic</button></div><div id='monthly_aggregation_diagnostic_output' class='note' style='margin-top:10px'></div></div></section>
 <section><h2>NPV Workbench — Scenario Builder</h2>
 <div class='card'>
   <div class='card'>
@@ -2525,7 +2526,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     </div>
     <div id='sl_preset_status' class='note'></div>
   </div>
-  <div class='note'>The Workbench is a browser-side what-if tool. The official report tables remain the Python-calculated YAML base case.</div>
+  <div class='note'>The Workbench is sandbox-only. To make Workbench assumptions official, export/copy them into assumptions.yaml and regenerate the report.</div>
   <div class='note'>To make a scenario official, copy/export the selected assumptions into assumptions.yaml and regenerate the report.</div>
   <div class='note'>The Workbench changes model-engine assumptions only. Investment scenario switching is controlled in the main report above.</div>
   <div class='grid' style='display:none'>
@@ -2591,10 +2592,8 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     }}
   }};
   const current = {{npv:0}};
-  const MONTHLY_REPORT_DATA = {{base: {{rows: {json.dumps(monthly_rows_base)}}}}};
   const OPERATING_SCENARIO_RESULTS = {operating_scenario_json};
-  window.MONTHLY_REPORT_DATA = MONTHLY_REPORT_DATA;
-  let currentMonthlyRows = (MONTHLY_REPORT_DATA.base||{{}}).rows || [];
+  let currentMonthlyRows = [];
   window.OPERATING_SCENARIO_RESULTS = OPERATING_SCENARIO_RESULTS;
   window.REPORT_SCENARIO_CONFIG = Object.assign({{}}, window.REPORT_SCENARIO_CONFIG||{{}}, {{
     years: [2026, 2027, 2028, 2029, 2030],
