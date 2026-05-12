@@ -2547,13 +2547,14 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 <header><h1>GPS Finmodel Report</h1><div class='sub'>2026–2030 financial model</div><div class='meta'>Active scenario: {active_scenario} · Generated: {ts}</div></header>
 <div class='card'>
   <h3>Report Basis</h3>
-  <div class='meta'>Official report: YAML base case</div>
+  <div class='meta'>Source: Monthly model aggregation</div>
+  <div class='meta'>Forecast start: 2026-10</div>
   <div class='meta'>Selected infrastructure scenario: {active_scenario}</div>
   <div class='meta'>Selected funding scenario: {assumptions.get("funding",{}).get("active_scenario","mix")}</div>
   <div class='meta'>Data center construction start: {(str(base_construction_year)+'-'+str(report_base_construction_month).zfill(2)) if report_base_infra!='rent_gpu_only' else 'N/A'}</div>
   <div class='meta'>Discount rate: {render_value(metric_store.get("discount_rate", {}).get(years[0]), "discount_rate")}</div>
   <div class='meta'>Generated timestamp: {ts}</div>
-  <div class='note'>The main report shows the YAML base-case investment scenario. Investment scenario controls are prepared but full report switching is pending.</div>
+  <div class='note'>The main report is aggregated from monthly model rows. Year 2026 is a partial-year forecast from Oct–Dec.</div>
 </div>
 <div class='card'>
   <h3>Investment Scenario Controls</h3>
@@ -2574,7 +2575,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 <section><h2>Financial Flow — P&L Bridge</h2>
 <div class='card'>
   <div class='ctrl' style='max-width:220px'><label>Year</label><select id='ff_year'>{''.join(f"<option {'selected' if y==years[-1] else ''}>{y}</option>" for y in years)}</select></div>
-  <div class='note'>Financial Flow uses the selected Investment Scenario, including construction start year for hybrid. Workbench changes do not affect this chart until exported to YAML and regenerated.</div>
+  <div class='note'>Financial Flow uses the selected Investment Scenario. Annual values are aggregated from monthly rows. Workbench changes do not affect this chart until exported to YAML and regenerated.</div>
   <div class='financial-flow-wrap'><div class='financial-flow-plot-wrap'><div id='financial-flow-plot'></div><div id='financial-flow-labels'></div></div></div>
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
@@ -2725,6 +2726,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     const getFundingShares=(fundingScenario,equitySharePct)=>{{ if(fundingScenario==='equity_only') return {{equityShare:1.0,revolverShare:0.0}}; if(fundingScenario==='revolver_only') return {{equityShare:0.0,revolverShare:1.0}}; const equityShare=Math.min(1,Math.max(0,Number(equitySharePct||0)/100)); return {{equityShare,revolverShare:1-equityShare}}; }};
     const buildCurrentMonthlyRowsFromControls=()=>{{ const infra=document.getElementById('report_infra_scenario')?.value; const funding=document.getElementById('report_funding_scenario')?.value; const constructionYear=Number(document.getElementById('report_construction_start_year')?.value); const constructionMonth=Number(document.getElementById('report_construction_start_month')?.value); const equitySharePct=Number(document.getElementById('report_mix_equity_share')?.value); const operatingKey=getOperatingScenarioKey(infra,constructionYear,constructionMonth); const operatingPayload=window.OPERATING_SCENARIO_RESULTS?.[operatingKey]; if(!operatingPayload||!Array.isArray(operatingPayload.rows)) throw new Error(`Missing OPERATING_SCENARIO_RESULTS payload for ${{operatingKey}}`); const fundedRows=buildFundedMonthlyRows(operatingPayload.rows,funding,equitySharePct); return {{operatingKey,funding,equitySharePct,rows:fundedRows}}; }};
     const updateMonthlyDetailFromControls=()=>{{ const st=document.getElementById('monthly_detail_status'); const m=buildCurrentMonthlyRowsFromControls(); currentMonthlyRows=m.rows; const s=getFundingShares(m.funding,m.equitySharePct); const maxAbs=Math.max(0,...(currentMonthlyRows||[]).map(r=>Math.abs(Number(r.balance_check||0)))); if(st) st.textContent=`Monthly Detail: ${{m.operatingKey}}, ${{m.funding}}, ${{(s.equityShare*100).toFixed(0)}}% equity / ${{(s.revolverShare*100).toFixed(0)}}% revolver. Balance check: ${{maxAbs>1?'WARNING':'OK'}} (max abs ${{maxAbs.toFixed(4)}}).`; renderMonthlyDetail(); return {{...m,maxAbsBalanceCheck:maxAbs}}; }};
+    const buildScenarioFromOperatingPayload=()=>{{ const monthlyState=buildCurrentMonthlyRowsFromControls(); const annualRows=aggregateMonthlyRowsToAnnual(monthlyState.rows); const summary=buildAnnualInvestmentSummaryFromMonthly(monthlyState.rows,annualRows); return {{operatingKey:monthlyState.operatingKey,funding:monthlyState.funding,equitySharePct:monthlyState.equitySharePct,rowsMonthly:monthlyState.rows,rowsAnnual:annualRows,summary}}; }};
     const buildFundedMonthlyRows=(operatingRows,fundingScenario,equitySharePct)=>{{ const rows=JSON.parse(JSON.stringify(operatingRows||[])).sort((a,b)=>Number(a.month_index||0)-Number(b.month_index||0)); const shares=getFundingShares(fundingScenario,equitySharePct); let priorCumDisc=0, priorCumFcf=0;
       rows.forEach((r,idx)=>{{ const prev=idx>0?rows[idx-1]:null; const opening_cash=prev?Number(prev.closing_cash_after_funding||0):0; const opening_revolver_balance=prev?Number(prev.revolver_balance||0):0; const opening_paid_in_capital=prev?Number(prev.paid_in_capital||0):0; const opening_retained_earnings=prev?Number(prev.retained_earnings||0):0;
         const ebit=Number(r.ebit||0), da=Number(r.total_depreciation_and_amortization||0), total_capex=Number(r.total_capex||0), min_cash=Number(r.minimum_cash_balance||0), annualRate=Number(r.revolver_interest_rate||0), taxRate=Number(r.profit_tax_rate||0);
@@ -2792,36 +2794,23 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       const csy=(document.getElementById('report_construction_start_year')||{{value:'2028'}}).value||'2028';
       const csm=(document.getElementById('report_construction_start_month')||{{value:'1'}}).value||'1';
       const eqEl=document.getElementById('report_mix_equity_share'); const st=document.getElementById('report_scenario_status');
-      const EPS=1e-6; const key=infra+'|'+funding; let payload=REPORT_SCENARIO_RESULTS[key];
-      payload = REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,funding,csy)] || payload;
-      if(!payload){{ if(st) st.textContent='Scenario payload not found.'; return; }}
       let eqShare=funding==='equity_only'?1.0:(funding==='revolver_only'?0.0:Math.min(1,Math.max(0,(Number(eqEl?.value)||0)/100)));
       let revShare=1-eqShare; if(eqEl&&funding!=='mix') eqEl.value=String(Math.round(eqShare*100)); const rv=document.getElementById('report_mix_revolver_share'); if(rv) rv.textContent=(revShare*100).toFixed(0)+'%';
-      const baseMixPayload = REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'mix',csy)] || REPORT_SCENARIO_RESULTS[infra+'|mix'];
-      const mKey = getMonthlyScenarioKey(infra, funding, csy, csm);
-      let mRows = ((MONTHLY_SCENARIO_RESULTS[mKey]||{{}}).rows)||[];
-      const defaultEq=((baseMixPayload?.funding_mix?.equity_share)||0.5);
-      if(funding==='mix' && Math.abs(eqShare-1.0)<EPS) payload=REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'equity_only',csy)] || REPORT_SCENARIO_RESULTS[infra+'|equity_only'];
-      else if(funding==='mix' && Math.abs(eqShare-0.0)<EPS) payload=REPORT_SCENARIO_RESULTS[getReportScenarioKey(infra,'revolver_only',csy)] || REPORT_SCENARIO_RESULTS[infra+'|revolver_only'];
-      else if(funding==='mix' && Math.abs(eqShare-defaultEq)<EPS) payload=baseMixPayload;
-      else if(funding==='mix') payload=buildCustomFundingPayload(baseMixPayload,eqShare,revShare);
-      if(funding==='mix' && Math.abs(eqShare-1.0)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'equity_only',csy,csm)]||{{}}).rows)||mRows;
-      else if(funding==='mix' && Math.abs(eqShare)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'revolver_only',csy,csm)]||{{}}).rows)||mRows;
-      else if(funding==='mix' && Math.abs(eqShare-defaultEq)<EPS) mRows=((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'mix',csy,csm)]||{{}}).rows)||mRows;
-      else if(funding==='mix') mRows=buildCustomMonthlyFundingRows(((MONTHLY_SCENARIO_RESULTS[getMonthlyScenarioKey(infra,'mix',csy,csm)]||{{}}).rows)||mRows, eqShare, revShare);
-      try {{ const mdState=updateMonthlyDetailFromControls(); if(st) st.textContent += ' Monthly Detail updated from compact operating payload.'; console.debug('Monthly detail compact path', mdState); }} catch(err) {{ if(st) st.textContent += ' Annual scenario applied, but Monthly Detail could not update: '+String(err?.message||err); console.error(err); currentMonthlyRows=mRows; renderMonthlyDetail(); }}
-      console.debug('Funding parity infra='+infra+' funding='+funding+' eq='+eqShare+' rev='+revShare+' defaultEq='+defaultEq+' key='+key);
-      const hk=document.querySelector("section h2 + .grid .kpi .k");
-      document.querySelectorAll('#financial-flow-plot').forEach(()=>{{}});
-      const map={{'NPV':'npv','IRR':'irr','Required Investments':'required_investments','Peak Required GPU':'peak_required_gpu','Payback':'payback'}};
-      document.querySelectorAll('section .kpi').forEach(card=>{{ const k=(card.querySelector('.k')?.textContent||'').trim(); const m=map[k]; if(!m) return; const v=payload.executive_summary[m]; const el=card.querySelector('.v'); if(!el) return; if(k==='Payback') el.textContent=(v===null||v===undefined)?'N/A':String(v); else el.innerHTML=formatReportValue(m==='peak_required_gpu'?'required_gpu':m,v); }});
-      document.querySelectorAll('td[data-card][data-metric][data-year]').forEach(td=>{{ const card=td.getAttribute('data-card'); const metric=td.getAttribute('data-metric'); const year=td.getAttribute('data-year'); let v=payload.tables?.[card]?.[metric]?.[year]; if((v===undefined||v===null) && payload.rows){{ const rr=(payload.rows||[]).find(x=>String(x.year)===String(year)); if(rr) v=rr[metric]; }} td.innerHTML=formatReportValue(metric, v); }});
-      FIN_FLOW = Object.fromEntries((payload.rows||[]).map(r=>[String(r.year),{{workplace_ai_revenue:r.workplace_ai_revenue,contact_center_ai_revenue:r.contact_center_ai_revenue,total_revenue:r.total_revenue,total_cogs:r.total_cogs,gross_profit:r.gross_profit,total_sga:r.total_sga,ebitda:r.ebitda,total_depreciation_and_amortization:r.total_depreciation_and_amortization,interest_expense:r.interest_expense,profit_tax:r.profit_tax,net_income:r.net_income}}])); if(ffYear) renderFinancialFlow(ffYear.value);
+      let scenario=null;
+      try{{ scenario=buildScenarioFromOperatingPayload(); }}catch(err){{ if(st) st.textContent='Failed to apply monthly aggregation scenario: '+String(err?.message||err); console.error(err); return; }}
+      currentMonthlyRows=scenario.rowsMonthly;
+      const annualRows=scenario.rowsAnnual||[];
+      const map={{'NPV':'npv','IRR':'irr','Required Investments':'required_investments','Peak Required GPU':'peak_required_gpu','Payback':'simple_payback'}};
+      document.querySelectorAll('section .kpi').forEach(card=>{{ const k=(card.querySelector('.k')?.textContent||'').trim(); const m=map[k]; if(!m) return; const v=scenario.summary[m]; const el=card.querySelector('.v'); if(!el) return; if(k==='Payback') el.textContent=(v===null||v===undefined)?'N/A':String(v); else el.innerHTML=formatReportValue(m==='peak_required_gpu'?'required_gpu':m,v); }});
+      const missingWarn=new Set();
+      document.querySelectorAll('td[data-card][data-metric][data-year]').forEach(td=>{{ const metric=td.getAttribute('data-metric'); const year=td.getAttribute('data-year'); const rr=annualRows.find(x=>String(x.year)===String(year)); let v=rr?rr[metric]:undefined; if(v===undefined||v===null||Number.isNaN(Number(v))){{ td.innerHTML=\"<span class='na'>N/A</span>\"; if(!missingWarn.has(metric)){{console.warn('Missing annual metric',metric); missingWarn.add(metric);}} }} else td.innerHTML=formatReportValue(metric,v); }});
+      FIN_FLOW = Object.fromEntries((annualRows||[]).map(r=>[String(r.year),{{workplace_ai_revenue:r.workplace_ai_revenue,contact_center_ai_revenue:r.contact_center_ai_revenue,total_revenue:r.total_revenue,total_cogs:r.total_cogs,gross_profit:r.gross_profit,total_sga:r.total_sga,ebitda:r.ebitda,total_depreciation_and_amortization:r.total_depreciation_and_amortization,interest_expense:r.interest_expense,profit_tax:r.profit_tax,net_income:r.net_income}}])); if(ffYear) renderFinancialFlow(ffYear.value);
       const basis=document.querySelector('.card .meta:nth-child(2)');
       const metas=document.querySelectorAll('.card .meta');
       if(metas.length>3){{ metas[1].textContent='Selected infrastructure scenario: '+infra; metas[2].textContent='Selected funding scenario: '+funding; if(metas[3]) metas[3].textContent='Data center construction start: '+(infra==='rent_gpu_only'?'N/A':(csy+'-'+String(csm).padStart(2,'0'))); }}
-      const bad=(payload.rows||[]).find(r=>Math.abs(Number(r.balance_check)||0)>1); if(st) st.textContent=(funding==='mix'&&Math.abs(eqShare-1.0)<EPS)?('Applied '+infra+' / mix with 100% equity and 0% revolver. Matches equity_only. Monthly Detail updated.'):((funding==='mix'&&Math.abs(eqShare)<EPS)?('Applied '+infra+' / mix with 0% equity and 100% revolver. Matches revolver_only. Monthly Detail updated.'):((funding==='mix'&&Math.abs(eqShare-defaultEq)<EPS)?('Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver. Uses precomputed YAML/default mix. Monthly Detail updated.'):((funding==='mix'?'Applied '+infra+' / mix with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver. Monthly Detail updated.':'Applied '+infra+' / '+funding+'. Monthly Detail updated.'))))+(bad?' Warning: balance check differs by '+Number(bad.balance_check).toFixed(2)+' in '+bad.year+'.':'');
-      renderOwnedDcDiagnostic(payload);
+      const maxAbs=Math.max(0,...(scenario.rowsMonthly||[]).map(r=>Math.abs(Number(r.balance_check||0))));
+      if(st) st.textContent='Applied '+infra+' / '+funding+' / construction '+(infra==='rent_gpu_only'?'N/A':(csy+'-'+String(csm).padStart(2,'0')))+' with '+(eqShare*100).toFixed(0)+'% equity and '+(revShare*100).toFixed(0)+'% revolver. Annual report and Monthly Detail updated from monthly aggregation. '+(maxAbs>1?('Warning: max monthly balance check = '+maxAbs.toFixed(4)):('Balance check OK.'));
+      try{{ updateMonthlyDetailFromControls(); }}catch(err){{ console.error(err); }}
     }};
     const summarizeOwned=(p)=>{{
       const rows=p?.rows||[]; const y2030=rows.find(r=>String(r.year)==='2030')||{{}};
