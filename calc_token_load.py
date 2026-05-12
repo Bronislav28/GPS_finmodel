@@ -2582,23 +2582,6 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       setCellClass(td, Number(values[i]));
     }}
   }};
-  const updatePayback = (val) => {{
-    const cards = [...document.querySelectorAll('.card')];
-    const card = cards.find(c => c.querySelector('h3') && c.querySelector('h3').textContent.trim() === 'Investment Metrics');
-    if(!card) return;
-    const rows = [...card.querySelectorAll('tbody tr')];
-    const row = rows.find(r => (r.children[0]?.textContent || '').trim() === 'discounted_payback');
-    if(row && row.children[1]) row.children[1].textContent = val;
-    const kpis = [...document.querySelectorAll('.kpi')];
-    const k = kpis.find(x => (x.querySelector('.k')?.textContent || '').trim() === 'NPV');
-    if(k) {{
-      const v = k.querySelector('.v');
-      v.textContent = fmtNum(current.npv);
-      v.classList.remove('neg','zero');
-      if(current.npv<0) v.classList.add('neg');
-      else if(Math.abs(current.npv)<1e-12) v.classList.add('zero');
-    }}
-  }};
   const renderScenarioInvestmentMetrics=(summary)=>{{
     const cards=[...document.querySelectorAll('.card')];
     const card=cards.find(c=>c.querySelector('h3') && c.querySelector('h3').textContent.trim()==='Investment Metrics');
@@ -2780,37 +2763,6 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
       body.innerHTML='';
       if(note) note.textContent='Owned DC economics summary for selected scenario.';
     }};
-  const recalc = () => {{
-    if(!input) return;
-    try {{
-      let r = Number(input.value);
-      if(!Number.isFinite(r)) return;
-      r = r / 100.0;
-      const df = [], dcf = [], cdf = [];
-      let cum = 0.0;
-      for(let i=0;i<YEARS.length;i++) {{
-        const factor = 1 / Math.pow(1+r, i);
-        const disc = FREE_CASH_FLOW[i] * factor;
-        cum += disc;
-        df.push(factor); dcf.push(disc); cdf.push(cum);
-      }}
-      current.npv = dcf.reduce((a,b)=>a+b,0);
-      let payback = "Not reached";
-      for(let i=0;i<cdf.length;i++) if(cdf[i] > 0) {{ payback = String(YEARS[i]); break; }}
-      updateMetricRow('DCF', 'discount_rate', YEARS.map(()=>r), fmtPct);
-      updateMetricRow('DCF', 'discount_factor', df, (v)=>fmtNum(v));
-      updateMetricRow('DCF', 'discounted_fcf', dcf, (v)=>fmtNum(v));
-      updateMetricRow('DCF', 'cumulative_discounted_fcf', cdf, (v)=>fmtNum(v));
-      updateMetricRow('Investment Metrics', 'npv', [current.npv], (v)=>fmtNum(v));
-      updatePayback(payback);
-    }} catch(err) {{
-      console.warn('Discount rate recalculation failed:', err);
-    }}
-  }};
-  if(input) {{
-    input.addEventListener('input', recalc);
-    recalc();
-  }}
   try {{
     const baseInfra={json.dumps(report_base_infra)}; const baseFunding={json.dumps(report_base_funding)}; const baseEq={float(report_base_mix_equity_pct)}; const baseCsy={int(base_construction_year)}; const baseCsm={int(report_base_construction_month)};
     const infra=document.getElementById('report_infra_scenario'),fund=document.getElementById('report_funding_scenario'),csy=document.getElementById('report_construction_start_year'),csm=document.getElementById('report_construction_start_month'),eq=document.getElementById('report_mix_equity_share'),rev=document.getElementById('report_mix_revolver_share'),st=document.getElementById('report_scenario_status');
@@ -2833,7 +2785,13 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     applyReportScenario();
     try{{updateMonthlyDetailFromControls();}}catch(err){{console.error(err);}}
     const mdy=document.getElementById('monthly_detail_year'); const mds=document.getElementById('monthly_detail_section'); if(mdy) mdy.addEventListener('change',renderMonthlyDetail); if(mds) mds.addEventListener('change',renderMonthlyDetail); renderMonthlyDetail();
-  }} catch(_e) {{}}
+  }} catch(err) {{
+    console.error("Initial report/monthly detail initialization failed", err);
+    const st = document.getElementById("monthly_detail_status");
+    const host = document.getElementById("monthly_detail_table");
+    if (st) st.innerHTML = `<span class="warn">Monthly Detail failed: ${{String(err.message || err)}}</span>`;
+    if (host) host.innerHTML = `<div class="note warn">Monthly Detail failed: ${{String(err.message || err)}}</div>`;
+  }}
 
   __SCENARIO_LAB_JS__
 }})();
