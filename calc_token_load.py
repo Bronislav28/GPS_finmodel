@@ -1802,12 +1802,8 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     kpis = [
         ("NPV", "npv", metric_store.get("npv", {}).get(years[0])),
         ("IRR", "irr", metric_store.get("irr", {}).get(years[0])),
-        ("Revenue 2030", "total_revenue", metric_store.get("total_revenue", {}).get(years[-1])),
-        ("EBITDA 2030", "ebitda", metric_store.get("ebitda", {}).get(years[-1])),
-        ("Net Income 2030", "net_income", metric_store.get("net_income", {}).get(years[-1])),
-        ("Total CAPEX", "total_capex", sum((as_float(r.get("total_capex")) or 0.0) for r in rows)),
+        ("Required Investments", "total_capex", sum((as_float(r.get("total_capex")) or 0.0) for r in rows)),
         ("Peak Required GPU", "required_gpu", max((as_float(r.get("required_gpu")) or 0.0) for r in rows)),
-        ("Revolver Balance 2030", "revolver_balance", metric_store.get("revolver_balance", {}).get(years[-1])),
         ("Payback", "simple_payback", metric_store.get("simple_payback", {}).get(years[0])),
     ]
     kpi_html = "".join(
@@ -2064,7 +2060,7 @@ section h2{{margin:24px 0 12px;font-size:18px}}
 .kpi .k{{font-size:12px;color:#6b7280}} .kpi .v{{font-size:18px;font-weight:600;margin-top:6px}}
 .card{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}}
 .card h3{{margin:4px 0 10px;font-size:15px}}
-table{{width:100%;border-collapse:collapse;font-size:12px}} th,td{{padding:6px 8px;border-bottom:1px solid #edf1f5}} th{{background:#f8fafc;color:#374151}}
+table{{width:100%;border-collapse:collapse;font-size:12px}} th,td{{padding:6px 8px;border-bottom:1px solid #edf1f5}} th{{background:#fdfefe;color:#374151}}
 th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{text-align:right}}
 .neg{{color:#b91c1c}} .zero{{color:#9ca3af}} .na{{color:#9ca3af}} .kpi .v span{{color:inherit}}
 .table-wrap{{overflow:auto;max-width:100%}} .sticky{{position:sticky;left:0;background:#f8fafc}}
@@ -2073,15 +2069,15 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
 .base-cell{{outline:2px solid #111827;outline-offset:-2px}}
 .ok{{color:#15803d;font-weight:600}} .warn{{color:#b45309;font-weight:600}}
 .financial-flow-wrap{{overflow-x:auto;max-width:100%;padding-bottom:8px}}
-.financial-flow-plot-wrap{{position:relative;width:100%;height:400px}}
-#financial-flow-plot{{width:100%;height:400px}}
+.financial-flow-plot-wrap{{position:relative;width:100%;height:450px}}
+#financial-flow-plot{{width:100%;height:450px}}
 #financial-flow-labels{{position:absolute;inset:0;pointer-events:none}}
 .ff-label{{position:absolute;background:rgba(255,255,255,0.88);border:1px solid #cbd5e1;border-radius:8px;padding:6px 8px;min-width:110px;max-width:150px;box-shadow:0 1px 2px rgba(15,23,42,0.06);font-size:11px;line-height:1.2}}
 .ff-label .name{{font-weight:700;color:#334155}}
 .ff-label .value{{font-weight:700;color:#16a34a;margin-top:2px}}
 .ff-label .margin{{color:#64748b;margin-top:2px}}
-.ka-empty{{background:#f8fafc}}
-.ka-readonly{{color:#475569;background:#f8fafc;font-weight:600}}
+.ka-empty{{background:transparent}}
+.ka-readonly{{color:#475569;background:transparent;font-weight:600}}
 .ka-section h4{{margin-top:14px;margin-bottom:6px;color:#334155}}
 .ka-section table th,.ka-section table td{{vertical-align:middle}}
 .ka-section input{{width:90px;padding:5px 6px;border:1px solid #d1d5db;border-radius:6px}}
@@ -2135,26 +2131,26 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     </div>
     <div id='sl_preset_status' class='note'></div>
   </div>
-  <div class='card'><h3>Scenario Setup</h3><div id='sl_setup_controls' class='controls'></div><div class='note'>These controls affect the Workbench scenario only. Official report tables remain unchanged.</div></div>
   <div class='note'>The Workbench is a browser-side what-if tool. The official report tables remain the Python-calculated YAML base case.</div>
   <div class='note'>To make a scenario official, copy/export the selected assumptions into assumptions.yaml and regenerate the report.</div>
-  <div class='note'>How to use: 1. Choose infrastructure and funding scenarios in Scenario Setup. 2. Edit Key Assumptions and Team Planner tables. 3. Click Recalculate Scenario. 4. Save the scenario or export YAML/JSON. 5. To make it official, paste changes into assumptions.yaml and regenerate the report.</div>
+  <div class='note'>The Workbench changes model-engine assumptions only. Investment scenario switching is controlled in the main report above.</div>
   <div class='card'><h3>Key Assumptions Planner</h3><div class='note'>Editable assumptions affect the Workbench scenario only. Official report tables remain unchanged until assumptions.yaml is updated and the report is regenerated.</div><div id='sl_key_assumptions_table' class='table-wrap'></div></div>
   <div class='grid' style='display:none'>
     <div class='card'><h3>Revenue & Demand</h3><div class='ctrl'><label>workplace_token_intensity_multiplier</label><input id='sl_wp_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_token_intensity_multiplier</label><input id='sl_cc_tok' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>workplace_activation_rate_multiplier</label><input id='sl_wp_act' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>contact_center_automation_rate_multiplier</label><input id='sl_cc_auto' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>target_contribution_margin_multiplier</label><input id='sl_margin' type='number' step='0.01' value='1.00'/></div></div>
     <div class='card'><h3>Compute & GPU</h3><div class='ctrl'><label>weighted_throughput_multiplier</label><input id='sl_wt' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>utilization_multiplier</label><input id='sl_util' type='number' step='0.01' value='1.00'/></div><div class='ctrl'><label>gpu_unit_cost</label><input id='sl_gpu_cost' type='number' step='1' value='{sl_gpu_cost_default:.0f}'/></div><div class='ctrl'><label>gpu_rental_price_per_gpu_per_year</label><input id='sl_rent' type='number' step='1' value='{sl_rent_default:.0f}'/></div></div>
     <div class='card'><h3>Finance</h3><div class='ctrl'><label>discount_rate</label><input id='sl_dr' type='number' step='0.01' value='{sl_dr_default:.2f}'/></div></div>
   </div>
-  <div class='table-wrap' id='sl_team_tables'></div>
-  <div class='note'>Team Planner affects the Workbench scenario only. To make changes official, copy the selected team assumptions into assumptions.yaml and regenerate the report.</div>
+  <div class='grid' id='sl_kpis' style='margin-top:10px'></div>
+  <div id='sl_parity' class='note'></div>
+  <div id='sl_warn' class='note'></div>
   <div style='margin-top:10px'><button id='sl_recalc'>Recalculate Scenario</button> <button id='sl_reset'>Reset to Base Case</button></div>
   <div class='card'><h3>Export / Apply Scenario</h3><button id='sl_copy_key_yaml'>Copy Key Assumptions YAML</button> <button id='sl_copy_yaml'>Copy Team YAML</button> <button id='sl_preset_export_2'>Export Scenario JSON</button><div class='note'>This snippet is generated from Workbench only. Paste it into assumptions.yaml manually, then run python calc_token_load.py to make it official.</div><div id='sl_yaml_status' class='note'></div><textarea id='sl_yaml_snippet' style='display:none;width:100%;min-height:220px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea><div id='sl_key_yaml_status' class='note'></div><textarea id='sl_key_yaml_snippet' style='display:none;width:100%;min-height:240px;margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px'></textarea></div>
-  <div id='sl_parity' class='note'></div>
+  <div class='card'><h3>Key Assumptions Planner</h3><div class='note'>Editable assumptions affect the Workbench scenario only. Official report tables remain unchanged until assumptions.yaml is updated and the report is regenerated.</div><div id='sl_key_assumptions_table' class='table-wrap'></div></div>
+  <div class='table-wrap' id='sl_team_tables'></div>
+  <div class='note'>Team Planner affects the Workbench scenario only. To make changes official, copy the selected team assumptions into assumptions.yaml and regenerate the report.</div>
   <div class='note'>Workbench defaults are calibrated to match the Python base case. Changed inputs produce indicative what-if results.</div>
-  <div class='grid' id='sl_kpis' style='margin-top:10px'></div>
-  <div id='sl_warn' class='note'></div>
 </div></section>
-<section><h2>Charts Overview</h2><div class='grid charts'>{charts_html}</div></section>
+
 {''.join(sections_html)}
 </div>
 <script>
@@ -2272,7 +2268,7 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     if (!SL_BASE || !Array.isArray(SL_BASE.rows)) {
       throw new Error("Scenario Lab data missing");
     }
-    const host=document.getElementById('sl_warn');
+    const host=null;
     if(host){
       const wrap=document.getElementById('sl_setup_controls')||document.createElement('div');
       wrap.className='controls';
@@ -2317,22 +2313,14 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
       "<div class='kpi'><div class='k'>Base NPV</div><div class='v'>"+fm(SL_BASE.base_npv)+"</div></div>"+
       "<div class='kpi'><div class='k'>Scenario NPV</div><div class='v'>"+fm(out.npv)+"</div></div>"+
       "<div class='kpi'><div class='k'>Delta NPV</div><div class='v "+cls+"'>"+fm(d)+"</div></div>"+
-      "<div class='kpi'><div class='k'>Infrastructure Scenario</div><div class='v'>"+out.infra+"</div></div>"+
-      "<div class='kpi'><div class='k'>Funding Scenario</div><div class='v'>"+out.funding+"</div></div>"+
-      "<div class='kpi'><div class='k'>Revenue 2030</div><div class='v'>"+fm(out.rev2030)+"</div></div>"+
-      "<div class='kpi'><div class='k'>EBITDA 2030</div><div class='v'>"+fm(out.ebitda2030)+"</div></div>"+
-      "<div class='kpi'><div class='k'>Total CAPEX</div><div class='v'>"+fm(out.totalCapex)+"</div></div>"+
-      "<div class='kpi'><div class='k'>Required GPU 2030</div><div class='v'>"+fi(out.req2030)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Required Investments</div><div class='v'>"+fm(out.totalCapex)+"</div></div>"+
+      "<div class='kpi'><div class='k'>Peak Required GPU</div><div class='v'>"+fi(out.reqPeak||0)+"</div></div>"+
       "<div class='kpi'><div class='k'>Owned GPU 2030</div><div class='v'>"+fi(out.owned2030||0)+"</div></div>"+
       "<div class='kpi'><div class='k'>Rented GPU 2030</div><div class='v'>"+fi(out.rented2030||0)+"</div></div>"+
-      "<div class='kpi'><div class='k'>Revolver Balance 2030</div><div class='v'>"+fm(out.revBal2030)+"</div></div>"+
       "<div class='kpi'><div class='k'>Payback</div><div class='v'>N/A</div></div>"+
       "<div class='kpi'><div class='k'>Core Team FTE 2030</div><div class='v'>"+fm(out.coreFte2030)+"</div></div>"+
-      "<div class='kpi'><div class='k'>Core Team Cash Cost 2030</div><div class='v'>"+fm(out.coreCash2030)+"</div></div>"+
-      "<div class='kpi'><div class='k'>Team OPEX 2030</div><div class='v'>"+fm(out.teamOpex2030)+"</div></div>"+
       "<div class='kpi'><div class='k'>SG&A FTE 2030</div><div class='v'>"+fm(out.sgaFte2030)+"</div></div>"+
-      "<div class='kpi'><div class='k'>SG&A Payroll 2030</div><div class='v'>"+fm(out.sgaPayroll2030)+"</div></div>"+
-      "<div class='kpi'><div class='k'>Total SG&A 2030</div><div class='v'>"+fm(out.totalSga2030)+"</div></div>";
+      "<div class='kpi'><div class='k'>SG&A FTE 2030</div><div class='v'>"+fm(out.sgaFte2030)+"</div></div>";
     };
     const years=(SL_BASE.rows||[]).map(r=>String(r.year));
     const renderTeamTables=()=>{
@@ -2432,12 +2420,12 @@ const SL_BASE = __SCENARIO_LAB_DATA__;
     };
     let lastOut=null;
     const calc=()=>{ const p=read(); const ka=readKeyAssumptions(); let npv=0,totalCapex=0,rev2030=0,ebitda2030=0,req2030=0,revBal2030=0;
-      const infra=(document.getElementById('sl_infra_scenario')||{value:SL_BASE.active_infrastructure_scenario}).value;
-      const funding=(document.getElementById('sl_funding_scenario')||{value:SL_BASE.active_funding_scenario}).value;
+      const infra=SL_BASE.active_infrastructure_scenario;
+      const funding=SL_BASE.active_funding_scenario;
       const shares=(SL_BASE.funding_scenarios&&SL_BASE.funding_scenarios[funding])||{equity_share:0.5,revolver_share:0.5};
       const defaults={sl_wp_tok:1,sl_cc_tok:1,sl_wp_act:1,sl_cc_auto:1,sl_margin:1,sl_wt:1,sl_util:1,sl_dr:SL_BASE.base_discount_rate,sl_gpu_cost:SL_BASE.base_gpu_unit_cost,sl_rent:SL_BASE.base_rental_price};
       const isDefault = slIds.every(k=>Math.abs((p[k]||0)-(defaults[k]||0))<1e-9) && infra===(SL_BASE.active_infrastructure_scenario||'hybrid') && funding===(SL_BASE.active_funding_scenario||'mix');
-      let prevOwned=0, prevClose=0, prevRevBal=0, owned2030=0, rented2030=0, coreFte2030=0,coreCash2030=0,teamOpex2030=0,sgaFte2030=0,sgaPayroll2030=0,totalSga2030=0;
+      let prevOwned=0, prevClose=0, prevRevBal=0, owned2030=0, rented2030=0, coreFte2030=0,coreCash2030=0,teamOpex2030=0,sgaFte2030=0,sgaPayroll2030=0,totalSga2030=0,reqPeak=0;
       const coreRoles=readTeamPlan('core_team'), sgaRoles=readTeamPlan('sga');
       SL_BASE.rows.forEach((r,idx)=>{ const y=String(r.year||'');
         const wpAct=((ka.workplace_activation_rate||{})[y]||((r.workplace_activation_rate||0)*100))/100.0;
