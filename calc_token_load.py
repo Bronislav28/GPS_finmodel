@@ -2404,75 +2404,8 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
     report_base_funding = str((assumptions.get("funding", {}) or {}).get("active_scenario", "mix"))
     report_base_mix_equity_pct = (as_float((((assumptions.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) * 100.0)
     report_base_construction_month = int(as_float((((assumptions.get("capex", {}).get("strategy_scenarios", {}).get("scenarios", {}).get("hybrid", {}) or {}).get("construction_start_month"))) or 1) or 1)
-    report_scenario_results: dict[str, Any] = {}
-    monthly_scenario_results: dict[str, Any] = {}
     operating_scenario_results: dict[str, Any] = {}
     base_construction_year = int(as_float(rows[-1].get("construction_start_year")) or 2028) if rows else 2028
-    for infra in ["build_own_dc", "rent_gpu_only", "hybrid"]:
-        year_variants = [2026, 2027, 2028, 2029, 2030] if infra == "hybrid" else [None]
-        for csy in year_variants:
-            month_variants = ([10, 11, 12] if csy == 2026 else list(range(1, 13))) if infra == "hybrid" else [None]
-            for csm in month_variants:
-              for fund in ["equity_only", "revolver_only", "mix"]:
-                ass = copy.deepcopy(assumptions)
-                ass.setdefault("capex", {}).setdefault("strategy_scenarios", {})["active_scenario"] = infra
-                if infra == "hybrid" and csy is not None:
-                    ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_year"] = int(csy)
-                    ass.setdefault("capex", {}).setdefault("strategy_scenarios", {}).setdefault("scenarios", {}).setdefault("hybrid", {})["construction_start_month"] = int(csm or 1)
-                ass.setdefault("funding", {})["active_scenario"] = fund
-                mrows = calculate_monthly(ass, scenario_overrides={"infrastructure_scenario": infra, "funding_scenario": fund, "construction_start_year": csy or base_construction_year, "construction_start_month": int(csm or 1)})
-                srows = aggregate_monthly_to_annual(mrows)
-                _, smetric, _ = build_metric_store(srows, ass)
-                syears = [str(int(r.get("year", 0))) for r in srows]
-                financial_flow = {y: {
-                "workplace_ai_revenue": as_float(r.get("workplace_ai_revenue")),
-                "contact_center_ai_revenue": as_float(r.get("contact_center_ai_revenue")),
-                "total_revenue": as_float(r.get("total_revenue")),
-                "total_cogs": as_float(r.get("total_cogs")),
-                "gross_profit": as_float(r.get("gross_profit")),
-                "total_sga": as_float(r.get("total_sga")),
-                "ebitda": as_float(r.get("ebitda")),
-                "total_depreciation_and_amortization": as_float(r.get("total_depreciation_and_amortization")),
-                "interest_expense": as_float(r.get("interest_expense")),
-                "profit_tax": as_float(r.get("profit_tax")),
-                "net_income": as_float(r.get("net_income")),
-                } for y, r in zip(syears, srows)}
-                def smv(name: str, year: str):
-                    v = smetric.get(name)
-                    return (v.get(year) if isinstance(v, dict) else v)
-                table_values = {
-                    t.get("title"): {
-                        m: ({y: (smetric.get(m, {}) or {}).get(y) for y in years} if isinstance(smetric.get(m), dict) else {years[0]: smetric.get(m)})
-                        for m in t.get("rows", []) if isinstance(m, str)
-                    }
-                    for t in report_tables if isinstance(t, dict) and isinstance(t.get("title"), str)
-                }
-                key = f"{infra}|{fund}|{csy}" if infra == "hybrid" and csy is not None else f"{infra}|{fund}"
-                mkey = f"{infra}|{fund}|{csy}-{int(csm or 1):02d}" if infra == "hybrid" and csy is not None else f"{infra}|{fund}"
-                report_scenario_results[key] = {
-                "infra_scenario": infra,
-                "funding_scenario": fund,
-                "construction_start_year": csy if csy is not None else "na",
-                "funding_mix": {
-                    "equity_share": float((as_float((((ass.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("equity_share", {}) or {}).get("value")) or 0.5) or 0.5)),
-                    "revolver_share": float((as_float((((ass.get("funding", {}).get("scenarios", {}).get("mix", {}) or {}).get("revolver_share", {}) or {}).get("value")) or 0.5) or 0.5)),
-                },
-                "executive_summary": {
-                    "npv": as_float(smv("npv", years[0])),
-                    "irr": as_float(smv("irr", years[0])),
-                    "required_investments": sum((as_float(r.get("total_capex")) or 0.0) for r in srows),
-                    "peak_required_gpu": max((as_float(r.get("required_gpu")) or 0.0) for r in srows),
-                    "payback": smv("simple_payback", years[0]),
-                },
-                "financial_flow": financial_flow,
-                "tables": table_values,
-                "rows": srows,
-                "years": years,
-                "profit_tax_rate": as_float((((ass.get("pnl", {}) or {}).get("tax", {}) or {}).get("profit_tax_rate", {}).get("value")) or 0.0),
-                "discount_rate": as_float(smv("discount_rate", years[0])) or 0.0,
-                }
-                keep = {"month_key","year","month","active_users","workplace_daily_tokens","workplace_monthly_tokens","automated_interactions_per_day","contact_center_daily_tokens","contact_center_monthly_tokens","total_monthly_tokens","required_gpu","owned_gpu","rented_gpu","owned_gpu_increment","construction_flag","gpu_capex","gpu_infra_capex","datacenter_construction_capex","office_capex","intangible_capex","total_capex","monthly_gpu_rental_cost","total_datacenter_opex","total_team_opex","total_sga","total_cogs","total_revenue","gross_profit","ebitda","total_depreciation_and_amortization","ebit","interest_expense","ebt","profit_tax","net_income","operating_cash_flow","investing_cash_flow","free_cash_flow","funding_need","equity_injection","revolver_drawdown","revolver_repayment","revolver_balance","closing_cash_after_funding","closing_cash","cash","net_ppe","net_intangible_assets","total_assets","total_liabilities","paid_in_capital","retained_earnings","total_equity","balance_check","discount_factor","discounted_fcf","cumulative_discounted_fcf","minimum_cash_balance","discount_rate_monthly"}
-                monthly_scenario_results[mkey] = {"rows": [{k: v for k, v in mr.items() if k in keep} for mr in mrows]}
     operating_variants: list[tuple[str, str, int | None, int | None]] = [
         ("rent_gpu_only", "rent_gpu_only", None, None),
         ("build_own_dc", "build_own_dc", None, None),
@@ -2489,16 +2422,12 @@ def build_html(rows: list[dict[str, Any]], assumptions: dict[str, Any]) -> str:
         ass.setdefault("funding", {})["active_scenario"] = "mix"
         mrows = calculate_monthly(ass, scenario_overrides={"infrastructure_scenario": infra, "funding_scenario": "mix", "construction_start_year": csy or base_construction_year, "construction_start_month": int(csm or 1)})
         operating_scenario_results[op_key] = {"rows": compact_monthly_operating_rows(mrows)}
-    report_scenario_json = json.dumps(report_scenario_results, separators=(",", ":"))
-    monthly_scenario_json = json.dumps(monthly_scenario_results, separators=(",", ":"))
     operating_scenario_json = json.dumps(operating_scenario_results, separators=(",", ":"))
     funding_cfg = assumptions.get("funding", {}) or {}
     scenarios_cfg = funding_cfg.get("scenarios", {}) or {}
     mix_cfg = scenarios_cfg.get("mix", {}) or {}
     base_eq_share = float(as_float(((mix_cfg.get("equity_share", {}) or {}).get("value")) or 0.5) or 0.5)
     base_rev_share = float(as_float(((mix_cfg.get("revolver_share", {}) or {}).get("value")) or 0.5) or 0.5)
-    print(f"[size] REPORT_SCENARIO_RESULTS JSON: {len(report_scenario_json.encode('utf-8'))} bytes")
-    print(f"[size] MONTHLY_SCENARIO_RESULTS JSON: {len(monthly_scenario_json.encode('utf-8'))} bytes")
     print(f"[size] OPERATING_SCENARIO_RESULTS JSON: {len(operating_scenario_json.encode('utf-8'))} bytes")
     html = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>GPS Finmodel Report</title><style>
 :root{{--c-blue:#2563eb;--c-green:#16a34a;--c-red:#dc2626;--c-orange:#ea580c;--c-purple:#7c3aed;}}
@@ -2580,7 +2509,7 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
   <div class='note'><span style='color:#3b82f6'>■</span> Revenue &nbsp; <span style='color:#22c55e'>■</span> Profit flow &nbsp; <span style='color:#ef4444'>■</span> Costs / expenses</div>
   <div class='note'>Financial Flow uses Plotly via CDN. If offline export is required, use the static report tables or switch to bundled Plotly.</div>
 </div></section>
-<section><h2>Monthly Detail</h2><div class='card'><h3>Monthly Detail — Selected Year</h3><div id='monthly_detail_status' class='note'></div><div class='controls'><div class='ctrl'><label>Year</label><select id='monthly_detail_year'>{''.join(f"<option>{y}</option>" for y in years)}</select></div><div class='ctrl'><label>Section</label><select id='monthly_detail_section'><option>Demand & Tokens</option><option>Infrastructure / GPU</option><option>CAPEX</option><option>Operating Costs</option><option>P&L</option><option>Cash Flow & Funding</option><option>Balance Sheet</option><option>DCF</option></select></div></div><div class='table-wrap' id='monthly_detail_table'></div><div class='note'>Monthly Detail uses compact operating scenario payloads plus browser-side funding recalculation. Annual values are still shown by the main report logic until the next migration stage.</div><div class='note'>Monthly funding may differ from annual summary because interest, drawdown and repayment are timed monthly.</div></div></section>
+<section><h2>Monthly Detail</h2><div class='card'><h3>Monthly Detail — Selected Year</h3><div id='monthly_detail_status' class='note'></div><div class='controls'><div class='ctrl'><label>Year</label><select id='monthly_detail_year'>{''.join(f"<option>{y}</option>" for y in years)}</select></div><div class='ctrl'><label>Section</label><select id='monthly_detail_section'><option>Demand & Tokens</option><option>Infrastructure / GPU</option><option>CAPEX</option><option>Operating Costs</option><option>P&L</option><option>Cash Flow & Funding</option><option>Balance Sheet</option><option>DCF</option></select></div></div><div class='table-wrap' id='monthly_detail_table'></div><div class='note'>Monthly Detail uses the same selected investment scenario as the annual report. Funding is recalculated from the selected equity/revolver mix.</div><div class='note'>Monthly funding may differ from annual summary because interest, drawdown and repayment are timed monthly.</div></div></section>
 <section><h2>Monthly Aggregation Diagnostic</h2><div class='card' id='monthly_aggregation_diagnostic'><div class='note'>Stage 2 diagnostic only. Does not modify current report rendering.</div><div style='margin-top:8px'><button id='run_monthly_aggregation_diagnostic'>Run Monthly Aggregation Diagnostic</button></div><div id='monthly_aggregation_diagnostic_output' class='note' style='margin-top:10px'></div></div></section>
 <section><h2>NPV Workbench — Scenario Builder</h2>
 <div class='card'>
@@ -2662,14 +2591,10 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     }}
   }};
   const current = {{npv:0}};
-  const REPORT_SCENARIO_RESULTS = {report_scenario_json};
   const MONTHLY_REPORT_DATA = {{base: {{rows: {json.dumps(monthly_rows_base)}}}}};
-  const MONTHLY_SCENARIO_RESULTS = {monthly_scenario_json};
   const OPERATING_SCENARIO_RESULTS = {operating_scenario_json};
-  window.MONTHLY_SCENARIO_RESULTS = MONTHLY_SCENARIO_RESULTS;
   window.MONTHLY_REPORT_DATA = MONTHLY_REPORT_DATA;
   let currentMonthlyRows = (MONTHLY_REPORT_DATA.base||{{}}).rows || [];
-  window.REPORT_SCENARIO_RESULTS = REPORT_SCENARIO_RESULTS;
   window.OPERATING_SCENARIO_RESULTS = OPERATING_SCENARIO_RESULTS;
   window.REPORT_SCENARIO_CONFIG = Object.assign({{}}, window.REPORT_SCENARIO_CONFIG||{{}}, {{
     years: [2026, 2027, 2028, 2029, 2030],
@@ -2820,15 +2745,12 @@ th.yr{{text-align:center}} td.metric,th:first-child{{text-align:left}} td.num{{t
     const renderOwnedDcDiagnostic=(currentPayload)=>{{
       const cur=document.getElementById('owned_dc_diag_current'); const body=document.querySelector('#owned_dc_diag_cmp tbody'); const note=document.getElementById('owned_dc_diag_note');
       if(!cur||!body) return;
-      const scenarios=[['rent_gpu_only','rent_gpu_only|mix'],['build_own_dc','build_own_dc|mix'],['hybrid 2026','hybrid|mix|2026'],['hybrid 2027','hybrid|mix|2027'],['hybrid 2028','hybrid|mix|2028'],['hybrid 2029','hybrid|mix|2029'],['hybrid 2030','hybrid|mix|2030']];
-      const rows=scenarios.map(([n,k])=>{{ const p=REPORT_SCENARIO_RESULTS[k]; const s=summarizeOwned(p); return [n,s]; }}).filter(x=>x[1]);
+      const rows=[];
       const fmt=(v)=>Number(v||0).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}});
       const c=summarizeOwned(currentPayload);
       cur.innerHTML=`<div class='grid'><div class='kpi'><div class='k'>NPV</div><div class='v'>${{fmt(c.npv)}}</div></div><div class='kpi'><div class='k'>Required Investments</div><div class='v'>${{fmt(c.reqInv)}}</div></div><div class='kpi'><div class='k'>Total CAPEX</div><div class='v'>${{fmt(c.capex)}}</div></div><div class='kpi'><div class='k'>Datacenter construction CAPEX</div><div class='v'>${{fmt(c.dcCapex)}}</div></div><div class='kpi'><div class='k'>GPU infra CAPEX</div><div class='v'>${{fmt(c.gpuCapex)}}</div></div><div class='kpi'><div class='k'>GPU rental OPEX</div><div class='v'>${{fmt(c.rentOpex)}}</div></div><div class='kpi'><div class='k'>Datacenter OPEX</div><div class='v'>${{fmt(c.dcOpex)}}</div></div><div class='kpi'><div class='k'>D&A</div><div class='v'>${{fmt(c.da)}}</div></div><div class='kpi'><div class='k'>Free Cash Flow (2030)</div><div class='v'>${{fmt(c.fcf2030)}}</div></div></div>`;
-      body.innerHTML=rows.map(([n,s])=>`<tr><td>${{n}}</td><td>${{fmt(s.npv)}}</td><td>${{fmt(s.reqInv)}}</td><td>${{fmt(s.capex)}}</td><td>${{fmt(s.dcCapex)}}</td><td>${{fmt(s.gpuCapex)}}</td><td>${{fmt(s.rentOpex)}}</td><td>${{fmt(s.dcOpex)}}</td><td>${{fmt(s.da)}}</td><td>${{fmt(s.ebitda2030)}}</td><td>${{fmt(s.fcf2030)}}</td><td>${{s.discountedPayback}}</td></tr>`).join('');
-      const rent=rows.find(r=>r[0]==='rent_gpu_only')?.[1]; const own=rows.find(r=>r[0]==='build_own_dc')?.[1];
-      if(note&&rent&&own&&own.npv<rent.npv) note.textContent='Top NPV drag vs rent_gpu_only: (1) higher CAPEX burden, (2) D&A/timing impact on cash generation, (3) datacenter OPEX and financing burden. No terminal/residual value is currently included. Owned DC scenarios may be understated on a 2026–2030 horizon.';
-      else if(note) note.textContent='Owned DC economics summary for selected scenario.';
+      body.innerHTML='';
+      if(note) note.textContent='Owned DC economics summary for selected scenario.';
     }};
   const recalc = () => {{
     if(!input) return;
