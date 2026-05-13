@@ -1026,29 +1026,7 @@ revenue:
   description: >
     Выручка GPS рассчитывается не через заранее заданную цену токена,
     а через целевую contribution margin к OPEX и D&A. Сценарии отражают
-    фактическую кривую потребления рассчитанной мощности GPS.
-  consumption_scenarios:
-    conservative:
-      utilization_of_token_capacity:
-        2026: 0.20
-        2027: 0.35
-        2028: 0.50
-        2029: 0.65
-        2030: 0.75
-    base:
-      utilization_of_token_capacity:
-        2026: 0.30
-        2027: 0.50
-        2028: 0.70
-        2029: 0.85
-        2030: 0.95
-    aggressive:
-      utilization_of_token_capacity:
-        2026: 0.40
-        2027: 0.65
-        2028: 0.85
-        2029: 0.95
-        2030: 1.00
+    фактическую кривую потребления рассчитанной мощности GPS
   target_contribution_margin:
     conservative:
       2026: 0.10
