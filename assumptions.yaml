@@ -337,7 +337,7 @@ capex: # общие вводные по capex
         time_for_development:
           event_flag:
             start_year: 2026
-            start-month: 10
+            start_month: 10
             event_duration: 6
         effort_share_of_core_team:
           value: 0.70
@@ -352,7 +352,7 @@ capex: # общие вводные по capex
         time_for_development:
           event_flag:
             start_year: 2026
-            start-month: 10
+            start_month: 10
             event_duration: 6
         effort_share_of_core_team:
           value: 0.30
