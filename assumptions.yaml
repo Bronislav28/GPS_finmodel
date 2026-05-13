@@ -408,18 +408,24 @@ capex: # общие вводные по capex
         description: >
           Строительство собственного ЦОДа со старта проекта.
           Запуск на собственной инфраструктуре.
-        construction_start_year: 2026
+        base_construction_start:
+          year: 2026
+          month: 10
       rent_gpu_only:
         description: >
           Полная аренда GPU без строительства собственного ЦОДа.
           Используется при ограничениях по регулированию,
           скорости запуска или снижении CAPEX-риска.
-        construction_start_year: null
+        base_construction_start:
+          year: null
+          month: null
       hybrid:
         description: >
           Сначала аренда GPU для проверки жизнеспособности модели,
           затем строительство собственного ЦОДа.
-        construction_start_year: 2028
+        base_construction_start:
+          year: 2028
+          month: 1
     calculation_logic:
       construction_flag: 1 if year == construction_start_year else 0
       owned_gpu:
