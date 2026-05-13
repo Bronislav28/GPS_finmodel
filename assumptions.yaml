@@ -5,6 +5,48 @@ model:
   forecast_end:
     year: 2030
     month: 12
+  time_logic:
+    description: >
+      Модель считается по месяцам. Годовые показатели являются агрегацией
+      месячных расчетов. Для assumptions, которые начинаются внутри года
+      или являются событием во времени, используется start_month или блок
+      event_flag.
+    terminology:
+      start_year: >
+        Год начала действия assumption. В годовых блоках ключ года считается
+        start_year.
+      start_month: >
+        Месяц начала действия assumption внутри start_year.
+      event_flag: >
+        Блок описания события во времени. Используется для assumptions,
+        которые происходят или действуют в конкретном временном окне,
+        например строительство ЦОД, покупка оборудования, запуск продукта
+        или этап разработки.
+    event_flag_fields:
+      start_year: >
+        Год начала события.
+      start_month: >
+        Месяц начала события.
+      event_duration: >
+        Длительность события в месяцах. Если event_duration = 1, событие
+        происходит в одном месяце. Если event_duration > 1, значение
+        распределяется или действует в течение нескольких месяцев согласно
+        бизнес-логике assumption.
+    rules:
+      default_start_month: >
+        Если start_month не указан, используется январь соответствующего года,
+        а для первого года модели — forecast_start.month.
+      period_assumption: >
+        Если assumption задан как годовое значение без event_flag, оно действует
+        с start_month до следующего заданного значения. Если start_month не
+        указан, применяется default_start_month.
+      event_assumption: >
+        Если указан event_flag, assumption действует с event_flag.start_year /
+        event_flag.start_month в течение event_flag.event_duration месяцев.
+      event_duration_default: >
+        Если event_duration не указан, используется 1 месяц.
+      first_year: >
+        Первый год модели считается только с forecast_start.month.
 
 investment_scenarios:
   base_infrastructure: hybrid
@@ -399,46 +441,54 @@ capex: # общие вводные по capex
   strategy_scenarios:
     description: >
       Сценарии инфраструктурной стратегии GPS:
-      1. build_own_dc — строим собственный ЦОД сразу
+      1. build_own_dc — строим собственный ЦОД со старта
       2. rent_gpu_only — арендуем GPU весь горизонт
-      3. hybrid — сначала аренда GPU, затем строительство ЦОДа
-    active_scenario: hybrid
+      3. hybrid — сначала аренда GPU, затем строительство собственного ЦОДа.
+      Активный сценарий, funding-сценарий и дата старта строительства
+      задаются только в верхнеуровневом блоке investment_scenarios.
+      Этот блок описывает бизнес-логику сценариев, но не хранит активные значения.
     scenarios:
       build_own_dc:
         description: >
           Строительство собственного ЦОДа со старта проекта.
           Запуск на собственной инфраструктуре.
-        base_construction_start:
-          year: 2026
-          month: 10
       rent_gpu_only:
         description: >
           Полная аренда GPU без строительства собственного ЦОДа.
-          Используется при ограничениях по регулированию,
-          скорости запуска или снижении CAPEX-риска.
-        base_construction_start:
-          year: null
-          month: null
       hybrid:
         description: >
           Сначала аренда GPU для проверки жизнеспособности модели,
           затем строительство собственного ЦОДа.
-        base_construction_start:
-          year: 2028
-          month: 1
+    construction:
+      duration_months: 6
+      spend_profile: straight_line
+      owned_gpu_available_policy: after_construction_completion
+      rental_stop_policy: same_month_as_owned_gpu_available
     calculation_logic:
-      construction_flag: 1 if year == construction_start_year else 0
+      construction_start_month_key: >
+        YYYY-MM from investment_scenarios.base_construction_start
+      construction_start_flag: >
+        1 if month_key == construction_start_month_key else 0
+      construction_active_flag: >
+        1 if month_key >= construction_start_month_key
+        and month_key < construction_start_month_key + duration_months
+        else 0
+      construction_completed_flag: >
+        1 if month_key >= construction_start_month_key + duration_months else 0
       owned_gpu:
         build_own_dc: required_gpu
         rent_gpu_only: 0
-        hybrid: required_gpu if year >= construction_start_year else 0
+        hybrid: required_gpu if construction_completed_flag == 1 else 0
       rented_gpu:
         build_own_dc: 0
         rent_gpu_only: required_gpu
-        hybrid: required_gpu if year < construction_start_year else 0
+        hybrid: required_gpu if construction_completed_flag == 0 else 0
       owned_gpu_increment:
-        first_owned_year: owned_gpu
-        next_years: max(owned_gpu_current - owned_gpu_previous, 0)
+        first_owned_month: owned_gpu
+        next_months: max(owned_gpu_current - owned_gpu_previous, 0)
+      datacenter_construction_capex:
+        upfront: total_component_rub * construction_start_flag
+        straight_line: total_component_rub / duration_months * construction_active_flag
 
 depreciation_and_amortization:
   description: >
