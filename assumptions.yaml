@@ -1397,6 +1397,7 @@ report_output:
     discount_rate_input:
       enabled: true
       source: investment_metrics.discount_rate.value.2026
+
   tables:
     token_load:
       title: Token Load
