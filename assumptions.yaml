@@ -275,7 +275,7 @@ capex: # общие вводные по capex
   capex_formula:
     gpu_capex: owned_gpu_increment * gpu.unit_cost
     gpu_infra_capex: gpu_capex * infra_multiplier.value
-    datacenter_construction_capex: total_component_rub * construction_flag
+    datacenter_construction_capex: total_component_rub / event_duration * construction_active_flag
     office_capex: total_office_capex
     intangible_capex: workplace_ai_ip_value + contact_center_ai_ip_value
     tangible_capex: gpu_infra_capex + datacenter_construction_capex + office_capex
@@ -389,7 +389,7 @@ capex: # общие вводные по capex
       component_target_usd: component_3mw_usd * target_capacity_mw / benchmark_capacity_mw
       component_target_rub: component_target_usd * fx_assumptions.usd_rub_t
       total_component_rub: sum(component_target_rub)
-      datacenter_construction_capex: total_component_rub * construction_flag
+      datacenter_construction_capex: total_component_rub / event_duration * construction_active_flag
 
   office_capex:
     description: >
@@ -687,7 +687,6 @@ opex:
         monthly_fully_loaded_cost: monthly_gross_salary + monthly_bonus_accrual + monthly_social_contribution_sfr
         annual_core_team_cash_cost: sum(monthly_fully_loaded_cost across months in year)
         total_team_opex: annual_core_team_cash_cost - capitalized_core_team_cost
-
     roles:
       leadership:
         head_of_ai:
@@ -911,15 +910,6 @@ opex:
             - event_ref: investment_scenarios.construction.event_flag
               timing: event_start
               fte: 2
-    scaling_rules:
-      datacenter_team:
-        sre_per_100_gpu: 1
-        gpu_engineer_per_200_gpu: 1
-        noc_per_300_gpu: 2
-      platform_team:
-        devops_per_100_gpu: 0.5
-      product_team:
-        implementation_per_product: 2
 
 sga:
   currency: RUB
@@ -930,78 +920,85 @@ sga:
   payroll_assumptions:
     annual_bonus_percent_of_gross:
       value: 0.20
+    social_contribution_sfr_percent_of_gross:
+      source: finance.taxes.social_contribution_sfr_percent_of_gross
   roles:
     corporate_management:
       ceo_gm:
         salary_gross_monthly_rub_2026: 1200000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
       cfo_finance_controller:
         salary_gross_monthly_rub_2026: 800000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
       coo_operations:
         salary_gross_monthly_rub_2026: 800000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
       legal_support:
         salary_gross_monthly_rub_2026: 500000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
       compliance_regulatory_support:
         salary_gross_monthly_rub_2026: 500000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
     hr:
       hrbp:
         salary_gross_monthly_rub_2026: 350000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
       recruiter:
         salary_gross_monthly_rub_2026: 300000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
     finance_and_accounting:
       accounting:
         salary_gross_monthly_rub_2026: 300000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
       fpna:
         salary_gross_monthly_rub_2026: 400000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
     admin:
       procurement_support:
         salary_gross_monthly_rub_2026: 300000
         fte_plan:
-          - event_ref: investment_scenarios.forecast_start
-            timing: forecast_start
+          - start_year: 2026
+            start_month: 10
             fte: 1
   calculation_logic:
-    total_sga_fte: sum(target_fte)
-    annual_gross_salary_by_role: monthly_gross_salary_by_role * target_fte_by_role * 12 * inflation_index_t
-    annual_bonus_by_role: annual_gross_salary_by_role * annual_bonus_percent_of_gross * worked_months_ratio
-    annual_social_contribution_sfr_by_role: (annual_gross_salary_by_role + annual_bonus_by_role) * social_contribution_sfr_percent_of_gross
-    annual_fully_loaded_cost_by_role: annual_gross_salary_by_role + annual_bonus_by_role + annual_social_contribution_sfr_by_role
-    annual_fixed_sga: sum(annual_fully_loaded_cost_by_role)
+    monthly_fte: >
+      latest fte_plan.fte where fte_plan.start_year/start_month <= current month,
+      otherwise 0
+    salary_index_t: >
+      cumulative inflation index from 2026 to current year
+    monthly_gross_salary_by_role: salary_gross_monthly_rub_2026 * salary_index_t * monthly_fte
+    monthly_bonus_by_role: monthly_gross_salary_by_role * annual_bonus_percent_of_gross
+    monthly_social_contribution_sfr_by_role: (monthly_gross_salary_by_role + monthly_bonus_by_role) * finance.taxes.social_contribution_sfr_percent_of_gross
+    monthly_fully_loaded_cost_by_role: monthly_gross_salary_by_role + monthly_bonus_by_role + monthly_social_contribution_sfr_by_role
+    monthly_fixed_sga: sum(monthly_fully_loaded_cost_by_role)
+    total_sga_fte: sum(monthly_fte across SG&A roles)
   office_rent:
     description: >
       Аренда офиса GPS рассчитывается исходя из численности сотрудников,
@@ -1180,24 +1177,18 @@ funding:
         formula: equity_share + revolver_share = 1.0
   revolver:
     interest_rate:
-      2026: 0.25
-      2027: 0.25
-      2028: 0.25
-      2029: 0.25
-      2030: 0.25
+      source: finance.funding.revolver_interest_rate
   minimum_cash_balance:
     description: >
       Минимальный остаток денежных средств для операционной устойчивости.
-      Рассчитывается как 1 месяц фиксированных расходов GPS:
-      team OPEX + SG&A + GPU rental OPEX.
+      Рассчитывается как заданное количество месяцев фиксированных расходов GPS.
     months_of_fixed_costs:
       value: 1
     calculation_logic:
-      monthly_team_opex: total_team_opex / 12
-      monthly_sga: total_sga / 12
-      monthly_gpu_rental_opex: annual_gpu_rental_cost / 12
-      monthly_fixed_costs: monthly_team_opex + monthly_sga + monthly_gpu_rental_opex
-      minimum_cash_balance: monthly_fixed_costs * months_of_fixed_costs
+      monthly_fixed_costs: >
+        monthly_team_opex + monthly_sga + monthly_gpu_rental_opex
+      minimum_cash_balance: >
+        monthly_fixed_costs * months_of_fixed_costs
   calculation_logic:
     closing_cash_before_funding: opening_cash + pre_financing_cash_flow
     funding_need: max(-closing_cash_before_funding, 0)
@@ -1245,31 +1236,22 @@ balance_sheet:
 investment_metrics:
   currency: RUB
   description: >
-    DCF / Investment Metrics model GPS.
-    Используется для оценки инвестиционной привлекательности
-    сценариев build_own_dc / rent_gpu_only / hybrid.
+    DCF / Investment Metrics model GPS. Метрики считаются по monthly cash flow,
+    annual report является агрегацией monthly rows.
   discount_rate:
-    description: >
-      Discount rate / WACC proxy для DCF модели.
-      Используется как hurdle rate для IC.
-      Должен быть editable parameter.
-    value:
-      2026: 0.30
-  free_cash_flow:
-    operating_cash_flow:
-      source: cash_flow.operating_cash_flow.operating_cash_flow
-    investing_cash_flow:
-      source: cash_flow.investing_cash_flow.investing_cash_flow
-    free_cash_flow: operating_cash_flow + investing_cash_flow
+    source: finance.valuation.discount_rate
+  free_cash_flow: operating_cash_flow + investing_cash_flow
   discounted_cash_flow:
-    discount_factor: 1 / (1 + discount_rate)^year_index
+    monthly_discount_rate: (1 + annual_discount_rate) ** (1 / 12) - 1
+    discount_factor: 1 / (1 + monthly_discount_rate) ** month_index
     discounted_fcf: free_cash_flow * discount_factor
+    cumulative_discounted_fcf: cumulative sum of discounted_fcf
   valuation:
-    npv: sum(discounted_fcf)
-    irr: IRR(free_cash_flow_series)
+    npv: sum(discounted_fcf across monthly rows)
+    irr: annualized IRR from monthly free_cash_flow series
   payback:
-    simple_payback: first_year(cumulative_cash > 0)
-    discounted_payback: first_year(cumulative_discounted_fcf > 0)
+    simple_payback: first month_key where cumulative_free_cash_flow >= 0
+    discounted_payback: first month_key where cumulative_discounted_fcf >= 0
   scenario_comparison:
     compare_by:
       - build_own_dc
@@ -1360,17 +1342,23 @@ report_output:
     revenue_scenario_dropdown:
       enabled: true
       source: revenue.active_scenario
-      options_source: revenue.consumption_scenarios
+      options_source: revenue.target_contribution_margin
     infrastructure_scenario_dropdown:
       enabled: true
-      source: capex.strategy_scenarios.active_scenario
+      source: investment_scenarios.base_infrastructure
       options_source: capex.strategy_scenarios.scenarios
     construction_start_year_input:
       enabled: true
-      source: capex.strategy_scenarios.scenarios.hybrid.construction_start_year
+      source: investment_scenarios.construction.event_flag.start_year
+    construction_start_month_input:
+      enabled: true
+      source: investment_scenarios.construction.event_flag.start_month
+    construction_duration_input:
+      enabled: true
+      source: investment_scenarios.construction.event_flag.event_duration
     funding_scenario_dropdown:
       enabled: true
-      source: funding.active_scenario
+      source: investment_scenarios.base_funding
       options_source: funding.scenarios
     funding_mix_inputs:
       enabled: true
@@ -1379,7 +1367,7 @@ report_output:
         revolver_share: funding.scenarios.mix.revolver_share.value
     discount_rate_input:
       enabled: true
-      source: investment_metrics.discount_rate.value.2026
+      source: finance.valuation.discount_rate
 
   tables:
     token_load:
