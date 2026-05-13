@@ -1014,9 +1014,9 @@ sga:
       required_office_area_sqm: total_fte * sqm_per_fte
       rent_rub_per_sqm_per_month_t: rent_rub_per_sqm_per_month_base_2026 * inflation_index_t
       monthly_office_rent: required_office_area_sqm * rent_rub_per_sqm_per_month_t
-      annual_office_rent: monthly_office_rent * 12
+      annual_office_rent: sum(monthly_office_rent across months in year)
   total_sga:
-    formula: annual_fixed_sga + annual_office_rent
+    formula: monthly_fixed_sga + monthly_office_rent
 
 revenue:
   currency: RUB
@@ -1087,7 +1087,7 @@ pnl:
     SG&A, Depreciation & Amortization, interest expense и налога на прибыль.
   tax:
     profit_tax_rate:
-      value: 0.25
+      source: finance.taxes.profit_tax_rate
   revenue_block:
     total_revenue: workplace_ai_revenue + contact_center_ai_revenue
   cogs_block:
@@ -1195,12 +1195,13 @@ funding:
     equity_injection: funding_need * equity_share
     revolver_drawdown: funding_need * revolver_share
     cash_after_drawdown: closing_cash_before_funding + equity_injection + revolver_drawdown
-    opening_revolver_balance: previous_year_closing_revolver_balance
+    opening_revolver_balance: previous_month_closing_revolver_balance
     excess_cash_available_for_repayment: max(cash_after_drawdown - minimum_cash_balance, 0)
     revolver_repayment: min(excess_cash_available_for_repayment, opening_revolver_balance)
     revolver_balance: opening_revolver_balance + revolver_drawdown - revolver_repayment
     average_revolver_balance: (opening_revolver_balance + revolver_balance) / 2
-    interest_expense: average_revolver_balance * revolver_interest_rate
+    monthly_revolver_interest_rate: (1 + annual_revolver_interest_rate) ** (1 / 12) - 1
+    interest_expense: average_revolver_balance * monthly_revolver_interest_rate
     closing_cash_after_funding: cash_after_drawdown - revolver_repayment
 
 balance_sheet:
@@ -1389,9 +1390,11 @@ report_output:
     infrastructure_scenario:
       title: Infrastructure Scenario
       rows:
-        - active_scenario
-        - construction_start_year
-        - construction_flag
+        - infrastructure_scenario
+        - construction_start_month_key
+        - construction_start_flag
+        - construction_active_flag
+        - construction_completed_flag
         - required_gpu
         - owned_gpu
         - rented_gpu
