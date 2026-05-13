@@ -47,26 +47,32 @@ model:
         Если event_duration не указан, используется 1 месяц.
       first_year: >
         Первый год модели считается только с forecast_start.month.
-
+      event_ref: >
+        Ссылка на event_flag другого assumption. Используется, если начало действия
+        assumption должно быть синхронизировано с событием, например найм
+        datacenter_team с началом строительства ЦОД.
+      timing: >
+        Правило привязки к событию. event_start означает начало события,
+        event_end означает последний месяц события, after_event означает месяц
+        после завершения события.
 investment_scenarios:
   base_infrastructure: hybrid
   base_funding: mix
-  base_construction_start:
-    year: 2028
-    month: 1
   base_equity_share_pct: 50
+  construction:
+    event_flag:
+      start_year: 2028
+      start_month: 1
+      event_duration: 6
 
 finance:
-  discount_rate: 0.30
-  profit_tax_rate: 0.25
-  revolver_interest_rate: 0.25
-
-years:
-  - 2026
-  - 2027
-  - 2028
-  - 2029
-  - 2030
+  valuation:
+    discount_rate: 0.30
+  taxes:
+    profit_tax_rate: 0.25
+    social_contribution_sfr_percent_of_gross: 0.30
+  funding:
+    revolver_interest_rate: 0.25
 
 fx_assumptions:
   description: >
@@ -328,9 +334,11 @@ capex: # общие вводные по capex
           - data_labeling_specialist
     products:
       workplace_ai:
-        build_period_months: 6
-        go_live_year: 2026
-        go_live_month: 7
+        time_for_development:
+          event_flag:
+            start_year: 2026
+            start-month: 10
+            event_duration: 6
         effort_share_of_core_team:
           value: 0.70
         calculation_logic:
@@ -341,9 +349,11 @@ capex: # общие вводные по capex
           data_acquisition_cost: capitalized_payroll * data_acquisition_percent
           total_ip_asset_value: capitalized_payroll + capitalized_sfr + development_infrastructure_cost + data_acquisition_cost
       contact_center_ai:
-        build_period_months: 6
-        go_live_year: 2026
-        go_live_month: 7
+        time_for_development:
+          event_flag:
+            start_year: 2026
+            start-month: 10
+            event_duration: 6
         effort_share_of_core_team:
           value: 0.30
         calculation_logic:
@@ -386,8 +396,8 @@ capex: # общие вводные по capex
       Корпоративный CAPEX GPS, не связанный с production AI infrastructure.
       Включает офисное оборудование, рабочие устройства сотрудников
       и базовую офисную инфраструктуру.
-    purchase_year:
-      value: 2026
+    purchase_flag:
+      source: model.forecast_start
     office_server:
       description: Корпоративный сервер для AD, file services, backup, monitoring и внутренних сервисов.
       quantity:
@@ -428,7 +438,6 @@ capex: # общие вводные по capex
       total_cost_rub:
         value: 8000000
     calculation_logic:
-      purchase_flag: year == purchase_year
       office_server_capex: quantity * unit_cost_rub * purchase_flag
       employee_laptops_capex: total_fte_in_purchase_year * unit_cost_rub * purchase_flag
       executive_laptops_capex: quantity * unit_cost_rub * purchase_flag
@@ -441,54 +450,112 @@ capex: # общие вводные по capex
   strategy_scenarios:
     description: >
       Сценарии инфраструктурной стратегии GPS:
-      1. build_own_dc — строим собственный ЦОД со старта
-      2. rent_gpu_only — арендуем GPU весь горизонт
-      3. hybrid — сначала аренда GPU, затем строительство собственного ЦОДа.
-      Активный сценарий, funding-сценарий и дата старта строительства
-      задаются только в верхнеуровневом блоке investment_scenarios.
+      1. build_own_dc — строительство собственного ЦОДа и переход на owned GPU;
+      2. rent_gpu_only — аренда GPU на всем горизонте модели;
+      3. hybrid — сначала аренда GPU, затем строительство собственного ЦОДа и переход на owned GPU после завершения строительства.
+      Активный infrastructure scenario, funding scenario, equity share и событие
+      строительства задаются только в верхнеуровневом блоке investment_scenarios.
       Этот блок описывает бизнес-логику сценариев, но не хранит активные значения.
     scenarios:
       build_own_dc:
         description: >
-          Строительство собственного ЦОДа со старта проекта.
-          Запуск на собственной инфраструктуре.
+          Сценарий строительства собственного ЦОДа. В monthly-first модели
+          строительство задается через investment_scenarios.construction.event_flag.
+          Owned GPU становятся доступны согласно owned_gpu_available_policy.
+        uses_construction_event: true
       rent_gpu_only:
         description: >
-          Полная аренда GPU без строительства собственного ЦОДа.
+          Сценарий полной аренды GPU без строительства собственного ЦОДа.
+          Все required GPU покрываются rented GPU на всем горизонте модели.
+        uses_construction_event: false
       hybrid:
         description: >
-          Сначала аренда GPU для проверки жизнеспособности модели,
-          затем строительство собственного ЦОДа.
-    construction:
-      duration_months: 6
+          Сценарий перехода от аренды GPU к собственной инфраструктуре.
+          До завершения construction event потребность покрывается rented GPU.
+          После завершения construction event потребность покрывается owned GPU.
+        uses_construction_event: true
+    construction_event_logic:
+      description: >
+        Логика применения события строительства ЦОДа. Само событие задается
+        в investment_scenarios.construction.event_flag через start_year,
+        start_month и event_duration.
+      event_source: investment_scenarios.construction.event_flag
+      event_fields:
+        start_year: >
+          Год начала строительства.
+        start_month: >
+          Месяц начала строительства.
+        event_duration: >
+          Длительность строительства в месяцах. Если не указана, используется
+          1 месяц.
+      derived_dates:
+        construction_start_month_key: >
+          YYYY-MM, сформированный из event_flag.start_year и event_flag.start_month.
+        construction_end_month_key: >
+          Месяц окончания строительства, рассчитанный как
+          construction_start_month_key + event_duration - 1 месяц.
+        owned_gpu_available_month_key: >
+          Первый месяц, с которого owned GPU доступны для эксплуатации.
+          Определяется правилом owned_gpu_available_policy.
+      flags:
+        construction_start_flag: >
+          1 в месяце construction_start_month_key, иначе 0.
+        construction_active_flag: >
+          1 для месяцев с construction_start_month_key по construction_end_month_key
+          включительно, иначе 0.
+        construction_completed_flag: >
+          1 для месяцев начиная с owned_gpu_available_month_key, иначе 0.
+    construction_policies:
       spend_profile: straight_line
       owned_gpu_available_policy: after_construction_completion
       rental_stop_policy: same_month_as_owned_gpu_available
+      spend_profile_logic:
+        upfront: >
+          Весь datacenter_construction_capex признается в месяце
+          construction_start_flag.
+        straight_line: >
+          Datacenter construction CAPEX равномерно распределяется по месяцам,
+          где construction_active_flag = 1.
+        custom: >
+          Datacenter construction CAPEX распределяется по отдельному
+          allocation_profile, если такой профиль задан.
+      owned_gpu_available_policy_logic:
+        construction_start_month: >
+          Owned GPU доступны с месяца начала строительства.
+        after_construction_completion: >
+          Owned GPU доступны с месяца, следующего после завершения строительства.
+        custom: >
+          Owned GPU становятся доступны согласно отдельному правилу.
+      rental_stop_policy_logic:
+        same_month_as_owned_gpu_available: >
+          Аренда GPU прекращается в том же месяце, когда становятся доступны
+          owned GPU.
+        month_after_owned_gpu_available: >
+          Аренда GPU прекращается через месяц после доступности owned GPU.
+        never: >
+          Аренда GPU не прекращается автоматически.
     calculation_logic:
-      construction_start_month_key: >
-        YYYY-MM from investment_scenarios.base_construction_start
-      construction_start_flag: >
-        1 if month_key == construction_start_month_key else 0
-      construction_active_flag: >
-        1 if month_key >= construction_start_month_key
-        and month_key < construction_start_month_key + duration_months
-        else 0
-      construction_completed_flag: >
-        1 if month_key >= construction_start_month_key + duration_months else 0
-      owned_gpu:
-        build_own_dc: required_gpu
-        rent_gpu_only: 0
-        hybrid: required_gpu if construction_completed_flag == 1 else 0
-      rented_gpu:
-        build_own_dc: 0
-        rent_gpu_only: required_gpu
-        hybrid: required_gpu if construction_completed_flag == 0 else 0
-      owned_gpu_increment:
-        first_owned_month: owned_gpu
-        next_months: max(owned_gpu_current - owned_gpu_previous, 0)
       datacenter_construction_capex:
         upfront: total_component_rub * construction_start_flag
-        straight_line: total_component_rub / duration_months * construction_active_flag
+        straight_line: total_component_rub / event_duration * construction_active_flag
+      owned_gpu:
+        build_own_dc: >
+          required_gpu if construction_completed_flag == 1 else 0
+        rent_gpu_only: >
+          0
+        hybrid: >
+          required_gpu if construction_completed_flag == 1 else 0
+      rented_gpu:
+        build_own_dc: >
+          required_gpu if construction_completed_flag == 0 else 0
+        rent_gpu_only: >
+          required_gpu
+        hybrid: >
+          required_gpu if construction_completed_flag == 0 else 0
+      owned_gpu_increment:
+        first_owned_month: >
+          owned_gpu in the first month where owned_gpu > 0
+        next_months: max(owned_gpu_current_month - owned_gpu_previous_month, 0)
 
 depreciation_and_amortization:
   description: >
@@ -560,7 +627,7 @@ opex:
       electricity_price:
         currency: RUB
         unit: kWh
-        base_year: 2026
+        base_year: model.forecast_start.year
         base_price_per_kwh: 5
         annual_growth:
           2027: 0.1
@@ -596,127 +663,256 @@ opex:
   team:
     payroll_assumptions:
       description: >
-        расчет ФОТ: gross salary + bonus + social contribution
+        Расчет ФОТ core team: gross salary + bonus + social contribution.
+        Salary задается как месячный gross salary в ценах 2026 года.
+        В последующие годы salary индексируется по salary_growth.
+        FTE задается через fte_plan — список месяцев, с которых меняется
+        численность по роли.
       bonus_percent_of_gross:
-        value: 0.2
+        value: 0.20
       social_contribution_sfr_percent_of_gross:
-        value: 0.3
+        source: finance.taxes.social_contribution_sfr_percent_of_gross
       salary_growth:
-        2026: 0.0
+        2026: 0.00
         2027: 0.12
         2028: 0.10
         2029: 0.08
         2030: 0.06
       calculation_logic:
-        total_core_team_fte: sum(core_team_target_fte)
-        core_team_fte: total_core_team_fte
-        monthly_gross_salary: salary_gross_monthly_rub * monthly_fte
+        monthly_fte: latest fte_plan.fte where fte_plan.start_year/start_month <= current month, otherwise 0
+        salary_index_t: cumulative salary_growth index from 2026 to current year
+        monthly_gross_salary: salary_gross_monthly_rub_2026 * salary_index_t * monthly_fte
         monthly_bonus_accrual: monthly_gross_salary * bonus_percent_of_gross
-        monthly_social_contribution_sfr: (monthly_gross_salary + monthly_bonus_accrual) * social_contribution_sfr_percent_of_gross
-        monthly_fully_loaded_team_cost: monthly_gross_salary + monthly_bonus_accrual + monthly_social_contribution_sfr
-        annual_core_team_cash_cost: payroll_gross + annual_bonus + social_contribution_sfr
-        build_phase_months: go_live_month - 1
-        capitalized_core_team_cost: >
-          sum(monthly_fully_loaded_cost_by_role_by_month
-          where role in eligible_core_team_roles
-          and month < go_live_month)
+        monthly_social_contribution_sfr: (monthly_gross_salary + monthly_bonus_accrual) * finance.taxes.social_contribution_sfr_percent_of_gross
+        monthly_fully_loaded_cost: monthly_gross_salary + monthly_bonus_accrual + monthly_social_contribution_sfr
+        annual_core_team_cash_cost: sum(monthly_fully_loaded_cost across months in year)
         total_team_opex: annual_core_team_cash_cost - capitalized_core_team_cost
-    core_team_target_fte:
+
+    roles:
       leadership:
-        head_of_ai: 1
+        head_of_ai:
+          salary_gross_monthly_rub_2026: 1200000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 1
+
       genai_team:
-        genai_lead: 1
-        llm_engineer: 6
-        ml_engineer: 4
-        data_engineer: 3
+        genai_lead:
+          salary_gross_monthly_rub_2026: 1000000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 1
+        llm_engineer:
+          salary_gross_monthly_rub_2026: 650000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 2
+            - start_year: 2027
+              start_month: 4
+              fte: 4
+            - start_year: 2027
+              start_month: 9
+              fte: 6
+        ml_engineer:
+          salary_gross_monthly_rub_2026: 600000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 2
+            - start_year: 2027
+              start_month: 7
+              fte: 4
+        data_engineer:
+          salary_gross_monthly_rub_2026: 500000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 2
+            - start_year: 2027
+              start_month: 7
+              fte: 3
       platform_team:
-        platform_lead: 1
-        backend_engineer: 4
-        ai_platform_engineer: 5
-        devops_engineer: 3
-        sre_engineer: 2
+        platform_lead:
+          salary_gross_monthly_rub_2026: 900000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 1
+        backend_engineer:
+          salary_gross_monthly_rub_2026: 500000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 2
+            - start_year: 2027
+              start_month: 2
+              fte: 4
+        ai_platform_engineer:
+          salary_gross_monthly_rub_2026: 550000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 2
+            - start_year: 2027
+              start_month: 2
+              fte: 5
+        devops_engineer:
+          salary_gross_monthly_rub_2026: 550000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 3
+        sre_engineer:
+          salary_gross_monthly_rub_2026: 550000
+          fte_plan:
+            - start_year: 2027
+              start_month: 2
+              fte: 2
       agent_team:
-        agent_lead: 1
-        agent_engineer: 5
-        business_analyst: 3
-        implementation_manager: 3
+        agent_lead:
+          salary_gross_monthly_rub_2026: 800000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 1
+        agent_engineer:
+          salary_gross_monthly_rub_2026: 500000
+          fte_plan:
+            - start_year: 2027
+              start_month: 1
+              fte: 3
+        business_analyst:
+          salary_gross_monthly_rub_2026: 450000
+          fte_plan:
+            - start_year: 2027
+              start_month: 1
+              fte: 3
+        implementation_manager:
+          salary_gross_monthly_rub_2026: 500000
+          fte_plan:
+            - start_year: 2027
+              start_month: 1
+              fte: 1
       architecture_team:
-        chief_architect: 1
-        solution_architect: 3
+        chief_architect:
+          salary_gross_monthly_rub_2026: 1100000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 1
+        solution_architect:
+          salary_gross_monthly_rub_2026: 700000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 2
       mlops_team:
-        mlops_lead: 1
-        ml_engineer: 3
-        devops_engineer: 2
-        sre_engineer: 2
+        mlops_lead:
+          salary_gross_monthly_rub_2026: 800000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 1
+        ml_engineer:
+          salary_gross_monthly_rub_2026: 600000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 3
+        devops_engineer:
+          salary_gross_monthly_rub_2026: 550000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 2
+        sre_engineer:
+          salary_gross_monthly_rub_2026: 600000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 2
       validation_team:
-        qa_lead: 1
-        qa_engineer: 4
-        analyst: 2
+        qa_lead:
+          salary_gross_monthly_rub_2026: 450000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 1
+        qa_engineer:
+          salary_gross_monthly_rub_2026: 300000
+          fte_plan:
+            - start_year: 2027
+              start_month: 2
+              fte: 2
+            - start_year: 2027
+              start_month: 6
+              fte: 4
+        analyst:
+          salary_gross_monthly_rub_2026: 350000
+          fte_plan:
+            - start_year: 2027
+              start_month: 2
+              fte: 2
       data_team:
-        data_lead: 1
-        data_labeling_specialist: 4
+        data_lead:
+          salary_gross_monthly_rub_2026: 600000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 1
+        data_labeling_specialist:
+          salary_gross_monthly_rub_2026: 220000
+          fte_plan:
+            - start_year: 2026
+              start_month: 10
+              fte: 4
       datacenter_team:
-        datacenter_lead: 1
-        gpu_infrastructure_engineer: 3
-        network_engineer: 2
-        power_cooling_engineer: 2
-        noc_operator: 4
-        sre_engineer: 2
-    salary_gross_monthly_rub:
-      leadership:
-        head_of_ai: 1200000
-      genai_team:
-        genai_lead: 1000000
-        llm_engineer: 650000
-        ml_engineer: 600000
-        data_engineer: 500000
-      platform_team:
-        platform_lead: 900000
-        backend_engineer: 500000
-        ai_platform_engineer: 550000
-        devops_engineer: 550000
-        sre_engineer: 600000
-      agent_team:
-        agent_lead: 800000
-        agent_engineer: 500000
-        business_analyst: 450000
-        implementation_manager: 500000
-      architecture_team:
-        chief_architect: 1100000
-        solution_architect: 700000
-      mlops_team:
-        mlops_lead: 800000
-        ml_engineer: 600000
-        devops_engineer: 550000
-        sre_engineer: 600000
-      validation_team:
-        qa_lead: 450000
-        qa_engineer: 300000
-        analyst: 350000
-      data_team:
-        data_lead: 600000
-        data_labeling_specialist: 220000
-      datacenter_team:
-        datacenter_lead: 600000
-        gpu_infrastructure_engineer: 500000
-        network_engineer: 400000
-        power_cooling_engineer: 350000
-        noc_operator: 220000
-        sre_engineer: 500000
-    hiring_plan_monthly:
-      2026:
-        jan: 0.1
-        feb: 0.2
-        mar: 0.3
-        apr: 0.4
-        may: 0.5
-        jun: 0.6
-        jul: 0.7
-        aug: 0.8
-        sep: 0.9
-        oct: 1.0
-        nov: 1.0
-        dec: 1.0
+        datacenter_lead:
+          salary_gross_monthly_rub_2026: 600000
+          fte_plan:
+            - event_ref: investment_scenarios.construction.event_flag
+              timing: event_start
+              fte: 1
+        gpu_infrastructure_engineer:
+          salary_gross_monthly_rub_2026: 500000
+          fte_plan:
+            - event_ref: investment_scenarios.construction.event_flag
+              timing: event_start
+              fte: 1
+            - event_ref: investment_scenarios.construction.event_flag
+              timing: event_end
+              fte: 3
+        network_engineer:
+          salary_gross_monthly_rub_2026: 400000
+          fte_plan:
+            - event_ref: investment_scenarios.construction.event_flag
+              timing: event_start
+              fte: 1
+            - event_ref: investment_scenarios.construction.event_flag
+              timing: event_end
+              fte: 2
+        power_cooling_engineer:
+          salary_gross_monthly_rub_2026: 350000
+          fte_plan:
+            - event_ref: investment_scenarios.construction.event_flag
+              timing: event_start
+              fte: 2
+        noc_operator:
+          salary_gross_monthly_rub_2026: 220000
+          fte_plan:
+            - event_ref: investment_scenarios.construction.event_flag
+              timing: event_end
+              fte: 4
+
+        sre_engineer:
+          salary_gross_monthly_rub_2026: 500000
+          fte_plan:
+            - event_ref: investment_scenarios.construction.event_flag
+              timing: event_start
+              fte: 2
     scaling_rules:
       datacenter_team:
         sre_per_100_gpu: 1
@@ -736,8 +932,6 @@ sga:
   payroll_assumptions:
     annual_bonus_percent_of_gross:
       value: 0.20
-    social_contribution_sfr_percent_of_gross:
-      value: 0.30
   target_fte:
     corporate_management:
       ceo_gm: 1
