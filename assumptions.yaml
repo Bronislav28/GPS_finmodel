@@ -696,7 +696,6 @@ opex:
             - start_year: 2026
               start_month: 10
               fte: 1
-
       genai_team:
         genai_lead:
           salary_gross_monthly_rub_2026: 1000000
@@ -906,7 +905,6 @@ opex:
             - event_ref: investment_scenarios.construction.event_flag
               timing: event_end
               fte: 4
-
         sre_engineer:
           salary_gross_monthly_rub_2026: 500000
           fte_plan:
@@ -932,44 +930,71 @@ sga:
   payroll_assumptions:
     annual_bonus_percent_of_gross:
       value: 0.20
-  target_fte:
+  roles:
     corporate_management:
-      ceo_gm: 1
-      cfo_finance_controller: 1
-      coo_operations: 1
-      legal_support: 1
-      compliance_regulatory_support: 1
+      ceo_gm:
+        salary_gross_monthly_rub_2026: 1200000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
+      cfo_finance_controller:
+        salary_gross_monthly_rub_2026: 800000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
+      coo_operations:
+        salary_gross_monthly_rub_2026: 800000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
+      legal_support:
+        salary_gross_monthly_rub_2026: 500000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
+      compliance_regulatory_support:
+        salary_gross_monthly_rub_2026: 500000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
     hr:
-      hrbp: 1
-      recruiter: 1
-      learning_and_development: 1
+      hrbp:
+        salary_gross_monthly_rub_2026: 350000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
+      recruiter:
+        salary_gross_monthly_rub_2026: 300000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
     finance_and_accounting:
-      accounting: 1
-      fpna: 1
+      accounting:
+        salary_gross_monthly_rub_2026: 300000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
+      fpna:
+        salary_gross_monthly_rub_2026: 400000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
     admin:
-      office_management: 1
-      procurement_support: 1
-    shared_corporate_services:
-      audit: 1
-  salary_gross_monthly_rub:
-    corporate_management:
-      ceo_gm: 1200000
-      cfo_finance_controller: 700000
-      coo_operations: 700000
-      legal_support: 500000
-      compliance_regulatory_support: 500000
-    hr:
-      hrbp: 350000
-      recruiter: 300000
-      learning_and_development: 250000
-    finance_and_accounting:
-      accounting: 300000
-      fpna: 400000
-    admin:
-      office_management: 250000
-      procurement_support: 250000
-    shared_corporate_services:
-      audit: 250000
+      procurement_support:
+        salary_gross_monthly_rub_2026: 300000
+        fte_plan:
+          - event_ref: investment_scenarios.forecast_start
+            timing: forecast_start
+            fte: 1
   calculation_logic:
     total_sga_fte: sum(target_fte)
     annual_gross_salary_by_role: monthly_gross_salary_by_role * target_fte_by_role * 12 * inflation_index_t
