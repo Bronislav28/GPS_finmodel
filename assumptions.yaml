@@ -1025,8 +1025,10 @@ revenue:
   currency: RUB
   description: >
     Выручка GPS рассчитывается не через заранее заданную цену токена,
-    а через целевую contribution margin к OPEX и D&A. Сценарии отражают
-    фактическую кривую потребления рассчитанной мощности GPS
+    а через целевую contribution margin к pricing base. Pricing base включает
+    COGS и depreciation & amortization. SG&A не включается в pricing base
+    и учитывается ниже в P&L.
+  active_scenario: base
   target_contribution_margin:
     conservative:
       2026: 0.10
@@ -1049,44 +1051,37 @@ revenue:
   product_opex_allocation:
     method: token_share
     description: >
-      OPEX распределяется между продуктами пропорционально фактическому
-      потреблению токенов по каждому продукту.
-  active_scenario: base
-  go_live_sources:
-    workplace_go_live_year: capex.intangible_assets.products.workplace_ai.go_live_year
-    workplace_go_live_month: capex.intangible_assets.products.workplace_ai.go_live_month
-    contact_center_go_live_year: capex.intangible_assets.products.contact_center_ai.go_live_year
-    contact_center_go_live_month: capex.intangible_assets.products.contact_center_ai.go_live_month
-  pricing_base_description: >
-    База для расчета выручки и implied token price включает COGS и depreciation & amortization.
-    SG&A не включается в pricing base и учитывается ниже в P&L.
+      Pricing base распределяется между продуктами пропорционально фактическому
+      потреблению токенов по каждому продукту в соответствующем месяце.
+  pricing_base:
+    description: >
+      База для расчета выручки и implied token price включает COGS и
+      depreciation & amortization. SG&A не включается в pricing base.
+    components:
+      - total_cogs
+      - total_depreciation_and_amortization
+  products:
+    workplace_ai:
+      revenue_start:
+        event_ref: capex.intangible_assets.products.workplace_ai.time_for_development.event_flag
+        timing: after_event
+    contact_center_ai:
+      revenue_start:
+        event_ref: capex.intangible_assets.products.contact_center_ai.time_for_development.event_flag
+        timing: after_event
   calculation_logic:
-    available_token_capacity: total_annual_tokens
-    workplace_available_tokens: workplace_annual_tokens
-    contact_center_available_tokens: contact_center_annual_tokens
-    sold_tokens: available_token_capacity * utilization_of_token_capacity
-    workplace_sold_tokens: workplace_available_tokens * utilization_of_token_capacity
-    contact_center_sold_tokens: contact_center_available_tokens * utilization_of_token_capacity
-    workplace_token_share: workplace_annual_tokens / total_annual_tokens
-    contact_center_token_share: contact_center_annual_tokens / total_annual_tokens
-    workplace_revenue_active_months: >
-      if year < workplace_go_live_year then 0
-      else if year == workplace_go_live_year then 12 - workplace_go_live_month + 1
-      else 12
-    contact_center_revenue_active_months: >
-      if year < contact_center_go_live_year then 0
-      else if year == contact_center_go_live_year then 12 - contact_center_go_live_month + 1
-      else 12
-    workplace_revenue_availability_factor: workplace_revenue_active_months / 12
-    contact_center_revenue_availability_factor: contact_center_revenue_active_months / 12
-    pricing_base: total_cogs + total_depreciation_and_amortization
-    workplace_pricing_base: pricing_base * workplace_token_share
-    contact_center_pricing_base: pricing_base * contact_center_token_share
-    workplace_ai_revenue: workplace_pricing_base / (1 - target_contribution_margin) * workplace_revenue_availability_factor
-    contact_center_ai_revenue: contact_center_pricing_base / (1 - target_contribution_margin) * contact_center_revenue_availability_factor
+    target_contribution_margin_t: target_contribution_margin[active_scenario][year]
+    revenue_active_flag: 1 if month_key >= product.revenue_start_month_key else 0
+    monthly_pricing_base: total_cogs + total_depreciation_and_amortization
+    workplace_token_share: workplace_monthly_tokens / total_monthly_tokens
+    contact_center_token_share: contact_center_monthly_tokens / total_monthly_tokens
+    workplace_pricing_base: monthly_pricing_base * workplace_token_share
+    contact_center_pricing_base: monthly_pricing_base * contact_center_token_share
+    workplace_ai_revenue: workplace_pricing_base / (1 - target_contribution_margin_t) * workplace_ai.revenue_active_flag
+    contact_center_ai_revenue: contact_center_pricing_base / (1 - target_contribution_margin_t) * contact_center_ai.revenue_active_flag
     total_revenue: workplace_ai_revenue + contact_center_ai_revenue
-    workplace_implied_price_per_1m_tokens: workplace_ai_revenue / workplace_sold_tokens * 1000000
-    contact_center_implied_price_per_1m_tokens: contact_center_ai_revenue / contact_center_sold_tokens * 1000000
+    workplace_implied_price_per_1m_tokens: workplace_ai_revenue / workplace_monthly_tokens * 1000000
+    contact_center_implied_price_per_1m_tokens: contact_center_ai_revenue / contact_center_monthly_tokens * 1000000
 
 pnl:
   currency: RUB
@@ -1097,17 +1092,14 @@ pnl:
     profit_tax_rate:
       value: 0.25
   revenue_block:
-    total_revenue:
-      formula: workplace_ai_revenue + contact_center_ai_revenue
+    total_revenue: workplace_ai_revenue + contact_center_ai_revenue
   cogs_block:
     total_cogs: total_datacenter_opex + total_team_opex + annual_gpu_rental_cost
-  gross_profit:
-    formula: total_revenue - total_cogs
+  gross_profit: total_revenue - total_cogs
   sga_block:
     total_sga:
       source: sga.total_sga
-  ebitda:
-    formula: gross_profit - total_sga
+  ebitda: gross_profit - total_sga
   depreciation_and_amortization_block:
     total_ppe_depreciation:
       source: depreciation_and_amortization.total_ppe_depreciation
@@ -1115,16 +1107,12 @@ pnl:
       source: depreciation_and_amortization.total_ip_amortization
     total_depreciation_and_amortization:
       source: depreciation_and_amortization.total_depreciation_and_amortization
-  ebit:
-    formula: ebitda - total_depreciation_and_amortization
+  ebit: ebitda - total_depreciation_and_amortization
   interest_expense:
     source: funding.interest_expense
-  ebt:
-    formula: ebit - interest_expense
-  profit_tax:
-    formula: max(ebt, 0) * profit_tax_rate
-  net_income:
-    formula: ebt - profit_tax
+  ebt: ebit - interest_expense
+  profit_tax: max(ebt, 0) * profit_tax_rate
+  net_income: ebt - profit_tax
 
 cash_flow:
   currency: RUB
@@ -1137,8 +1125,7 @@ cash_flow:
       source: pnl.net_income
     depreciation_and_amortization:
       source: pnl.depreciation_and_amortization_block.total_depreciation_and_amortization
-    operating_cash_flow:
-      formula: net_income + total_depreciation_and_amortization
+    operating_cash_flow: net_income + total_depreciation_and_amortization
   investing_cash_flow:
     gpu_infra_capex:
       source: capex.gpu_infra_capex
@@ -1148,10 +1135,8 @@ cash_flow:
       source: capex.total_office_capex
     intangible_capex:
       source: capex.intangible_capex
-    investing_cash_flow:
-      formula: -gpu_infra_capex -datacenter_construction_capex -office_capex -intangible_capex
-  pre_financing_cash_flow:
-    formula: operating_cash_flow + investing_cash_flow
+    investing_cash_flow: -gpu_infra_capex -datacenter_construction_capex -office_capex -intangible_capex
+  pre_financing_cash_flow: operating_cash_flow + investing_cash_flow
   financing_cash_flow:
     equity_injection:
       source: funding.equity_injection
@@ -1159,17 +1144,12 @@ cash_flow:
       source: funding.revolver_drawdown
     revolver_repayment:
       source: funding.revolver_repayment
-    financing_cash_flow:
-      formula: equity_injection + revolver_drawdown - revolver_repayment
-  net_cash_flow:
-    formula: pre_financing_cash_flow + financing_cash_flow
+    financing_cash_flow: equity_injection + revolver_drawdown - revolver_repayment
+  net_cash_flow: pre_financing_cash_flow + financing_cash_flow
   cash_balance:
-    opening_cash:
-      formula: previous_year_closing_cash
-    closing_cash:
-      formula: opening_cash + net_cash_flow
-    cumulative_cash:
-      formula: cumulative_previous_year + net_cash_flow
+    opening_cash: previous_year_closing_cash
+    closing_cash: opening_cash + net_cash_flow
+    cumulative_cash: cumulative_previous_year + net_cash_flow
 
 funding:
   currency: RUB
