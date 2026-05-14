@@ -5,22 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GPS Finmodel Report</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
+    :root { --bg:#f7f8fb; --surface:#fff; --border:#d8deea; --text:#111827; --muted:#4b5563; --accent:#2563eb; }
+    body { font-family: Arial, sans-serif; margin: 0; color: var(--text); background: var(--bg); line-height: 1.35; }
+    .page { max-width: 1500px; margin: 0 auto; padding: 24px; }
     h1 { margin-bottom: 0.2rem; }
-    h2 { margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 0.3rem; }
-    table { border-collapse: collapse; width: 100%; margin: 12px 0 24px; font-size: 12px; }
-    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
-    th { background: #f5f5f5; }
-    .controls { display: flex; gap: 16px; margin: 12px 0 18px; flex-wrap: wrap; }
+    h2 { margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+    h3 { margin: 0 0 10px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); margin: 12px 0 24px; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; min-width: 980px; }
+    th, td { border: 1px solid var(--border); padding: 7px 8px; text-align: left; white-space: nowrap; }
+    th { background: #eef2ff; position: sticky; top: 0; z-index: 1; }
+    .controls { display: flex; gap: 16px; margin: 12px 0 18px; flex-wrap: wrap; align-items: center; }
     label { font-weight: bold; font-size: 13px; }
-    select { margin-left: 8px; padding: 4px; }
-    .card { border: 1px solid #ddd; padding: 10px; margin: 12px 0; border-radius: 6px; }
-    .note { font-size: 12px; color: #555; margin-bottom: 8px; }
+    select, input[type='range'] { margin-left: 8px; padding: 5px; }
+    .card { border: 1px solid var(--border); padding: 12px; margin: 12px 0; border-radius: 8px; background: var(--surface); }
+    .note { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
     .override-changed td { background: #fff6bf; }
-    button { padding: 4px 8px; }
+    button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer; }
+    .summary-cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin:12px 0; }
+    .summary-card { border:1px solid var(--border); border-radius:8px; background:var(--surface); padding:10px; }
+    .summary-card .k { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.02em; }
+    .summary-card .v { font-size:18px; font-weight:700; margin-top:4px; color:var(--accent); }
   </style>
 </head>
 <body>
+  <div class="page">
   <h1>GPS Finmodel Report</h1>
   <p>Generated from precomputed CSV outputs. Select scenarios to switch displayed tables; no browser-side financial recalculation is performed.</p>
 
@@ -103,7 +112,13 @@
       const headers = Object.keys(rows[0]);
       const th = headers.map((h) => `<th>${h}</th>`).join('');
       const body = rows.map((row) => `<tr>${headers.map((h) => `<td>${formatValue(row[h])}</td>`).join('')}</tr>`).join('');
-      return `<h3>${title}</h3><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+      return `<h3>${title}</h3><div class="table-wrap"><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    
+    function executiveCardsHtml(summary) {
+      const rows = Object.entries(summary).map(([k,v]) => `<div class="summary-card"><div class="k">${k.replace(/_/g, ' ')}</div><div class="v">${formatValue(v)}</div></div>`).join('');
+      return `<div class="summary-cards">${rows}</div>`;
     }
 
     function filterRows(rows, infra, funding) {
@@ -124,7 +139,7 @@
         closing_cash_after_funding: latest.closing_cash_after_funding,
         closing_revolver_balance: latest.closing_revolver_balance,
       }];
-      document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
+      document.getElementById('executive-summary').innerHTML = executiveCardsHtml(executive[0]) + tableHtml('Selected scenario snapshot', executive);
       document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', annual);
       document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', monthly);
       renderCharts(annual, monthly);
@@ -306,7 +321,7 @@
           closing_cash_after_funding: latest.closing_cash_after_funding,
           closing_revolver_balance: latest.closing_revolver_balance,
         }];
-        document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
+        document.getElementById('executive-summary').innerHTML = executiveCardsHtml(executive[0]) + tableHtml('Selected scenario snapshot', executive);
         document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', custom.annual);
       document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', custom.monthly);
         renderCharts(custom.annual, custom.monthly);
@@ -531,7 +546,7 @@
         closing_cash_after_funding: latest.closing_cash_after_funding,
         closing_revolver_balance: latest.closing_revolver_balance,
       }];
-      document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
+      document.getElementById('executive-summary').innerHTML = executiveCardsHtml(executive[0]) + tableHtml('Selected scenario snapshot', executive);
       document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', annual);
       document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', monthly);
       renderCharts(annual, monthly);
@@ -738,5 +753,6 @@
     renderDemandPreview();
     renderOperatingPreview();
   </script>
+  </div>
 </body>
 </html>
