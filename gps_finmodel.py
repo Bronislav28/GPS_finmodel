@@ -979,13 +979,13 @@ def write_static_html_report(
     metrics_rows: list[dict[str, Any]],
     items: list[ValidationItem],
 ) -> None:
+    import json
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     infra_names = sorted({str(r["infrastructure_scenario"]) for r in funded_rows})
     funding_names = sorted({str(r["funding_scenario"]) for r in funded_rows})
     base_infra = "base" if "base" in infra_names else (infra_names[0] if infra_names else "")
     base_funding = "base" if "base" in funding_names else (funding_names[0] if funding_names else "")
-    exec_rows = [r for r in annual_rows if r.get("infrastructure_scenario") == base_infra and r.get("funding_scenario") == base_funding]
-    exec_row = sorted(exec_rows, key=lambda r: int(r["year"]))[-1] if exec_rows else {}
 
     diagnostics_rows = [{
         "metric": "validation_errors",
@@ -1001,17 +1001,6 @@ def write_static_html_report(
         "value": base_funding,
     }]
 
-    executive_summary_rows = [{
-        "infrastructure_scenario": base_infra,
-        "funding_scenario": base_funding,
-        "latest_year": exec_row.get("year"),
-        "months_in_latest_year": exec_row.get("months_in_year"),
-        "total_revenue": exec_row.get("total_revenue"),
-        "net_income_after_interest": exec_row.get("net_income_after_interest"),
-        "closing_cash_after_funding": exec_row.get("closing_cash_after_funding"),
-        "closing_revolver_balance": exec_row.get("closing_revolver_balance"),
-    }]
-
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1025,27 +1014,102 @@ def write_static_html_report(
     table {{ border-collapse: collapse; width: 100%; margin: 12px 0 24px; font-size: 12px; }}
     th, td {{ border: 1px solid #ddd; padding: 6px; text-align: left; }}
     th {{ background: #f5f5f5; }}
+    .controls {{ display: flex; gap: 16px; margin: 12px 0 18px; flex-wrap: wrap; }}
+    label {{ font-weight: bold; font-size: 13px; }}
+    select {{ margin-left: 8px; padding: 4px; }}
   </style>
 </head>
 <body>
-  <h1>GPS Finmodel Static Report</h1>
-  <p>Generated from CSV outputs. No JavaScript recalculation or interactive controls included.</p>
+  <h1>GPS Finmodel Report</h1>
+  <p>Generated from precomputed CSV outputs. Select scenarios to switch displayed tables; no browser-side financial recalculation is performed.</p>
+
+  <div class="controls">
+    <label>Infrastructure scenario
+      <select id="infra-select"></select>
+    </label>
+    <label>Funding scenario
+      <select id="funding-select"></select>
+    </label>
+  </div>
 
   <h2>Executive Summary</h2>
-  {_table_html("Base scenario snapshot", executive_summary_rows)}
+  <div id="executive-summary"></div>
 
   <h2>Scenario Summary</h2>
   {_table_html("Scenario summary", summary_rows)}
 
   <h2>Annual Report</h2>
-  {_table_html("Annual aggregation by scenario", annual_rows)}
+  <div id="annual-report"></div>
 
   <h2>Monthly Detail</h2>
-  {_table_html("Monthly funded detail", funded_rows)}
+  <div id="monthly-detail"></div>
 
   <h2>Diagnostics</h2>
   {_table_html("Validation and report diagnostics", diagnostics_rows)}
   {_table_html("Investment metrics", metrics_rows)}
+
+  <script>
+    const reportData = {json.dumps({'funded_rows': funded_rows, 'annual_rows': annual_rows})};
+    const infraNames = {json.dumps(infra_names)};
+    const fundingNames = {json.dumps(funding_names)};
+    const baseInfra = {json.dumps(base_infra)};
+    const baseFunding = {json.dumps(base_funding)};
+
+    function formatValue(value) {{
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'number') return value.toLocaleString(undefined, {{minimumFractionDigits: 0, maximumFractionDigits: 2}});
+      return String(value);
+    }}
+
+    function tableHtml(title, rows) {{
+      if (!rows.length) return `<h3>${{title}}</h3><p>No data.</p>`;
+      const headers = Object.keys(rows[0]);
+      const th = headers.map((h) => `<th>${{h}}</th>`).join('');
+      const body = rows.map((row) => `<tr>${{headers.map((h) => `<td>${{formatValue(row[h])}}</td>`).join('')}}</tr>`).join('');
+      return `<h3>${{title}}</h3><table><thead><tr>${{th}}</tr></thead><tbody>${{body}}</tbody></table>`;
+    }}
+
+    function filterRows(rows, infra, funding) {{
+      return rows.filter((r) => r.infrastructure_scenario === infra && r.funding_scenario === funding);
+    }}
+
+    function render(infra, funding) {{
+      const annual = filterRows(reportData.annual_rows, infra, funding).sort((a,b)=>a.year-b.year);
+      const monthly = filterRows(reportData.funded_rows, infra, funding).sort((a,b)=>a.month_seq-b.month_seq);
+      const latest = annual.length ? annual[annual.length - 1] : {{}};
+      const executive = [{{
+        infrastructure_scenario: infra,
+        funding_scenario: funding,
+        latest_year: latest.year,
+        months_in_latest_year: latest.months_in_year,
+        total_revenue: latest.total_revenue,
+        net_income_after_interest: latest.net_income_after_interest,
+        closing_cash_after_funding: latest.closing_cash_after_funding,
+        closing_revolver_balance: latest.closing_revolver_balance,
+      }}];
+      document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
+      document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', annual);
+      document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', monthly);
+    }}
+
+    function initSelect(id, options, selected) {{
+      const el = document.getElementById(id);
+      options.forEach((name) => {{
+        const opt = document.createElement('option');
+        opt.value = name; opt.textContent = name;
+        if (name === selected) opt.selected = true;
+        el.appendChild(opt);
+      }});
+      return el;
+    }}
+
+    const infraSelect = initSelect('infra-select', infraNames, baseInfra);
+    const fundingSelect = initSelect('funding-select', fundingNames, baseFunding);
+    function onChange() {{ render(infraSelect.value, fundingSelect.value); }}
+    infraSelect.addEventListener('change', onChange);
+    fundingSelect.addEventListener('change', onChange);
+    onChange();
+  </script>
 </body>
 </html>
 """
