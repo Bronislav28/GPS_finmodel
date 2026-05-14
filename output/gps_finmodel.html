@@ -61,6 +61,11 @@
   <h2>Monthly Detail</h2>
   <div id="monthly-detail"></div>
 
+  <h2>Audit &amp; Reconciliation</h2>
+  <div id="audit-summary-cards" class="summary-cards"></div>
+  <div id="audit-checks-table"></div>
+  <div id="reconciliation-table"></div>
+
   <h2>Visual Analytics</h2>
   <div class="note">Charts are rendered browser-side from already precomputed scenario outputs.</div>
   <div class="card"><h3>Revenue / EBIT / Net income (annual)</h3><canvas id="chart-profitability" width="980" height="280"></canvas></div>
@@ -642,6 +647,22 @@
       renderDemandPreview();
       renderOperatingPreview();
     });
+
+    const auditRows = audit_rows_json;
+    const reconciliationRows = recon_rows_json;
+    function renderAuditSection(infra, funding) {
+      const filtAudit = auditRows.filter((r)=>r.infrastructure_scenario===infra && r.funding_scenario===funding);
+      const filtRecon = reconciliationRows.filter((r)=>r.infrastructure_scenario===infra && r.funding_scenario===funding);
+      const pass = filtAudit.filter((r)=>r.status==='PASS').length;
+      const warn = filtAudit.filter((r)=>r.status!=='PASS').length;
+      document.getElementById('audit-summary-cards').innerHTML = `
+        <div class="summary-card"><div class="k">Checks</div><div class="v">${filtAudit.length}</div></div>
+        <div class="summary-card"><div class="k">Pass</div><div class="v">${pass}</div></div>
+        <div class="summary-card"><div class="k">Warnings</div><div class="v">${warn}</div></div>`;
+      document.getElementById('audit-checks-table').innerHTML = tableHtml('Audit checks', filtAudit);
+      document.getElementById('reconciliation-table').innerHTML = tableHtml('Reconciliation', filtRecon);
+    }
+
     function knownOverridePaths() {
       return new Set(Object.values(plannerSections).flat().map((row) => row.path || row.label).filter(Boolean));
     }
