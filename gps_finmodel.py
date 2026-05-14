@@ -21,6 +21,7 @@ OUT_CSV = OUT_DIR / "gps_finmodel_validation_report.csv"
 OUT_CALENDAR_CSV = OUT_DIR / "gps_finmodel_calendar.csv"
 OUT_EVENTS_CSV = OUT_DIR / "gps_finmodel_events.csv"
 OUT_MONTHLY_DEMAND_GPU_CSV = OUT_DIR / "gps_finmodel_monthly_demand_gpu.csv"
+OUT_MONTHLY_INFRA_CSV = OUT_DIR / "gps_finmodel_monthly_infrastructure.csv"
 
 
 @dataclass
@@ -357,12 +358,121 @@ def write_monthly_demand_gpu(data: dict[str, Any]) -> None:
         writer.writerows(rows)
 
 
+
+def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    idx = year * 12 + (month - 1) + delta
+    return idx // 12, idx % 12 + 1
+
+
+def build_monthly_infrastructure(data: dict[str, Any], monthly_demand_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    investment = data.get("investment_scenarios", {}) if isinstance(data.get("investment_scenarios"), dict) else {}
+    capex = data.get("capex", {}) if isinstance(data.get("capex"), dict) else {}
+    strategy = capex.get("strategy_scenarios", {}) if isinstance(capex.get("strategy_scenarios"), dict) else {}
+
+    event = investment.get("construction", {}).get("event_flag", {}) if isinstance(investment.get("construction"), dict) else {}
+    start_year = int(event.get("start_year", 1900)) if isinstance(event.get("start_year"), int) else 1900
+    start_month = int(event.get("start_month", 1)) if isinstance(event.get("start_month"), int) else 1
+    duration = int(event.get("event_duration", 1)) if isinstance(event.get("event_duration"), int) and int(event.get("event_duration", 1)) > 0 else 1
+    end_year, end_month = _shift_month(start_year, start_month, duration - 1)
+    own_year, own_month = _shift_month(end_year, end_month, 1)
+
+    scenarios = strategy.get("scenarios", {}) if isinstance(strategy.get("scenarios"), dict) else {}
+    scenario_names = [name for name in ["build_own_dc", "rent_gpu_only", "hybrid"] if name in scenarios] or ["build_own_dc", "rent_gpu_only", "hybrid"]
+
+    rows: list[dict[str, Any]] = []
+    prev_owned_by_scenario = {name: 0.0 for name in scenario_names}
+
+    for demand_row in monthly_demand_rows:
+        year = int(demand_row["year"])
+        month = int(demand_row["month"])
+        month_id = str(demand_row["month_id"])
+        required_gpu = float(demand_row["required_gpu"])
+
+        start_flag = int(year == start_year and month == start_month)
+        month_idx = year * 12 + (month - 1)
+        start_idx = start_year * 12 + (start_month - 1)
+        end_idx = end_year * 12 + (end_month - 1)
+        own_idx = own_year * 12 + (own_month - 1)
+        active_flag = int(start_idx <= month_idx <= end_idx)
+        completed_flag = int(month_idx >= own_idx)
+
+        for scenario in scenario_names:
+            if scenario == "rent_gpu_only":
+                owned_gpu = 0.0
+                rented_gpu = required_gpu
+            elif scenario in {"build_own_dc", "hybrid"}:
+                owned_gpu = required_gpu if completed_flag else 0.0
+                rented_gpu = required_gpu if not completed_flag else 0.0
+            else:
+                owned_gpu = 0.0
+                rented_gpu = required_gpu
+
+            prev_owned = prev_owned_by_scenario[scenario]
+            owned_gpu_increment = max(owned_gpu - prev_owned, 0.0)
+            prev_owned_by_scenario[scenario] = owned_gpu
+
+            rows.append({
+                "scenario": scenario,
+                "month_seq": demand_row["month_seq"],
+                "month_id": month_id,
+                "year": year,
+                "month": month,
+                "construction_start_month_key": f"{start_year:04d}-{start_month:02d}",
+                "construction_end_month_key": f"{end_year:04d}-{end_month:02d}",
+                "owned_gpu_available_month_key": f"{own_year:04d}-{own_month:02d}",
+                "construction_start_flag": start_flag,
+                "construction_active_flag": active_flag,
+                "construction_completed_flag": completed_flag,
+                "required_gpu": round(required_gpu, 6),
+                "owned_gpu": round(owned_gpu, 6),
+                "rented_gpu": round(rented_gpu, 6),
+                "owned_gpu_increment": round(owned_gpu_increment, 6),
+                "gpu_capex": 0.0 if scenario == "rent_gpu_only" else round(owned_gpu_increment, 6),
+                "gpu_infra_capex": 0.0 if scenario == "rent_gpu_only" else round(owned_gpu_increment, 6),
+                "datacenter_construction_capex": 0.0 if scenario == "rent_gpu_only" else active_flag,
+            })
+
+    return rows
+
+
+def write_monthly_infrastructure(data: dict[str, Any]) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    calendar_rows = build_monthly_calendar(data)
+    monthly_demand_rows = build_monthly_demand_gpu(data, calendar_rows)
+    rows = build_monthly_infrastructure(data, monthly_demand_rows)
+
+    with OUT_MONTHLY_INFRA_CSV.open("w", newline="", encoding="utf-8") as fh:
+        fieldnames = [
+            "scenario",
+            "month_seq",
+            "month_id",
+            "year",
+            "month",
+            "construction_start_month_key",
+            "construction_end_month_key",
+            "owned_gpu_available_month_key",
+            "construction_start_flag",
+            "construction_active_flag",
+            "construction_completed_flag",
+            "required_gpu",
+            "owned_gpu",
+            "rented_gpu",
+            "owned_gpu_increment",
+            "gpu_capex",
+            "gpu_infra_capex",
+            "datacenter_construction_capex",
+        ]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
 def main() -> int:
     assumptions = load_assumptions(ASSUMPTIONS_PATH)
     items = validate(assumptions)
     write_reports(items)
     write_calendar_and_events(assumptions)
     write_monthly_demand_gpu(assumptions)
+    write_monthly_infrastructure(assumptions)
 
     errors = [x for x in items if x.level == "ERROR"]
     warnings = [x for x in items if x.level == "WARNING"]
@@ -372,6 +482,7 @@ def main() -> int:
     print(f"Calendar CSV: {OUT_CALENDAR_CSV}")
     print(f"Events CSV: {OUT_EVENTS_CSV}")
     print(f"Monthly demand/GPU CSV: {OUT_MONTHLY_DEMAND_GPU_CSV}")
+    print(f"Monthly infrastructure CSV: {OUT_MONTHLY_INFRA_CSV}")
     return 1 if errors else 0
 
 
