@@ -1,16 +1,28 @@
 # GPS Finmodel — Business Model Description
 
 ## GPS Finmodel v2 — Monthly-first architecture
-1. assumptions.yaml = source of truth
-2. gps_finmodel.py = calculation engine
-3. HTML = Excel-like interactive output, not source of truth
-4. Monthly rows = расчетная истина
-5. Annual report = агрегация monthly rows
-6. Events задаются через event_flag / event_ref / timing
-7. Payroll задается через salary_gross_monthly_rub_2026 + fte_plan
-8. Revenue считается через target contribution margin к pricing base
-9. Investment metrics считаются по monthly cash flow
-10. Старые structures запрещены
+
+This section defines the v2 implementation contract before `gps_finmodel.py` development.
+
+- `assumptions.yaml` is the source of truth for assumptions and declarative business logic.
+- `gps_finmodel.py` is the calculation engine.
+- HTML output is an Excel-like interactive report and must not be the source of truth.
+- Monthly rows are the calculation source of truth.
+- The annual report is aggregated from monthly rows.
+- The model timeline starts at `model.forecast_start` and ends at `model.forecast_end`.
+- Event timing is represented through `event_flag`, `event_ref`, and `timing`.
+- Product development windows use `event_flag`.
+- Product revenue start can use `event_ref` with `timing: after_event`.
+- Payroll is role-based and uses `salary_gross_monthly_rub_2026` plus `fte_plan`.
+- Salary is indexed by `salary_growth` and is not repeated manually by year.
+- Infrastructure scenario and construction timing are controlled by `investment_scenarios`.
+- Revenue is calculated through target contribution margin on pricing base, not fixed token price.
+- Investment metrics are calculated from monthly free cash flow.
+- HTML controls may change scenarios, but `assumptions.yaml` remains the base source of truth.
+
+### Deprecated structures note
+
+The v2 model must not rely on deprecated structures: `years`, `consumption_scenarios`, `core_team_target_fte`, legacy `salary_gross_monthly_rub` block, `hiring_plan_monthly`, `scaling_rules`, `go_live_year` / `go_live_month`, `construction_start_year`, annual-only `construction_flag` logic, and `start-month`.
 
 ## 1. Цель модели
 
