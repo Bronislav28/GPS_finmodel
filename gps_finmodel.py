@@ -1608,23 +1608,110 @@ def write_static_html_report(
       renderDemandPreview();
       renderOperatingPreview();
     }});
+    function knownOverridePaths() {{
+      return new Set(Object.values(plannerSections).flat().map((row) => row.path || row.label).filter(Boolean));
+    }}
+
+    function notifyImportWarnings(warnings) {{
+      if (!warnings.length) return;
+      const message = `Scenario import warnings:\\n- ${{warnings.join('\\n- ')}}`;
+      console.warn(message);
+      alert(message);
+    }}
+
     document.getElementById('planner-export').addEventListener('click', () => {{
-      const payload = {{ schema_version: 'v2-14-assumption-overrides', exported_at_utc: new Date().toISOString(), overrides: plannerOverrides }};
+      const payload = {{
+        schema_version: 'v2-18-scenario-overrides',
+        exported_at_utc: new Date().toISOString(),
+        controls: {{
+          infrastructure_scenario: infraSelect.value,
+          funding_mode: fundingModeSelect.value,
+          funding_scenario: fundingSelect.value,
+          custom_equity_share_percent: Number(equityShareInput.value),
+        }},
+        overrides: plannerOverrides,
+      }};
       const blob = new Blob([JSON.stringify(payload, null, 2)], {{ type: 'application/json' }});
-      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'gps_finmodel_assumption_overrides.json'; a.click(); URL.revokeObjectURL(url);
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'gps_finmodel_scenario_overrides.json'; a.click(); URL.revokeObjectURL(url);
     }});
     const importFile = document.getElementById('planner-import-file');
     document.getElementById('planner-import').addEventListener('click', () => importFile.click());
     importFile.addEventListener('change', async (event) => {{
       const file = event.target.files && event.target.files[0];
       if (!file) return;
-      const text = await file.text();
-      const payload = JSON.parse(text);
-      plannerOverrides = (payload && typeof payload === 'object' && payload.overrides && typeof payload.overrides === 'object') ? payload.overrides : {{}};
+      let payload = null;
+      try {{
+        const text = await file.text();
+        payload = JSON.parse(text);
+      }} catch (err) {{
+        console.warn('Scenario import failed: invalid JSON payload.', err);
+        alert('Scenario import failed: invalid JSON payload.');
+        event.target.value = '';
+        return;
+      }}
+      const warnings = [];
+      if (!payload || typeof payload !== 'object') {{
+        alert('Scenario import failed: payload root must be an object.');
+        event.target.value = '';
+        return;
+      }}
+
+      const knownTopLevel = new Set(['schema_version', 'exported_at_utc', 'controls', 'overrides']);
+      Object.keys(payload).forEach((key) => {{
+        if (!knownTopLevel.has(key)) warnings.push(`Unknown top-level key "${{key}}" was ignored.`);
+      }});
+
+      if (payload.controls && typeof payload.controls === 'object') {{
+        const c = payload.controls;
+        const knownControls = new Set(['infrastructure_scenario', 'funding_mode', 'funding_scenario', 'custom_equity_share_percent']);
+        Object.keys(c).forEach((key) => {{
+          if (!knownControls.has(key)) warnings.push(`Unknown controls key "${{key}}" was ignored.`);
+        }});
+        if (typeof c.infrastructure_scenario === 'string' && infraNames.includes(c.infrastructure_scenario)) {{
+          infraSelect.value = c.infrastructure_scenario;
+        }} else if (Object.prototype.hasOwnProperty.call(c, 'infrastructure_scenario')) {{
+          warnings.push(`Invalid infrastructure_scenario "${{String(c.infrastructure_scenario)}}" was ignored.`);
+        }}
+        if (typeof c.funding_mode === 'string' && ['precomputed', 'custom_mix'].includes(c.funding_mode)) {{
+          fundingModeSelect.value = c.funding_mode;
+        }} else if (Object.prototype.hasOwnProperty.call(c, 'funding_mode')) {{
+          warnings.push(`Invalid funding_mode "${{String(c.funding_mode)}}" was ignored.`);
+        }}
+        if (typeof c.funding_scenario === 'string' && fundingNames.includes(c.funding_scenario)) {{
+          fundingSelect.value = c.funding_scenario;
+        }} else if (Object.prototype.hasOwnProperty.call(c, 'funding_scenario')) {{
+          warnings.push(`Invalid funding_scenario "${{String(c.funding_scenario)}}" was ignored.`);
+        }}
+        if (Object.prototype.hasOwnProperty.call(c, 'custom_equity_share_percent')) {{
+          const pct = Number(c.custom_equity_share_percent);
+          if (Number.isFinite(pct) && pct >= 0 && pct <= 100) equityShareInput.value = String(Math.round(pct));
+          else warnings.push(`Invalid custom_equity_share_percent "${{String(c.custom_equity_share_percent)}}" was ignored.`);
+        }}
+      }} else if (Object.prototype.hasOwnProperty.call(payload, 'controls')) {{
+        warnings.push('Invalid controls block ignored (expected object).');
+      }}
+
+      const knownPaths = knownOverridePaths();
+      const importedOverrides = (payload.overrides && typeof payload.overrides === 'object') ? payload.overrides : {{}};
+      plannerOverrides = {{}};
+      Object.entries(importedOverrides).forEach(([path, value]) => {{
+        if (!knownPaths.has(path)) {{
+          warnings.push(`Unknown override path "${{path}}" was ignored.`);
+          return;
+        }}
+        plannerOverrides[path] = normalizeOverrideValue(value);
+      }});
+      if (Object.prototype.hasOwnProperty.call(payload, 'overrides') && (!payload.overrides || typeof payload.overrides !== 'object')) {{
+        warnings.push('Invalid overrides block ignored (expected object).');
+      }}
+      appliedScenario = null;
+      onChange();
       updateOverrideCount();
       renderPlanner();
       renderDemandPreview();
       renderOperatingPreview();
+      notifyImportWarnings(warnings);
+      event.target.value = '';
     }});
 
     updateOverrideCount();
