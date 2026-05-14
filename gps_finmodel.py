@@ -24,6 +24,8 @@ OUT_MONTHLY_DEMAND_GPU_CSV = OUT_DIR / "gps_finmodel_monthly_demand_gpu.csv"
 OUT_MONTHLY_INFRA_CSV = OUT_DIR / "gps_finmodel_monthly_infrastructure.csv"
 OUT_MONTHLY_COSTS_CSV = OUT_DIR / "gps_finmodel_monthly_costs.csv"
 OUT_MONTHLY_FINANCIALS_CSV = OUT_DIR / "gps_finmodel_monthly_financials.csv"
+OUT_MONTHLY_FUNDED_CSV = OUT_DIR / "gps_finmodel_monthly_funded.csv"
+OUT_INVESTMENT_METRICS_CSV = OUT_DIR / "gps_finmodel_investment_metrics.csv"
 
 
 @dataclass
@@ -549,6 +551,7 @@ def build_monthly_infrastructure(data: dict[str, Any], monthly_demand_rows: list
 
             rows.append({
                 "scenario": scenario,
+                "required_gpu": round(required_gpu, 6),
                 "month_seq": demand_row["month_seq"],
                 "month_id": month_id,
                 "year": year,
@@ -710,6 +713,7 @@ def build_monthly_financials(data: dict[str, Any], calendar_rows: list[dict[str,
 
             rows.append({
                 "scenario": scenario,
+                "required_gpu": round(float(demand.get("required_gpu", 0.0)), 6),
                 "month_seq": infra["month_seq"],
                 "month_id": month_id,
                 "year": year,
@@ -746,10 +750,138 @@ def write_monthly_financials(data: dict[str, Any]) -> None:
     cost_rows = build_monthly_costs(data, calendar_rows, infra_rows)
     rows = build_monthly_financials(data, calendar_rows, demand_rows, infra_rows, cost_rows)
     with OUT_MONTHLY_FINANCIALS_CSV.open("w", newline="", encoding="utf-8") as fh:
-        fieldnames = ["scenario", "month_seq", "month_id", "year", "month", "workplace_revenue", "contact_center_revenue", "total_revenue", "cogs", "sga", "depreciation_and_amortization", "ebit", "profit_tax", "net_income", "operating_cash_flow", "investing_cash_flow", "pre_financing_cash_flow", "opening_cash_before_funding", "closing_cash_before_funding", "net_ppe", "net_intangible_assets", "total_assets_pre_funding", "total_liabilities_pre_funding", "total_equity_pre_funding"]
+        fieldnames = ["scenario", "required_gpu", "month_seq", "month_id", "year", "month", "workplace_revenue", "contact_center_revenue", "total_revenue", "cogs", "sga", "depreciation_and_amortization", "ebit", "profit_tax", "net_income", "operating_cash_flow", "investing_cash_flow", "pre_financing_cash_flow", "opening_cash_before_funding", "closing_cash_before_funding", "net_ppe", "net_intangible_assets", "total_assets_pre_funding", "total_liabilities_pre_funding", "total_equity_pre_funding"]
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def normalize_funding_scenarios(data: dict[str, Any], items: list[ValidationItem]) -> dict[str, tuple[float, float]]:
+    funding = data.get("funding", {}) if isinstance(data.get("funding"), dict) else {}
+    scenarios = funding.get("scenarios", {}) if isinstance(funding.get("scenarios"), dict) else {}
+    result: dict[str, tuple[float, float]] = {}
+    for name in ["equity_only", "revolver_only", "mix"]:
+        sc = scenarios.get(name, {}) if isinstance(scenarios.get(name), dict) else {}
+        e = sc.get("equity_share", {}) if isinstance(sc.get("equity_share"), dict) else {}
+        r = sc.get("revolver_share", {}) if isinstance(sc.get("revolver_share"), dict) else {}
+        es = float(e.get("value", 0.0)) if _is_number(e.get("value")) else 0.0
+        rs = float(r.get("value", 0.0)) if _is_number(r.get("value")) else 0.0
+        total = es + rs
+        if total > 1.000001 and total <= 100.000001:
+            es /= 100.0
+            rs /= 100.0
+            total = es + rs
+        if total <= 0:
+            items.append(ValidationItem("ERROR", f"funding.scenarios.{name}", "Funding shares are missing or zero."))
+            continue
+        if abs(total - 1.0) > 1e-6:
+            items.append(ValidationItem("WARNING", f"funding.scenarios.{name}", f"Shares sum to {total:.6f}; normalized to 1.0."))
+            es /= total
+            rs /= total
+        result[name] = (es, rs)
+    if not result:
+        items.append(ValidationItem("ERROR", "funding.scenarios", "No valid funding scenarios found."))
+    return result
+
+
+def minimum_cash_balance_for_row(data: dict[str, Any], fin_row: dict[str, Any], cost_row: dict[str, Any], items: list[ValidationItem]) -> float:
+    mcb = data.get("funding", {}).get("minimum_cash_balance", {}) if isinstance(data.get("funding", {}).get("minimum_cash_balance"), dict) else {}
+    months = mcb.get("months_of_fixed_costs", {}) if isinstance(mcb.get("months_of_fixed_costs"), dict) else {}
+    m = float(months.get("value", 1.0)) if _is_number(months.get("value")) else 1.0
+    fixed = float(cost_row.get("core_team_payroll", 0.0)) + float(cost_row.get("sga_payroll", 0.0)) + max(float(cost_row.get("datacenter_opex", 0.0)), 0.0)
+    if not _is_number(m):
+        items.append(ValidationItem("WARNING", "funding.minimum_cash_balance", "Using fallback convention for minimum cash balance."))
+        m = 1.0
+    return max(fixed * m, 0.0)
+
+
+def calculate_monthly_funding(data, financial_rows, cost_rows, funding_shares, items):
+    cost_by_key = {(str(r["scenario"]), str(r["month_id"])): r for r in cost_rows}
+    annual_rate = data.get("finance", {}).get("funding", {}).get("revolver_interest_rate")
+    if not _is_number(annual_rate):
+        items.append(ValidationItem("ERROR", "finance.funding.revolver_interest_rate", "Missing or non-numeric."))
+        annual_rate = 0.0
+    annual_rate = float(annual_rate)
+    monthly_rate = (1 + annual_rate) ** (1 / 12) - 1
+    if monthly_rate < 0:
+        items.append(ValidationItem("WARNING", "finance.funding.revolver_interest_rate", "Monthly interest rate is negative."))
+    by_scenario = {}
+    for r in financial_rows:
+        by_scenario.setdefault(str(r["scenario"]), []).append(r)
+    funded=[]
+    for infra,rows in by_scenario.items():
+        rows=sorted(rows,key=lambda x:int(x["month_seq"]))
+        for f_name,(eq_share,rev_share) in funding_shares.items():
+            cash=0.0; rev_bal=0.0; paid_in=0.0; retained=0.0
+            for r in rows:
+                cost=cost_by_key.get((infra,str(r["month_id"])),{})
+                min_cash=minimum_cash_balance_for_row(data,r,cost,items)
+                base_cf=float(r["pre_financing_cash_flow"]); ebit=float(r["ebit"])
+                pre_cash=cash+base_cf
+                funding_need=max(min_cash-pre_cash,0.0)
+                eq_inj=funding_need*eq_share
+                rev_draw=funding_need*rev_share
+                cash_after_draw=pre_cash+eq_inj+rev_draw
+                excess=max(cash_after_draw-min_cash,0.0)
+                rev_repay=min(excess,rev_bal+rev_draw)
+                close_rev=rev_bal+rev_draw-rev_repay
+                avg_rev=(rev_bal+close_rev)/2.0
+                interest=avg_rev*monthly_rate
+                ebt_ai=ebit-interest
+                tax=max(ebt_ai,0.0)*float(data.get("finance",{}).get("taxes",{}).get("profit_tax_rate",0.0))
+                ni=ebt_ai-tax
+                ocf_ai=ni+float(r["depreciation_and_amortization"])
+                fcf_af=ocf_ai+float(r["investing_cash_flow"])
+                close_cash=cash_after_draw-rev_repay-interest
+                paid_in+=eq_inj; retained+=ni
+                total_assets=close_cash+float(r["net_ppe"])+float(r["net_intangible_assets"])
+                total_liab=close_rev; total_eq=paid_in+retained
+                balance_check=total_assets-total_liab-total_eq
+                funded.append({**r,"infrastructure_scenario":infra,"funding_scenario":f_name,"equity_share":round(eq_share,6),"revolver_share":round(rev_share,6),"minimum_cash_balance":round(min_cash,2),"funding_need":round(funding_need,2),"equity_injection":round(eq_inj,2),"revolver_drawdown":round(rev_draw,2),"revolver_repayment":round(rev_repay,2),"opening_revolver_balance":round(rev_bal,2),"closing_revolver_balance":round(close_rev,2),"average_revolver_balance":round(avg_rev,2),"monthly_revolver_interest_rate":round(monthly_rate,8),"interest_expense":round(interest,2),"ebt_after_interest":round(ebt_ai,2),"profit_tax_after_interest":round(tax,2),"net_income_after_interest":round(ni,2),"operating_cash_flow_after_interest":round(ocf_ai,2),"free_cash_flow_after_financing_costs":round(fcf_af,2),"closing_cash_after_funding":round(close_cash,2),"cash":round(close_cash,2),"revolver_balance":round(close_rev,2),"paid_in_capital":round(paid_in,2),"retained_earnings":round(retained,2),"total_assets":round(total_assets,2),"total_liabilities":round(total_liab,2),"total_equity":round(total_eq,2),"balance_check":round(balance_check,2)})
+                cash=close_cash; rev_bal=close_rev
+    return funded
+
+
+def monthly_irr(cfs: list[float]) -> float | None:
+    if not any(x < 0 for x in cfs) or not any(x > 0 for x in cfs):
+        return None
+    rate = 0.01
+    for _ in range(100):
+        npv = 0.0; d=0.0
+        for t,cf in enumerate(cfs):
+            den=(1+rate)**t
+            npv += cf/den
+            if t>0: d += -t*cf/((1+rate)**(t+1))
+        if abs(npv) < 1e-7: return rate
+        if d == 0: break
+        rate -= npv/d
+        if rate <= -0.9999 or rate > 10: break
+    return None
+
+
+def calculate_investment_metrics(data, funded_rows, items):
+    annual_discount=float(data.get("finance",{}).get("valuation",{}).get("discount_rate",0.0))
+    mdr=(1+annual_discount)**(1/12)-1
+    grouped={}
+    for r in funded_rows: grouped.setdefault((r["infrastructure_scenario"],r["funding_scenario"]),[]).append(r)
+    metrics=[]
+    for (infra,fund),rows in grouped.items():
+        rows=sorted(rows,key=lambda x:int(x["month_seq"]))
+        cfs=[float(r["free_cash_flow_after_financing_costs"]) for r in rows]
+        npv=0.0; cum=0.0; cumd=0.0; sp='Not reached'; dp='Not reached'
+        for i,cf in enumerate(cfs, start=1):
+            disc=1/((1+mdr)**i)
+            dcf=cf*disc; npv+=dcf; cum+=cf; cumd+=dcf
+            if sp=='Not reached' and cum>=0: sp=rows[i-1]["month_id"]
+            if dp=='Not reached' and cumd>=0: dp=rows[i-1]["month_id"]
+        mirr=monthly_irr(cfs); airr=((1+mirr)**12-1) if mirr is not None else None
+        if mirr is None: items.append(ValidationItem("WARNING", f"investment_metrics.{infra}.{fund}", "IRR could not be calculated."))
+        req_inv=abs(sum(float(r["investing_cash_flow"]) for r in rows if float(r["investing_cash_flow"])<0))
+        peak=max(float(r["required_gpu"]) for r in rows) if rows else 0.0
+        last=rows[-1]
+        metrics.append({"infrastructure_scenario":infra,"funding_scenario":fund,"npv":round(npv,2),"irr_annualized":round(airr,6) if airr is not None else None,"simple_payback_month_key":sp,"discounted_payback_month_key":dp,"required_investments":round(req_inv,2),"peak_required_gpu":round(peak,6),"ending_revolver_balance":last["closing_revolver_balance"],"ending_cash":last["closing_cash_after_funding"],"ending_balance_check":last["balance_check"]})
+    return metrics
+
 
 def main() -> int:
     assumptions = load_assumptions(ASSUMPTIONS_PATH)
@@ -761,6 +893,24 @@ def main() -> int:
     write_monthly_costs(assumptions)
     write_monthly_financials(assumptions)
 
+    calendar_rows = build_monthly_calendar(assumptions)
+    demand_rows = build_monthly_demand_gpu(assumptions, calendar_rows)
+    infra_rows = build_monthly_infrastructure(assumptions, demand_rows)
+    cost_rows = build_monthly_costs(assumptions, calendar_rows, infra_rows)
+    fin_rows = build_monthly_financials(assumptions, calendar_rows, demand_rows, infra_rows, cost_rows)
+    funding_shares = normalize_funding_scenarios(assumptions, items)
+    funded_rows = calculate_monthly_funding(assumptions, fin_rows, cost_rows, funding_shares, items)
+    metrics_rows = calculate_investment_metrics(assumptions, funded_rows, items)
+
+    with OUT_MONTHLY_FUNDED_CSV.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(funded_rows[0].keys()) if funded_rows else [])
+        if funded_rows:
+            writer.writeheader(); writer.writerows(funded_rows)
+    with OUT_INVESTMENT_METRICS_CSV.open("w", newline="", encoding="utf-8") as fh:
+        fieldnames=["infrastructure_scenario","funding_scenario","npv","irr_annualized","simple_payback_month_key","discounted_payback_month_key","required_investments","peak_required_gpu","ending_revolver_balance","ending_cash","ending_balance_check"]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames); writer.writeheader(); writer.writerows(metrics_rows)
+
+    write_reports(items)
     errors = [x for x in items if x.level == "ERROR"]
     warnings = [x for x in items if x.level == "WARNING"]
     print(f"Validation completed. Errors: {len(errors)}, warnings: {len(warnings)}")
@@ -772,6 +922,8 @@ def main() -> int:
     print(f"Monthly infrastructure CSV: {OUT_MONTHLY_INFRA_CSV}")
     print(f"Monthly costs CSV: {OUT_MONTHLY_COSTS_CSV}")
     print(f"Monthly financials CSV: {OUT_MONTHLY_FINANCIALS_CSV}")
+    print(f"Monthly funded CSV: {OUT_MONTHLY_FUNDED_CSV}")
+    print(f"Investment metrics CSV: {OUT_INVESTMENT_METRICS_CSV}")
     return 1 if errors else 0
 
 
