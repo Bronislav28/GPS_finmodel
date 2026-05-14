@@ -28,6 +28,7 @@ OUT_MONTHLY_FUNDED_CSV = OUT_DIR / "gps_finmodel_monthly_funded.csv"
 OUT_INVESTMENT_METRICS_CSV = OUT_DIR / "gps_finmodel_investment_metrics.csv"
 OUT_ANNUAL_REPORT_CSV = OUT_DIR / "gps_finmodel_annual_report.csv"
 OUT_SCENARIO_SUMMARY_CSV = OUT_DIR / "gps_finmodel_scenario_summary.csv"
+OUT_HTML = OUT_DIR / "gps_finmodel.html"
 
 
 @dataclass
@@ -949,6 +950,109 @@ def build_scenario_summary(annual_rows: list[dict[str, Any]], metrics_rows: list
     return summary
 
 
+def _format_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    return str(value)
+
+
+def _table_html(title: str, rows: list[dict[str, Any]], max_rows: int | None = None) -> str:
+    if not rows:
+        return f"<h3>{title}</h3><p>No data.</p>"
+    body_rows = rows[:max_rows] if max_rows is not None else rows
+    headers = list(rows[0].keys())
+    th = "".join(f"<th>{h}</th>" for h in headers)
+    tr_parts = []
+    for row in body_rows:
+        tds = "".join(f"<td>{_format_value(row.get(h))}</td>" for h in headers)
+        tr_parts.append(f"<tr>{tds}</tr>")
+    tbody = "".join(tr_parts)
+    return f"<h3>{title}</h3><table><thead><tr>{th}</tr></thead><tbody>{tbody}</tbody></table>"
+
+
+def write_static_html_report(
+    funded_rows: list[dict[str, Any]],
+    annual_rows: list[dict[str, Any]],
+    summary_rows: list[dict[str, Any]],
+    metrics_rows: list[dict[str, Any]],
+    items: list[ValidationItem],
+) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    infra_names = sorted({str(r["infrastructure_scenario"]) for r in funded_rows})
+    funding_names = sorted({str(r["funding_scenario"]) for r in funded_rows})
+    base_infra = "base" if "base" in infra_names else (infra_names[0] if infra_names else "")
+    base_funding = "base" if "base" in funding_names else (funding_names[0] if funding_names else "")
+    exec_rows = [r for r in annual_rows if r.get("infrastructure_scenario") == base_infra and r.get("funding_scenario") == base_funding]
+    exec_row = sorted(exec_rows, key=lambda r: int(r["year"]))[-1] if exec_rows else {}
+
+    diagnostics_rows = [{
+        "metric": "validation_errors",
+        "value": sum(1 for x in items if x.level == "ERROR"),
+    }, {
+        "metric": "validation_warnings",
+        "value": sum(1 for x in items if x.level == "WARNING"),
+    }, {
+        "metric": "base_infrastructure_scenario",
+        "value": base_infra,
+    }, {
+        "metric": "base_funding_scenario",
+        "value": base_funding,
+    }]
+
+    executive_summary_rows = [{
+        "infrastructure_scenario": base_infra,
+        "funding_scenario": base_funding,
+        "latest_year": exec_row.get("year"),
+        "months_in_latest_year": exec_row.get("months_in_year"),
+        "total_revenue": exec_row.get("total_revenue"),
+        "net_income_after_interest": exec_row.get("net_income_after_interest"),
+        "closing_cash_after_funding": exec_row.get("closing_cash_after_funding"),
+        "closing_revolver_balance": exec_row.get("closing_revolver_balance"),
+    }]
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GPS Finmodel Report</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 24px; color: #111; }}
+    h1 {{ margin-bottom: 0.2rem; }}
+    h2 {{ margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 0.3rem; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 12px 0 24px; font-size: 12px; }}
+    th, td {{ border: 1px solid #ddd; padding: 6px; text-align: left; }}
+    th {{ background: #f5f5f5; }}
+  </style>
+</head>
+<body>
+  <h1>GPS Finmodel Static Report</h1>
+  <p>Generated from CSV outputs. No JavaScript recalculation or interactive controls included.</p>
+
+  <h2>Executive Summary</h2>
+  {_table_html("Base scenario snapshot", executive_summary_rows)}
+
+  <h2>Scenario Summary</h2>
+  {_table_html("Scenario summary", summary_rows)}
+
+  <h2>Annual Report</h2>
+  {_table_html("Annual aggregation by scenario", annual_rows)}
+
+  <h2>Monthly Detail</h2>
+  {_table_html("Monthly funded detail", funded_rows)}
+
+  <h2>Diagnostics</h2>
+  {_table_html("Validation and report diagnostics", diagnostics_rows)}
+  {_table_html("Investment metrics", metrics_rows)}
+</body>
+</html>
+"""
+    with OUT_HTML.open("w", encoding="utf-8") as fh:
+        fh.write(html)
+
+
 def main() -> int:
     assumptions = load_assumptions(ASSUMPTIONS_PATH)
     items = validate(assumptions)
@@ -985,6 +1089,7 @@ def main() -> int:
         writer = csv.DictWriter(fh, fieldnames=list(summary_rows[0].keys()) if summary_rows else [])
         if summary_rows:
             writer.writeheader(); writer.writerows(summary_rows)
+    write_static_html_report(funded_rows, annual_rows, summary_rows, metrics_rows, items)
 
     write_reports(items)
     errors = [x for x in items if x.level == "ERROR"]
@@ -1002,6 +1107,7 @@ def main() -> int:
     print(f"Investment metrics CSV: {OUT_INVESTMENT_METRICS_CSV}")
     print(f"Annual report CSV: {OUT_ANNUAL_REPORT_CSV}")
     print(f"Scenario summary CSV: {OUT_SCENARIO_SUMMARY_CSV}")
+    print(f"Static HTML report: {OUT_HTML}")
     return 1 if errors else 0
 
 
