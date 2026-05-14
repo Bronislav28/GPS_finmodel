@@ -1,2 +1,7 @@
 level,path,message
 OK,root,Validation passed with no findings.
+WARNING,investment_metrics.build_own_dc.revolver_only,IRR could not be calculated.
+WARNING,investment_metrics.build_own_dc.mix,IRR could not be calculated.
+WARNING,investment_metrics.rent_gpu_only.revolver_only,IRR could not be calculated.
+WARNING,investment_metrics.hybrid.revolver_only,IRR could not be calculated.
+WARNING,investment_metrics.hybrid.mix,IRR could not be calculated.
