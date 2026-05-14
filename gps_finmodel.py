@@ -22,6 +22,7 @@ OUT_CALENDAR_CSV = OUT_DIR / "gps_finmodel_calendar.csv"
 OUT_EVENTS_CSV = OUT_DIR / "gps_finmodel_events.csv"
 OUT_MONTHLY_DEMAND_GPU_CSV = OUT_DIR / "gps_finmodel_monthly_demand_gpu.csv"
 OUT_MONTHLY_INFRA_CSV = OUT_DIR / "gps_finmodel_monthly_infrastructure.csv"
+OUT_MONTHLY_COSTS_CSV = OUT_DIR / "gps_finmodel_monthly_costs.csv"
 
 
 @dataclass
@@ -364,6 +365,140 @@ def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
     return idx // 12, idx % 12 + 1
 
 
+def _resolve_path(data: dict[str, Any], path: str) -> Any:
+    node: Any = data
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _salary_index(growth_by_year: dict[str, Any], year: int) -> float:
+    idx = 1.0
+    for y in range(2027, year + 1):
+        idx *= 1.0 + _year_value(growth_by_year, y)
+    return idx
+
+
+def _fte_for_month(fte_plan: Any, year: int, month: int, data: dict[str, Any]) -> float:
+    if not isinstance(fte_plan, list):
+        return 0.0
+    current_idx = year * 12 + (month - 1)
+    latest_idx = -10**9
+    latest_fte = 0.0
+    for step in fte_plan:
+        if not isinstance(step, dict):
+            continue
+        if "event_ref" in step:
+            event = _resolve_path(data, str(step.get("event_ref", "")))
+            if not isinstance(event, dict):
+                continue
+            ev_y = event.get("start_year", 1900)
+            ev_m = event.get("start_month", 1)
+            ev_d = event.get("event_duration", 1)
+            if not (isinstance(ev_y, int) and isinstance(ev_m, int) and isinstance(ev_d, int)):
+                continue
+            timing = step.get("timing")
+            ref_y, ref_m = (ev_y, ev_m) if timing == "event_start" else _shift_month(ev_y, ev_m, ev_d - 1)
+        else:
+            ref_y = step.get("start_year")
+            ref_m = step.get("start_month")
+            if not (isinstance(ref_y, int) and isinstance(ref_m, int)):
+                continue
+        ref_idx = int(ref_y) * 12 + (int(ref_m) - 1)
+        if ref_idx <= current_idx and ref_idx >= latest_idx:
+            latest_idx = ref_idx
+            latest_fte = float(step.get("fte", 0.0)) if _is_number(step.get("fte")) else 0.0
+    return latest_fte
+
+
+def build_monthly_costs(data: dict[str, Any], calendar_rows: list[dict[str, Any]], infra_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    inflation = data.get("inflation_assumptions", {}) if isinstance(data.get("inflation_assumptions"), dict) else {}
+    rub_inflation = inflation.get("rub_inflation", {}) if isinstance(inflation.get("rub_inflation"), dict) else {}
+    taxes = data.get("finance", {}).get("taxes", {}) if isinstance(data.get("finance", {}).get("taxes"), dict) else {}
+    sfr_rate = float(taxes.get("social_contribution_sfr_percent_of_gross", 0.0)) if _is_number(taxes.get("social_contribution_sfr_percent_of_gross")) else 0.0
+    team = data.get("opex", {}).get("team", {}) if isinstance(data.get("opex", {}).get("team"), dict) else {}
+    sga = data.get("sga", {}) if isinstance(data.get("sga"), dict) else {}
+    da = data.get("depreciation_and_amortization", {}) if isinstance(data.get("depreciation_and_amortization"), dict) else {}
+
+    team_bonus = float(team.get("payroll_assumptions", {}).get("bonus_percent_of_gross", {}).get("value", 0.0))
+    team_growth = team.get("payroll_assumptions", {}).get("salary_growth", {})
+    sga_bonus = float(sga.get("payroll_assumptions", {}).get("annual_bonus_percent_of_gross", {}).get("value", 0.0))
+    dc_opex = data.get("opex", {}).get("datacenter", {}) if isinstance(data.get("opex", {}).get("datacenter"), dict) else {}
+    dc_drv = dc_opex.get("drivers", {}) if isinstance(dc_opex.get("drivers"), dict) else {}
+    elec_price = dc_drv.get("electricity_rub_per_kwh", {})
+    pue = float(dc_drv.get("pue", {}).get("value", 1.0))
+    gpu_kw = float(dc_drv.get("gpu_power_kw", {}).get("value", 0.0))
+    op_hours = float(dc_drv.get("operating_hours_per_day", {}).get("value", 24.0))
+    maint = float(dc_drv.get("maintenance_percent_of_capex", {}).get("value", 0.0))
+    network = float(dc_drv.get("network_cost_per_mw_per_year", {}).get("value", 0.0))
+    land = float(dc_drv.get("land_rent_per_mw_per_year", {}).get("value", 0.0))
+    other = float(dc_drv.get("other_opex_percent", {}).get("value", 0.0))
+
+    da_ppe = da.get("ppe_depreciation", {}).get("useful_life_years", {}) if isinstance(da.get("ppe_depreciation", {}).get("useful_life_years"), dict) else {}
+    gpu_life = float(da_ppe.get("gpu_infra", 1))
+    dc_life = float(da_ppe.get("datacenter_construction", 1))
+
+    role_blocks = []
+    for block in [team.get("roles", {}), sga.get("roles", {})]:
+        if isinstance(block, dict):
+            for grp in block.values():
+                if isinstance(grp, dict):
+                    for role in grp.values():
+                        if isinstance(role, dict):
+                            role_blocks.append(role)
+
+    rows: list[dict[str, Any]] = []
+    for infra in infra_rows:
+        year = int(infra["year"])
+        month = int(infra["month"])
+        scenario = str(infra["scenario"])
+        salary_idx_team = _salary_index(team_growth if isinstance(team_growth, dict) else {}, year)
+        salary_idx_sga = _salary_index(rub_inflation, year)
+        team_payroll = 0.0
+        sga_payroll = 0.0
+        for block in team.get("roles", {}).values():
+            if isinstance(block, dict):
+                for role in block.values():
+                    if isinstance(role, dict):
+                        fte = _fte_for_month(role.get("fte_plan"), year, month, data)
+                        gross = float(role.get("salary_gross_monthly_rub_2026", 0.0)) * salary_idx_team * fte
+                        team_payroll += gross * (1.0 + team_bonus) * (1.0 + sfr_rate)
+        for block in sga.get("roles", {}).values():
+            if isinstance(block, dict):
+                for role in block.values():
+                    if isinstance(role, dict):
+                        fte = _fte_for_month(role.get("fte_plan"), year, month, data)
+                        gross = float(role.get("salary_gross_monthly_rub_2026", 0.0)) * salary_idx_sga * fte
+                        sga_payroll += gross * (1.0 + sga_bonus) * (1.0 + sfr_rate)
+
+        owned_gpu = float(infra["owned_gpu"])
+        elec_price_t = _year_value(elec_price, year)
+        it_mw = owned_gpu * gpu_kw / 1000.0
+        total_mw = it_mw * pue
+        monthly_elec = total_mw * 1000.0 * op_hours * (365.0 / 12.0) * elec_price_t
+        monthly_net = total_mw * network / 12.0
+        monthly_land = total_mw * land / 12.0
+        monthly_maint = (float(infra["gpu_infra_capex"]) + float(infra["datacenter_construction_capex"])) * maint
+        datacenter_opex = (monthly_elec + monthly_net + monthly_land + monthly_maint) * (1.0 + other)
+
+        da_monthly = (float(infra["gpu_infra_capex"]) / max(gpu_life, 1.0) + float(infra["datacenter_construction_capex"]) / max(dc_life, 1.0)) / 12.0
+        rows.append({
+            "scenario": scenario,
+            "month_seq": infra["month_seq"],
+            "month_id": infra["month_id"],
+            "year": year,
+            "month": month,
+            "core_team_payroll": round(team_payroll, 2),
+            "sga_payroll": round(sga_payroll, 2),
+            "datacenter_opex": round(datacenter_opex, 2),
+            "depreciation_and_amortization": round(da_monthly, 2),
+            "monthly_operating_cost_total": round(team_payroll + sga_payroll + datacenter_opex + da_monthly, 2),
+        })
+    return rows
+
+
 def build_monthly_infrastructure(data: dict[str, Any], monthly_demand_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     investment = data.get("investment_scenarios", {}) if isinstance(data.get("investment_scenarios"), dict) else {}
     capex = data.get("capex", {}) if isinstance(data.get("capex"), dict) else {}
@@ -466,6 +601,19 @@ def write_monthly_infrastructure(data: dict[str, Any]) -> None:
         writer.writeheader()
         writer.writerows(rows)
 
+
+def write_monthly_costs(data: dict[str, Any]) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    calendar_rows = build_monthly_calendar(data)
+    demand_rows = build_monthly_demand_gpu(data, calendar_rows)
+    infra_rows = build_monthly_infrastructure(data, demand_rows)
+    rows = build_monthly_costs(data, calendar_rows, infra_rows)
+    with OUT_MONTHLY_COSTS_CSV.open("w", newline="", encoding="utf-8") as fh:
+        fieldnames = ["scenario", "month_seq", "month_id", "year", "month", "core_team_payroll", "sga_payroll", "datacenter_opex", "depreciation_and_amortization", "monthly_operating_cost_total"]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
 def main() -> int:
     assumptions = load_assumptions(ASSUMPTIONS_PATH)
     items = validate(assumptions)
@@ -473,6 +621,7 @@ def main() -> int:
     write_calendar_and_events(assumptions)
     write_monthly_demand_gpu(assumptions)
     write_monthly_infrastructure(assumptions)
+    write_monthly_costs(assumptions)
 
     errors = [x for x in items if x.level == "ERROR"]
     warnings = [x for x in items if x.level == "WARNING"]
@@ -483,6 +632,7 @@ def main() -> int:
     print(f"Events CSV: {OUT_EVENTS_CSV}")
     print(f"Monthly demand/GPU CSV: {OUT_MONTHLY_DEMAND_GPU_CSV}")
     print(f"Monthly infrastructure CSV: {OUT_MONTHLY_INFRA_CSV}")
+    print(f"Monthly costs CSV: {OUT_MONTHLY_COSTS_CSV}")
     return 1 if errors else 0
 
 
