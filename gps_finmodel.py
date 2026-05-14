@@ -972,12 +972,119 @@ def _table_html(title: str, rows: list[dict[str, Any]], max_rows: int | None = N
     return f"<h3>{title}</h3><table><thead><tr>{th}</tr></thead><tbody>{tbody}</tbody></table>"
 
 
+def build_key_assumptions_planner(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    planner: dict[str, list[dict[str, Any]]] = {}
+    model = data.get("model", {}) if isinstance(data.get("model"), dict) else {}
+    finance = data.get("finance", {}) if isinstance(data.get("finance"), dict) else {}
+    usage = data.get("usage_assumptions", {}) if isinstance(data.get("usage_assumptions"), dict) else {}
+    compute = data.get("compute_model", {}) if isinstance(data.get("compute_model"), dict) else {}
+    infra = compute.get("infra", {}) if isinstance(compute.get("infra"), dict) else {}
+    revenue = data.get("revenue", {}) if isinstance(data.get("revenue"), dict) else {}
+    opex = data.get("opex", {}) if isinstance(data.get("opex"), dict) else {}
+    core_team = opex.get("team", {}) if isinstance(opex.get("team"), dict) else {}
+    sga = data.get("sga", {}) if isinstance(data.get("sga"), dict) else {}
+
+    planner["Model Timeline"] = [{
+        "assumption": "forecast_start",
+        "value": f"{model.get('forecast_start', {}).get('year', '')}-{int(model.get('forecast_start', {}).get('month', 0) or 0):02d}" if isinstance(model.get("forecast_start"), dict) else "",
+    }, {
+        "assumption": "forecast_end",
+        "value": f"{model.get('forecast_end', {}).get('year', '')}-{int(model.get('forecast_end', {}).get('month', 0) or 0):02d}" if isinstance(model.get("forecast_end"), dict) else "",
+    }]
+
+    planner["Finance"] = [{
+        "assumption": "discount_rate",
+        "value": finance.get("valuation", {}).get("discount_rate", "") if isinstance(finance.get("valuation"), dict) else "",
+    }, {
+        "assumption": "profit_tax_rate",
+        "value": finance.get("taxes", {}).get("profit_tax_rate", "") if isinstance(finance.get("taxes"), dict) else "",
+    }, {
+        "assumption": "social_contribution_sfr_percent_of_gross",
+        "value": finance.get("taxes", {}).get("social_contribution_sfr_percent_of_gross", "") if isinstance(finance.get("taxes"), dict) else "",
+    }, {
+        "assumption": "revolver_interest_rate",
+        "value": finance.get("funding", {}).get("revolver_interest_rate", "") if isinstance(finance.get("funding"), dict) else "",
+    }]
+
+    usage_rows: list[dict[str, Any]] = []
+    for product_name, product_data in usage.items():
+        if isinstance(product_data, dict):
+            usage_rows.append({
+                "product": product_name,
+                "usage_metric": product_data.get("usage_metric", ""),
+                "key_driver": product_data.get("activation_rate", product_data.get("automation_rate", "")),
+            })
+    planner["Usage"] = usage_rows
+
+    planner["Compute"] = [{
+        "assumption": "throughput_per_gpu",
+        "value": compute.get("throughput_per_gpu", ""),
+    }, {
+        "assumption": "utilization",
+        "value": infra.get("utilization", ""),
+    }, {
+        "assumption": "peak_factor",
+        "value": infra.get("peak_factor", ""),
+    }]
+
+    planner["Infrastructure"] = [{
+        "assumption": "owned_gpu_available_policy",
+        "value": infra.get("owned_gpu_available_policy", ""),
+    }, {
+        "assumption": "gpu_power_kw",
+        "value": infra.get("opex_own_datacenter", {}).get("gpu_power_kw", {}).get("value", "") if isinstance(infra.get("opex_own_datacenter"), dict) else "",
+    }, {
+        "assumption": "pue",
+        "value": infra.get("opex_own_datacenter", {}).get("pue", {}).get("value", "") if isinstance(infra.get("opex_own_datacenter"), dict) else "",
+    }]
+
+    planner["Revenue"] = [{
+        "assumption": "active_scenario",
+        "value": revenue.get("active_scenario", ""),
+    }, {
+        "assumption": "pricing_base_year",
+        "value": revenue.get("base_year", ""),
+    }]
+
+    def _collect_role_rows(section_name: str, roles_map: dict[str, Any]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for group_name, group_roles in roles_map.items():
+            if not isinstance(group_roles, dict):
+                continue
+            for role_name, role_data in group_roles.items():
+                if not isinstance(role_data, dict):
+                    continue
+                salary = role_data.get("salary_gross_monthly_rub_2026", "")
+                fte_plan = role_data.get("fte_plan", [])
+                if not isinstance(fte_plan, list):
+                    fte_plan = []
+                if not fte_plan:
+                    rows.append({"section": section_name, "group": group_name, "role": role_name, "salary_gross_monthly_rub_2026": salary, "fte_plan_event": ""})
+                for event in fte_plan:
+                    if isinstance(event, dict):
+                        rows.append({
+                            "section": section_name,
+                            "group": group_name,
+                            "role": role_name,
+                            "salary_gross_monthly_rub_2026": salary,
+                            "fte_plan_event": f"{event.get('start_year', '')}-{int(event.get('start_month', 0) or 0):02d}: {event.get('fte', '')}",
+                        })
+        return rows
+
+    core_roles = core_team.get("roles", {}) if isinstance(core_team.get("roles"), dict) else {}
+    planner["Core Team"] = _collect_role_rows("core_team", core_roles)
+    sga_roles = sga.get("roles", {}) if isinstance(sga.get("roles"), dict) else {}
+    planner["SG&A"] = _collect_role_rows("sga", sga_roles)
+    return planner
+
+
 def write_static_html_report(
     funded_rows: list[dict[str, Any]],
     annual_rows: list[dict[str, Any]],
     summary_rows: list[dict[str, Any]],
     metrics_rows: list[dict[str, Any]],
     items: list[ValidationItem],
+    assumptions_data: dict[str, Any],
 ) -> None:
     import json
 
@@ -1000,6 +1107,7 @@ def write_static_html_report(
         "metric": "base_funding_scenario",
         "value": base_funding,
     }]
+    planner_sections = build_key_assumptions_planner(assumptions_data)
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -1017,6 +1125,8 @@ def write_static_html_report(
     .controls {{ display: flex; gap: 16px; margin: 12px 0 18px; flex-wrap: wrap; }}
     label {{ font-weight: bold; font-size: 13px; }}
     select {{ margin-left: 8px; padding: 4px; }}
+    .card {{ border: 1px solid #ddd; padding: 10px; margin: 12px 0; border-radius: 6px; }}
+    .note {{ font-size: 12px; color: #555; margin-bottom: 8px; }}
   </style>
 </head>
 <body>
@@ -1055,8 +1165,15 @@ def write_static_html_report(
   {_table_html("Validation and report diagnostics", diagnostics_rows)}
   {_table_html("Investment metrics", metrics_rows)}
 
+  <h2>Key Assumptions Planner</h2>
+  <div class="card">
+    <div class="note">Display-only assumptions loaded from assumptions.yaml. No in-browser editing, Workbench, YAML export, or model recalculation.</div>
+    <div id="key-assumptions-planner"></div>
+  </div>
+
   <script>
     const reportData = {json.dumps({'funded_rows': funded_rows, 'annual_rows': annual_rows})};
+    const plannerSections = {json.dumps(planner_sections)};
     const infraNames = {json.dumps(infra_names)};
     const fundingNames = {json.dumps(funding_names)};
     const baseInfra = {json.dumps(base_infra)};
@@ -1184,6 +1301,10 @@ def write_static_html_report(
     fundingSelect.addEventListener('change', onChange);
     equityShareInput.addEventListener('input', onChange);
     onChange();
+    const plannerHtml = Object.entries(plannerSections)
+      .map(([sectionName, rows]) => tableHtml(sectionName, rows))
+      .join('');
+    document.getElementById('key-assumptions-planner').innerHTML = plannerHtml;
   </script>
 </body>
 </html>
@@ -1228,7 +1349,7 @@ def main() -> int:
         writer = csv.DictWriter(fh, fieldnames=list(summary_rows[0].keys()) if summary_rows else [])
         if summary_rows:
             writer.writeheader(); writer.writerows(summary_rows)
-    write_static_html_report(funded_rows, annual_rows, summary_rows, metrics_rows, items)
+    write_static_html_report(funded_rows, annual_rows, summary_rows, metrics_rows, items, assumptions)
 
     write_reports(items)
     errors = [x for x in items if x.level == "ERROR"]
