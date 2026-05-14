@@ -23,6 +23,7 @@ OUT_EVENTS_CSV = OUT_DIR / "gps_finmodel_events.csv"
 OUT_MONTHLY_DEMAND_GPU_CSV = OUT_DIR / "gps_finmodel_monthly_demand_gpu.csv"
 OUT_MONTHLY_INFRA_CSV = OUT_DIR / "gps_finmodel_monthly_infrastructure.csv"
 OUT_MONTHLY_COSTS_CSV = OUT_DIR / "gps_finmodel_monthly_costs.csv"
+OUT_MONTHLY_FINANCIALS_CSV = OUT_DIR / "gps_finmodel_monthly_financials.csv"
 
 
 @dataclass
@@ -614,6 +615,142 @@ def write_monthly_costs(data: dict[str, Any]) -> None:
         writer.writeheader()
         writer.writerows(rows)
 
+
+def _resolve_event_month(data: dict[str, Any], event_ref: str, timing: str) -> tuple[int, int] | None:
+    event = _resolve_path(data, event_ref)
+    if not isinstance(event, dict):
+        return None
+    year = event.get("start_year")
+    month = event.get("start_month")
+    duration = event.get("event_duration", 1)
+    if not (isinstance(year, int) and isinstance(month, int) and isinstance(duration, int)):
+        return None
+    if timing == "after_event":
+        return _shift_month(year, month, duration)
+    return year, month
+
+
+def build_monthly_financials(data: dict[str, Any], calendar_rows: list[dict[str, Any]], demand_rows: list[dict[str, Any]], infra_rows: list[dict[str, Any]], cost_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    demand_by_month = {str(r["month_id"]): r for r in demand_rows}
+    cost_by_key = {(str(r["scenario"]), str(r["month_id"])): r for r in cost_rows}
+    infra_by_scenario: dict[str, list[dict[str, Any]]] = {}
+    for row in infra_rows:
+        infra_by_scenario.setdefault(str(row["scenario"]), []).append(row)
+
+    revenue = data.get("revenue", {}) if isinstance(data.get("revenue"), dict) else {}
+    active_scenario = str(revenue.get("active_scenario", "base"))
+    tcm = revenue.get("target_contribution_margin", {}) if isinstance(revenue.get("target_contribution_margin"), dict) else {}
+    tcm_map = tcm.get(active_scenario, {}) if isinstance(tcm.get(active_scenario), dict) else {}
+    profit_tax_rate = float(data.get("finance", {}).get("taxes", {}).get("profit_tax_rate", 0.0))
+
+    product_starts: dict[str, int] = {}
+    products = revenue.get("products", {}) if isinstance(revenue.get("products"), dict) else {}
+    for product_name in ["workplace_ai", "contact_center_ai"]:
+        cfg = products.get(product_name, {}) if isinstance(products.get(product_name), dict) else {}
+        start = cfg.get("revenue_start", {}) if isinstance(cfg.get("revenue_start"), dict) else {}
+        resolved = _resolve_event_month(data, str(start.get("event_ref", "")), str(start.get("timing", "at_event")))
+        if resolved is not None:
+            y, m = resolved
+            product_starts[product_name] = y * 12 + (m - 1)
+
+    rows: list[dict[str, Any]] = []
+    for scenario, s_rows in infra_by_scenario.items():
+        s_rows = sorted(s_rows, key=lambda r: int(r["month_seq"]))
+        opening_cash = 0.0
+        cumulative_ppe_capex = 0.0
+        cumulative_intangible_capex = 0.0
+        for infra in s_rows:
+            year = int(infra["year"])
+            month = int(infra["month"])
+            month_id = str(infra["month_id"])
+            idx = year * 12 + (month - 1)
+            demand = demand_by_month.get(month_id, {})
+            cost = cost_by_key.get((scenario, month_id), {})
+
+            workplace_tokens = float(demand.get("workplace_monthly_tokens", 0.0))
+            cc_tokens = float(demand.get("contact_center_monthly_tokens", 0.0))
+            total_tokens = max(float(demand.get("monthly_total_tokens", 0.0)), 0.0)
+
+            cogs = float(cost.get("core_team_payroll", 0.0)) + float(cost.get("datacenter_opex", 0.0))
+            da = float(cost.get("depreciation_and_amortization", 0.0))
+            pricing_base = cogs + da
+            margin = _year_value(tcm_map, year)
+            rev_mult = 1.0 / (1.0 - margin) if margin < 1.0 else 0.0
+
+            workplace_share = (workplace_tokens / total_tokens) if total_tokens > 0 else 0.0
+            cc_share = (cc_tokens / total_tokens) if total_tokens > 0 else 0.0
+            workplace_active = 1 if idx >= product_starts.get("workplace_ai", 10**12) else 0
+            cc_active = 1 if idx >= product_starts.get("contact_center_ai", 10**12) else 0
+            workplace_revenue = pricing_base * workplace_share * rev_mult * workplace_active
+            cc_revenue = pricing_base * cc_share * rev_mult * cc_active
+            total_revenue = workplace_revenue + cc_revenue
+
+            sga_payroll = float(cost.get("sga_payroll", 0.0))
+            ebit = total_revenue - cogs - sga_payroll - da
+            profit_tax = max(ebit, 0.0) * profit_tax_rate
+            net_income = ebit - profit_tax
+            operating_cf = net_income + da
+
+            gpu_infra_capex = float(infra.get("gpu_infra_capex", 0.0))
+            datacenter_capex = float(infra.get("datacenter_construction_capex", 0.0))
+            office_capex = 0.0
+            intangible_capex = 0.0
+            investing_cf = -(gpu_infra_capex + datacenter_capex + office_capex + intangible_capex)
+            pre_financing_cf = operating_cf + investing_cf
+            closing_cash_before_funding = opening_cash + pre_financing_cf
+
+            cumulative_ppe_capex += gpu_infra_capex + datacenter_capex + office_capex
+            cumulative_intangible_capex += intangible_capex
+            net_ppe = max(cumulative_ppe_capex - da * int(infra["month_seq"]), 0.0)
+            net_intangible_assets = cumulative_intangible_capex
+            total_assets_pre_funding = closing_cash_before_funding + net_ppe + net_intangible_assets
+            revolver_balance = 0.0
+            total_liabilities_pre_funding = revolver_balance
+            total_equity_pre_funding = total_assets_pre_funding - total_liabilities_pre_funding
+
+            rows.append({
+                "scenario": scenario,
+                "month_seq": infra["month_seq"],
+                "month_id": month_id,
+                "year": year,
+                "month": month,
+                "workplace_revenue": round(workplace_revenue, 2),
+                "contact_center_revenue": round(cc_revenue, 2),
+                "total_revenue": round(total_revenue, 2),
+                "cogs": round(cogs, 2),
+                "sga": round(sga_payroll, 2),
+                "depreciation_and_amortization": round(da, 2),
+                "ebit": round(ebit, 2),
+                "profit_tax": round(profit_tax, 2),
+                "net_income": round(net_income, 2),
+                "operating_cash_flow": round(operating_cf, 2),
+                "investing_cash_flow": round(investing_cf, 2),
+                "pre_financing_cash_flow": round(pre_financing_cf, 2),
+                "opening_cash_before_funding": round(opening_cash, 2),
+                "closing_cash_before_funding": round(closing_cash_before_funding, 2),
+                "net_ppe": round(net_ppe, 2),
+                "net_intangible_assets": round(net_intangible_assets, 2),
+                "total_assets_pre_funding": round(total_assets_pre_funding, 2),
+                "total_liabilities_pre_funding": round(total_liabilities_pre_funding, 2),
+                "total_equity_pre_funding": round(total_equity_pre_funding, 2),
+            })
+            opening_cash = closing_cash_before_funding
+    return rows
+
+
+def write_monthly_financials(data: dict[str, Any]) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    calendar_rows = build_monthly_calendar(data)
+    demand_rows = build_monthly_demand_gpu(data, calendar_rows)
+    infra_rows = build_monthly_infrastructure(data, demand_rows)
+    cost_rows = build_monthly_costs(data, calendar_rows, infra_rows)
+    rows = build_monthly_financials(data, calendar_rows, demand_rows, infra_rows, cost_rows)
+    with OUT_MONTHLY_FINANCIALS_CSV.open("w", newline="", encoding="utf-8") as fh:
+        fieldnames = ["scenario", "month_seq", "month_id", "year", "month", "workplace_revenue", "contact_center_revenue", "total_revenue", "cogs", "sga", "depreciation_and_amortization", "ebit", "profit_tax", "net_income", "operating_cash_flow", "investing_cash_flow", "pre_financing_cash_flow", "opening_cash_before_funding", "closing_cash_before_funding", "net_ppe", "net_intangible_assets", "total_assets_pre_funding", "total_liabilities_pre_funding", "total_equity_pre_funding"]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
 def main() -> int:
     assumptions = load_assumptions(ASSUMPTIONS_PATH)
     items = validate(assumptions)
@@ -622,6 +759,7 @@ def main() -> int:
     write_monthly_demand_gpu(assumptions)
     write_monthly_infrastructure(assumptions)
     write_monthly_costs(assumptions)
+    write_monthly_financials(assumptions)
 
     errors = [x for x in items if x.level == "ERROR"]
     warnings = [x for x in items if x.level == "WARNING"]
@@ -633,6 +771,7 @@ def main() -> int:
     print(f"Monthly demand/GPU CSV: {OUT_MONTHLY_DEMAND_GPU_CSV}")
     print(f"Monthly infrastructure CSV: {OUT_MONTHLY_INFRA_CSV}")
     print(f"Monthly costs CSV: {OUT_MONTHLY_COSTS_CSV}")
+    print(f"Monthly financials CSV: {OUT_MONTHLY_FINANCIALS_CSV}")
     return 1 if errors else 0
 
 
