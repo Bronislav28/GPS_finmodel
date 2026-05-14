@@ -1103,6 +1103,13 @@ def write_static_html_report(
   <h2>Monthly Detail</h2>
   <div id="monthly-detail"></div>
 
+  <h2>Visual Analytics</h2>
+  <div class="note">Charts are rendered browser-side from already precomputed scenario outputs.</div>
+  <div class="card"><h3>Revenue / EBIT / Net income (annual)</h3><canvas id="chart-profitability" width="980" height="280"></canvas></div>
+  <div class="card"><h3>Cash flow profile (annual)</h3><canvas id="chart-cashflow" width="980" height="280"></canvas></div>
+  <div class="card"><h3>GPU capacity transition (annual max)</h3><canvas id="chart-gpu" width="980" height="280"></canvas></div>
+  <div class="card"><h3>Cash and revolver balance (annual ending)</h3><canvas id="chart-liquidity" width="980" height="280"></canvas></div>
+
   <h2>Diagnostics</h2>
   {_table_html("Validation and report diagnostics", diagnostics_rows)}
   {_table_html("Investment metrics", metrics_rows)}
@@ -1171,6 +1178,67 @@ def write_static_html_report(
       document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
       document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', annual);
       document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', monthly);
+      renderCharts(annual, monthly);
+    }}
+
+    function annualFromMonthly(monthly) {{
+      const byYear = new Map();
+      monthly.forEach((r) => {{
+        const y = Number(r.year);
+        if (!byYear.has(y)) byYear.set(y, {{year: y, operating_cash_flow_after_interest: 0, investing_cash_flow: 0, free_cash_flow_after_financing_costs: 0, required_gpu: 0, closing_cash_after_funding: 0, closing_revolver_balance: 0}});
+        const a = byYear.get(y);
+        a.operating_cash_flow_after_interest += Number(r.operating_cash_flow_after_interest || 0);
+        a.investing_cash_flow += Number(r.investing_cash_flow || 0);
+        a.free_cash_flow_after_financing_costs += Number(r.free_cash_flow_after_financing_costs || 0);
+        a.required_gpu = Math.max(a.required_gpu, Number(r.required_gpu || 0));
+        a.closing_cash_after_funding = Number(r.closing_cash_after_funding || 0);
+        a.closing_revolver_balance = Number(r.closing_revolver_balance || 0);
+      }});
+      return Array.from(byYear.values()).sort((a,b)=>a.year-b.year);
+    }}
+
+    function drawSeriesChart(canvasId, labels, series, chartType='line') {{
+      const canvas = document.getElementById(canvasId); if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const p = {{l:56,r:16,t:16,b:34}}, w = canvas.width - p.l - p.r, h = canvas.height - p.t - p.b;
+      const values = series.flatMap((s) => s.values);
+      const minV = Math.min(0, ...values);
+      const maxV = Math.max(1, ...values);
+      const span = maxV - minV || 1;
+      const xAt = (i) => p.l + (labels.length <= 1 ? w/2 : i * (w / (labels.length - 1)));
+      const yAt = (v) => p.t + h - ((v - minV) / span) * h;
+      ctx.strokeStyle = '#999'; ctx.beginPath(); ctx.moveTo(p.l, yAt(0)); ctx.lineTo(p.l + w, yAt(0)); ctx.stroke();
+      ctx.fillStyle = '#666'; ctx.font = '11px Arial';
+      labels.forEach((lb, i) => {{ const x = xAt(i); ctx.fillText(String(lb), x-10, canvas.height-10); }});
+      if (chartType === 'bar') {{
+        const bw = Math.max(6, Math.min(22, (w / Math.max(labels.length,1)) / Math.max(series.length,1) - 2));
+        labels.forEach((_, i) => series.forEach((s, si) => {{ const x=xAt(i)-((series.length*bw)/2)+si*bw; const y=yAt(s.values[i]||0); ctx.fillStyle=s.color; ctx.fillRect(x, Math.min(y,yAt(0)), bw-1, Math.abs(yAt(0)-y)); }}));
+      }} else {{
+        series.forEach((s) => {{ ctx.strokeStyle=s.color; ctx.lineWidth=2; ctx.beginPath(); s.values.forEach((v,i)=>{{ const x=xAt(i), y=yAt(v||0); if(i===0)ctx.moveTo(x,y); else ctx.lineTo(x,y); }}); ctx.stroke(); }});
+      }}
+    }}
+
+    function renderCharts(annual, monthly) {{
+      const derived = annualFromMonthly(monthly);
+      const labels = annual.map((r) => r.year);
+      drawSeriesChart('chart-profitability', labels, [
+        {{name:'Revenue', color:'#2563eb', values: annual.map((r) => Number(r.total_revenue || 0))}},
+        {{name:'EBIT', color:'#16a34a', values: annual.map((r) => Number(r.ebit || 0))}},
+        {{name:'Net income', color:'#7c3aed', values: annual.map((r) => Number(r.net_income_after_interest || 0))}},
+      ], 'line');
+      drawSeriesChart('chart-cashflow', labels, [
+        {{name:'Operating CF', color:'#16a34a', values: derived.map((r) => Number(r.operating_cash_flow_after_interest || 0))}},
+        {{name:'Investing CF', color:'#dc2626', values: derived.map((r) => Number(r.investing_cash_flow || 0))}},
+        {{name:'Free CF', color:'#2563eb', values: derived.map((r) => Number(r.free_cash_flow_after_financing_costs || 0))}},
+      ], 'bar');
+      drawSeriesChart('chart-gpu', labels, [
+        {{name:'Required GPU', color:'#2563eb', values: derived.map((r) => Number(r.required_gpu || 0))}},
+      ], 'line');
+      drawSeriesChart('chart-liquidity', labels, [
+        {{name:'Cash', color:'#16a34a', values: derived.map((r) => Number(r.closing_cash_after_funding || 0))}},
+        {{name:'Revolver', color:'#7c3aed', values: derived.map((r) => Number(r.closing_revolver_balance || 0))}},
+      ], 'line');
     }}
 
     function formatPayback(monthId) {{
@@ -1291,7 +1359,8 @@ def write_static_html_report(
         }}];
         document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
         document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', custom.annual);
-        document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', custom.monthly);
+      document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', custom.monthly);
+        renderCharts(custom.annual, custom.monthly);
       }} else {{
         equityShareLabel.style.display = 'none';
         fundingSelect.disabled = false;
@@ -1516,6 +1585,7 @@ def write_static_html_report(
       document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
       document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', annual);
       document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', monthly);
+      renderCharts(annual, monthly);
     }}
 
     function renderPlanner() {{
