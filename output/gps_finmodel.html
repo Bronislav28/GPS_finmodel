@@ -24,8 +24,15 @@
     <label>Infrastructure scenario
       <select id="infra-select"></select>
     </label>
+    <label>Funding mode
+      <select id="funding-mode-select"></select>
+    </label>
     <label>Funding scenario
       <select id="funding-select"></select>
+    </label>
+    <label id="equity-share-label" style="display:none;">Custom equity share (%)
+      <input id="equity-share-input" type="range" min="0" max="100" step="1" value="50" />
+      <span id="equity-share-value">50</span>
     </label>
   </div>
 
@@ -100,11 +107,79 @@
       return el;
     }
 
+    function blendRows(eqRows, revRows, equityShare) {
+      const revByMonth = new Map(revRows.map((r) => [String(r.month_id), r]));
+      return eqRows.map((eq) => {
+        const rev = revByMonth.get(String(eq.month_id)) || {};
+        const out = {};
+        Object.keys(eq).forEach((k) => {
+          const ev = eq[k];
+          const rv = rev[k];
+          if (typeof ev === 'number' && typeof rv === 'number') {
+            out[k] = ev * equityShare + rv * (1 - equityShare);
+          } else {
+            out[k] = ev;
+          }
+        });
+        out.funding_scenario = 'custom_mix';
+        out.equity_share = equityShare;
+        out.revolver_share = 1 - equityShare;
+        return out;
+      });
+    }
+
+    function buildCustomView(infra, equityShare) {
+      const eqAnnual = filterRows(reportData.annual_rows, infra, 'equity_only').sort((a,b)=>a.year-b.year);
+      const revAnnual = filterRows(reportData.annual_rows, infra, 'revolver_only').sort((a,b)=>a.year-b.year);
+      const eqMonthly = filterRows(reportData.funded_rows, infra, 'equity_only').sort((a,b)=>a.month_seq-b.month_seq);
+      const revMonthly = filterRows(reportData.funded_rows, infra, 'revolver_only').sort((a,b)=>a.month_seq-b.month_seq);
+      return {
+        annual: blendRows(eqAnnual, revAnnual, equityShare),
+        monthly: blendRows(eqMonthly, revMonthly, equityShare),
+      };
+    }
+
     const infraSelect = initSelect('infra-select', infraNames, baseInfra);
+    const fundingModeSelect = initSelect('funding-mode-select', ['precomputed', 'custom_mix'], 'precomputed');
     const fundingSelect = initSelect('funding-select', fundingNames, baseFunding);
-    function onChange() { render(infraSelect.value, fundingSelect.value); }
+    const equityShareInput = document.getElementById('equity-share-input');
+    const equityShareLabel = document.getElementById('equity-share-label');
+    const equityShareValue = document.getElementById('equity-share-value');
+
+    function onChange() {
+      const mode = fundingModeSelect.value;
+      if (mode === 'custom_mix') {
+        equityShareLabel.style.display = 'inline-block';
+        fundingSelect.disabled = true;
+        const eq = Number(equityShareInput.value) / 100;
+        equityShareValue.textContent = String(Math.round(eq * 100));
+        const custom = buildCustomView(infraSelect.value, eq);
+        const latest = custom.annual.length ? custom.annual[custom.annual.length - 1] : {};
+        const executive = [{
+          infrastructure_scenario: infraSelect.value,
+          funding_scenario: 'custom_mix',
+          custom_equity_share_percent: Math.round(eq * 100),
+          custom_revolver_share_percent: Math.round((1 - eq) * 100),
+          latest_year: latest.year,
+          months_in_latest_year: latest.months_in_year,
+          total_revenue: latest.total_revenue,
+          net_income_after_interest: latest.net_income_after_interest,
+          closing_cash_after_funding: latest.closing_cash_after_funding,
+          closing_revolver_balance: latest.closing_revolver_balance,
+        }];
+        document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
+        document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', custom.annual);
+        document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', custom.monthly);
+      } else {
+        equityShareLabel.style.display = 'none';
+        fundingSelect.disabled = false;
+        render(infraSelect.value, fundingSelect.value);
+      }
+    }
     infraSelect.addEventListener('change', onChange);
+    fundingModeSelect.addEventListener('change', onChange);
     fundingSelect.addEventListener('change', onChange);
+    equityShareInput.addEventListener('input', onChange);
     onChange();
   </script>
 </body>
