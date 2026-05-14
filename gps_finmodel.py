@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ ASSUMPTIONS_PATH = Path("assumptions.yaml")
 OUT_DIR = Path("output")
 OUT_TXT = OUT_DIR / "gps_finmodel_validation_report.txt"
 OUT_CSV = OUT_DIR / "gps_finmodel_validation_report.csv"
+OUT_CALENDAR_CSV = OUT_DIR / "gps_finmodel_calendar.csv"
+OUT_EVENTS_CSV = OUT_DIR / "gps_finmodel_events.csv"
 
 
 @dataclass
@@ -132,16 +135,140 @@ def write_reports(items: list[ValidationItem]) -> None:
             fh.write(f"- [{item.level}] {item.path}: {item.message}\n")
 
 
+def build_monthly_calendar(data: dict[str, Any]) -> list[dict[str, Any]]:
+    model = data.get("model", {}) if isinstance(data.get("model"), dict) else {}
+    fs = model.get("forecast_start", {}) if isinstance(model.get("forecast_start"), dict) else {}
+    fe = model.get("forecast_end", {}) if isinstance(model.get("forecast_end"), dict) else {}
+
+    start_year = fs.get("year")
+    start_month = fs.get("month")
+    end_year = fe.get("year")
+    end_month = fe.get("month")
+
+    if not all(isinstance(x, int) for x in [start_year, start_month, end_year, end_month]):
+        return []
+    if not (1 <= start_month <= 12 and 1 <= end_month <= 12):
+        return []
+
+    start_idx = start_year * 12 + (start_month - 1)
+    end_idx = end_year * 12 + (end_month - 1)
+    if end_idx < start_idx:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for idx in range(start_idx, end_idx + 1):
+        year = idx // 12
+        month = idx % 12 + 1
+        month_start = date(year, month, 1)
+        month_seq = idx - start_idx + 1
+        forecast_year = year - start_year + 1
+        rows.append({
+            "month_seq": month_seq,
+            "year": year,
+            "month": month,
+            "month_id": f"{year:04d}-{month:02d}",
+            "month_start": month_start.isoformat(),
+            "is_forecast_start": int(idx == start_idx),
+            "is_forecast_end": int(idx == end_idx),
+            "forecast_year": forecast_year,
+        })
+    return rows
+
+
+def resolve_events(calendar_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not calendar_rows:
+        return []
+
+    events: list[dict[str, Any]] = []
+    for row in calendar_rows:
+        month_seq = int(row["month_seq"])
+        year = int(row["year"])
+        month = int(row["month"])
+
+        if row["is_forecast_start"]:
+            events.append({
+                "event_id": "forecast_start",
+                "event_type": "boundary",
+                "event_name": "Forecast start",
+                "month_seq": month_seq,
+                "month_id": row["month_id"],
+                "year": year,
+                "month": month,
+            })
+        if row["is_forecast_end"]:
+            events.append({
+                "event_id": "forecast_end",
+                "event_type": "boundary",
+                "event_name": "Forecast end",
+                "month_seq": month_seq,
+                "month_id": row["month_id"],
+                "year": year,
+                "month": month,
+            })
+        if month == 1:
+            events.append({
+                "event_id": f"year_start_{year}",
+                "event_type": "period",
+                "event_name": "Year start",
+                "month_seq": month_seq,
+                "month_id": row["month_id"],
+                "year": year,
+                "month": month,
+            })
+        if month == 12:
+            events.append({
+                "event_id": f"year_end_{year}",
+                "event_type": "period",
+                "event_name": "Year end",
+                "month_seq": month_seq,
+                "month_id": row["month_id"],
+                "year": year,
+                "month": month,
+            })
+
+    return events
+
+
+def write_calendar_and_events(data: dict[str, Any]) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    calendar_rows = build_monthly_calendar(data)
+    event_rows = resolve_events(calendar_rows)
+
+    with OUT_CALENDAR_CSV.open("w", newline="", encoding="utf-8") as fh:
+        fieldnames = [
+            "month_seq",
+            "year",
+            "month",
+            "month_id",
+            "month_start",
+            "is_forecast_start",
+            "is_forecast_end",
+            "forecast_year",
+        ]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(calendar_rows)
+
+    with OUT_EVENTS_CSV.open("w", newline="", encoding="utf-8") as fh:
+        fieldnames = ["event_id", "event_type", "event_name", "month_seq", "month_id", "year", "month"]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(event_rows)
+
+
 def main() -> int:
     assumptions = load_assumptions(ASSUMPTIONS_PATH)
     items = validate(assumptions)
     write_reports(items)
+    write_calendar_and_events(assumptions)
 
     errors = [x for x in items if x.level == "ERROR"]
     warnings = [x for x in items if x.level == "WARNING"]
     print(f"Validation completed. Errors: {len(errors)}, warnings: {len(warnings)}")
     print(f"TXT: {OUT_TXT}")
     print(f"CSV: {OUT_CSV}")
+    print(f"Calendar CSV: {OUT_CALENDAR_CSV}")
+    print(f"Events CSV: {OUT_EVENTS_CSV}")
     return 1 if errors else 0
 
 
