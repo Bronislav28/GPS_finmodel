@@ -26,6 +26,8 @@ OUT_MONTHLY_COSTS_CSV = OUT_DIR / "gps_finmodel_monthly_costs.csv"
 OUT_MONTHLY_FINANCIALS_CSV = OUT_DIR / "gps_finmodel_monthly_financials.csv"
 OUT_MONTHLY_FUNDED_CSV = OUT_DIR / "gps_finmodel_monthly_funded.csv"
 OUT_INVESTMENT_METRICS_CSV = OUT_DIR / "gps_finmodel_investment_metrics.csv"
+OUT_ANNUAL_REPORT_CSV = OUT_DIR / "gps_finmodel_annual_report.csv"
+OUT_SCENARIO_SUMMARY_CSV = OUT_DIR / "gps_finmodel_scenario_summary.csv"
 
 
 @dataclass
@@ -883,6 +885,70 @@ def calculate_investment_metrics(data, funded_rows, items):
     return metrics
 
 
+def build_annual_report(funded_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    flow_fields = [
+        "workplace_revenue", "contact_center_revenue", "total_revenue", "cogs", "sga",
+        "depreciation_and_amortization", "ebit", "profit_tax", "net_income", "operating_cash_flow",
+        "investing_cash_flow", "pre_financing_cash_flow", "funding_need", "equity_injection",
+        "revolver_drawdown", "revolver_repayment", "interest_expense", "ebt_after_interest",
+        "profit_tax_after_interest", "net_income_after_interest", "operating_cash_flow_after_interest",
+        "free_cash_flow_after_financing_costs",
+    ]
+    stock_fields = [
+        "required_gpu", "opening_cash_before_funding", "closing_cash_before_funding", "closing_cash_after_funding",
+        "cash", "net_ppe", "net_intangible_assets", "total_assets", "total_liabilities", "total_equity",
+        "revolver_balance", "closing_revolver_balance", "paid_in_capital", "retained_earnings", "balance_check",
+    ]
+
+    grouped: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+    for row in funded_rows:
+        key = (str(row["infrastructure_scenario"]), str(row["funding_scenario"]), int(row["year"]))
+        grouped.setdefault(key, []).append(row)
+
+    annual_rows: list[dict[str, Any]] = []
+    for (infra, fund, year), rows in sorted(grouped.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
+        s_rows = sorted(rows, key=lambda r: int(r["month_seq"]))
+        out: dict[str, Any] = {
+            "infrastructure_scenario": infra,
+            "funding_scenario": fund,
+            "year": year,
+            "months_in_year": len(s_rows),
+            "first_month_id": s_rows[0]["month_id"],
+            "last_month_id": s_rows[-1]["month_id"],
+        }
+        for field in flow_fields:
+            out[field] = round(sum(float(r.get(field, 0.0)) for r in s_rows), 2)
+        for field in stock_fields:
+            out[field] = round(float(s_rows[-1].get(field, 0.0)), 2)
+        annual_rows.append(out)
+    return annual_rows
+
+
+def build_scenario_summary(annual_rows: list[dict[str, Any]], metrics_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    annual_by_key = {(str(r["infrastructure_scenario"]), str(r["funding_scenario"])): r for r in annual_rows}
+    summary: list[dict[str, Any]] = []
+    for m in sorted(metrics_rows, key=lambda x: (str(x["infrastructure_scenario"]), str(x["funding_scenario"]))):
+        key = (str(m["infrastructure_scenario"]), str(m["funding_scenario"]))
+        relevant = [r for (i, f), r in annual_by_key.items() if i == key[0] and f == key[1]]
+        latest = sorted(relevant, key=lambda r: int(r["year"]))[-1] if relevant else {}
+        summary.append({
+            "infrastructure_scenario": key[0],
+            "funding_scenario": key[1],
+            "npv": m.get("npv"),
+            "irr_annualized": m.get("irr_annualized"),
+            "simple_payback_month_key": m.get("simple_payback_month_key"),
+            "discounted_payback_month_key": m.get("discounted_payback_month_key"),
+            "required_investments": m.get("required_investments"),
+            "peak_required_gpu": m.get("peak_required_gpu"),
+            "latest_year": latest.get("year"),
+            "latest_year_total_revenue": latest.get("total_revenue"),
+            "latest_year_net_income_after_interest": latest.get("net_income_after_interest"),
+            "latest_year_closing_cash": latest.get("closing_cash_after_funding"),
+            "latest_year_revolver_balance": latest.get("closing_revolver_balance"),
+        })
+    return summary
+
+
 def main() -> int:
     assumptions = load_assumptions(ASSUMPTIONS_PATH)
     items = validate(assumptions)
@@ -901,6 +967,8 @@ def main() -> int:
     funding_shares = normalize_funding_scenarios(assumptions, items)
     funded_rows = calculate_monthly_funding(assumptions, fin_rows, cost_rows, funding_shares, items)
     metrics_rows = calculate_investment_metrics(assumptions, funded_rows, items)
+    annual_rows = build_annual_report(funded_rows)
+    summary_rows = build_scenario_summary(annual_rows, metrics_rows)
 
     with OUT_MONTHLY_FUNDED_CSV.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(funded_rows[0].keys()) if funded_rows else [])
@@ -909,6 +977,14 @@ def main() -> int:
     with OUT_INVESTMENT_METRICS_CSV.open("w", newline="", encoding="utf-8") as fh:
         fieldnames=["infrastructure_scenario","funding_scenario","npv","irr_annualized","simple_payback_month_key","discounted_payback_month_key","required_investments","peak_required_gpu","ending_revolver_balance","ending_cash","ending_balance_check"]
         writer = csv.DictWriter(fh, fieldnames=fieldnames); writer.writeheader(); writer.writerows(metrics_rows)
+    with OUT_ANNUAL_REPORT_CSV.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(annual_rows[0].keys()) if annual_rows else [])
+        if annual_rows:
+            writer.writeheader(); writer.writerows(annual_rows)
+    with OUT_SCENARIO_SUMMARY_CSV.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(summary_rows[0].keys()) if summary_rows else [])
+        if summary_rows:
+            writer.writeheader(); writer.writerows(summary_rows)
 
     write_reports(items)
     errors = [x for x in items if x.level == "ERROR"]
@@ -924,6 +1000,8 @@ def main() -> int:
     print(f"Monthly financials CSV: {OUT_MONTHLY_FINANCIALS_CSV}")
     print(f"Monthly funded CSV: {OUT_MONTHLY_FUNDED_CSV}")
     print(f"Investment metrics CSV: {OUT_INVESTMENT_METRICS_CSV}")
+    print(f"Annual report CSV: {OUT_ANNUAL_REPORT_CSV}")
+    print(f"Scenario summary CSV: {OUT_SCENARIO_SUMMARY_CSV}")
     return 1 if errors else 0
 
 
