@@ -20,6 +20,7 @@ OUT_TXT = OUT_DIR / "gps_finmodel_validation_report.txt"
 OUT_CSV = OUT_DIR / "gps_finmodel_validation_report.csv"
 OUT_CALENDAR_CSV = OUT_DIR / "gps_finmodel_calendar.csv"
 OUT_EVENTS_CSV = OUT_DIR / "gps_finmodel_events.csv"
+OUT_MONTHLY_DEMAND_GPU_CSV = OUT_DIR / "gps_finmodel_monthly_demand_gpu.csv"
 
 
 @dataclass
@@ -256,11 +257,112 @@ def write_calendar_and_events(data: dict[str, Any]) -> None:
         writer.writerows(event_rows)
 
 
+def _year_value(mapping: Any, year: int) -> float:
+    if not isinstance(mapping, dict):
+        return 0.0
+    value = mapping.get(year, mapping.get(str(year)))
+    return float(value) if _is_number(value) else 0.0
+
+
+def build_monthly_demand_gpu(data: dict[str, Any], calendar_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    usage = data.get("usage_assumptions", {}) if isinstance(data.get("usage_assumptions"), dict) else {}
+    token_model = data.get("token_load_model", {}) if isinstance(data.get("token_load_model"), dict) else {}
+    compute = data.get("compute_model", {}) if isinstance(data.get("compute_model"), dict) else {}
+
+    workplace_usage = usage.get("Workplace.ai", {}) if isinstance(usage.get("Workplace.ai"), dict) else {}
+    workplace_token = token_model.get("Workplace.ai", {}) if isinstance(token_model.get("Workplace.ai"), dict) else {}
+    cc_usage = usage.get("Contact_Center.ai", {}) if isinstance(usage.get("Contact_Center.ai"), dict) else {}
+    cc_token = token_model.get("Contact_Center.ai", {}) if isinstance(token_model.get("Contact_Center.ai"), dict) else {}
+
+    time_assumptions = token_model.get("time_assumptions", {}) if isinstance(token_model.get("time_assumptions"), dict) else {}
+    working_days_per_year = float(time_assumptions.get("working_days_per_year", 247))
+
+    total_employees = float(workplace_usage.get("total_employees", 0))
+    interactions_per_day = float(cc_usage.get("interactions_per_day", 0))
+    cc_tokens_per_interaction = float(cc_token.get("tokens_per_interaction", 0))
+
+    model_mix = compute.get("model_mix", {}) if isinstance(compute.get("model_mix"), dict) else {}
+    throughput = compute.get("throughput_per_gpu", {}) if isinstance(compute.get("throughput_per_gpu"), dict) else {}
+    infra = compute.get("infra", {}) if isinstance(compute.get("infra"), dict) else {}
+    working_hours_per_day = float(infra.get("working_hours_per_day", 12))
+    peak_factor = float(infra.get("peak_factor", 1.0))
+    rows: list[dict[str, Any]] = []
+
+    for cal in calendar_rows:
+        year = int(cal["year"])
+
+        activation_rate = _year_value(workplace_usage.get("activation_rate"), year)
+        tokens_per_active_user_per_day = _year_value(workplace_token.get("tokens_per_active_user_per_day"), year)
+        automation_rate = _year_value(cc_usage.get("automation_rate"), year)
+        utilization = _year_value(infra.get("utilization"), year)
+
+        active_users = total_employees * activation_rate
+        workplace_daily_tokens = active_users * tokens_per_active_user_per_day
+        cc_daily_tokens = interactions_per_day * automation_rate * cc_tokens_per_interaction
+
+        workplace_monthly_tokens = workplace_daily_tokens * (working_days_per_year / 12.0)
+        cc_monthly_tokens = cc_daily_tokens * (365.0 / 12.0)
+        monthly_total_tokens = workplace_monthly_tokens + cc_monthly_tokens
+
+        mix_for_year = model_mix.get(year, model_mix.get(str(year), {})) if isinstance(model_mix, dict) else {}
+        harmonic_denom = 0.0
+        for klass in ["frontier", "large", "medium", "small"]:
+            share = float(mix_for_year.get(klass, 0.0)) if isinstance(mix_for_year, dict) else 0.0
+            tput = float(throughput.get(klass, 0.0)) if _is_number(throughput.get(klass)) else 0.0
+            if share > 0 and tput > 0:
+                harmonic_denom += share / tput
+        weighted_throughput = (1.0 / harmonic_denom) if harmonic_denom > 0 else 0.0
+
+        tokens_per_second = monthly_total_tokens / (30.0 * working_hours_per_day * 3600.0) if working_hours_per_day > 0 else 0.0
+        required_gpu = 0.0
+        if weighted_throughput > 0 and utilization > 0:
+            required_gpu = tokens_per_second / (weighted_throughput * utilization) * peak_factor
+
+        rows.append({
+            "month_seq": cal["month_seq"],
+            "month_id": cal["month_id"],
+            "year": year,
+            "month": cal["month"],
+            "workplace_monthly_tokens": round(workplace_monthly_tokens, 2),
+            "contact_center_monthly_tokens": round(cc_monthly_tokens, 2),
+            "monthly_total_tokens": round(monthly_total_tokens, 2),
+            "weighted_throughput_tokens_per_sec_per_gpu": round(weighted_throughput, 6),
+            "utilization": round(utilization, 6),
+            "tokens_per_second": round(tokens_per_second, 6),
+            "required_gpu": round(required_gpu, 6),
+        })
+    return rows
+
+
+def write_monthly_demand_gpu(data: dict[str, Any]) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    calendar_rows = build_monthly_calendar(data)
+    rows = build_monthly_demand_gpu(data, calendar_rows)
+    with OUT_MONTHLY_DEMAND_GPU_CSV.open("w", newline="", encoding="utf-8") as fh:
+        fieldnames = [
+            "month_seq",
+            "month_id",
+            "year",
+            "month",
+            "workplace_monthly_tokens",
+            "contact_center_monthly_tokens",
+            "monthly_total_tokens",
+            "weighted_throughput_tokens_per_sec_per_gpu",
+            "utilization",
+            "tokens_per_second",
+            "required_gpu",
+        ]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def main() -> int:
     assumptions = load_assumptions(ASSUMPTIONS_PATH)
     items = validate(assumptions)
     write_reports(items)
     write_calendar_and_events(assumptions)
+    write_monthly_demand_gpu(assumptions)
 
     errors = [x for x in items if x.level == "ERROR"]
     warnings = [x for x in items if x.level == "WARNING"]
@@ -269,6 +371,7 @@ def main() -> int:
     print(f"CSV: {OUT_CSV}")
     print(f"Calendar CSV: {OUT_CALENDAR_CSV}")
     print(f"Events CSV: {OUT_EVENTS_CSV}")
+    print(f"Monthly demand/GPU CSV: {OUT_MONTHLY_DEMAND_GPU_CSV}")
     return 1 if errors else 0
 
 
