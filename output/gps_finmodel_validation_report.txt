@@ -1,0 +1,8 @@
+GPS finmodel YAML validation report
+===================================
+Errors: 0
+Warnings: 0
+OK: 1
+
+Findings:
+- [OK] root: Validation passed with no findings.
