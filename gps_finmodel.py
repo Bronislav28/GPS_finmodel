@@ -1046,6 +1046,9 @@ def write_static_html_report(
     }]
     planner_sections = build_key_assumptions_planner(assumptions_data)
 
+    calendar_rows = build_monthly_calendar(assumptions_data)
+    demand_rows = build_monthly_demand_gpu(assumptions_data, calendar_rows)
+
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1115,12 +1118,15 @@ def write_static_html_report(
       <span id="planner-override-count">Overrides: 0</span>
       <input id="planner-import-file" type="file" accept="application/json" style="display:none;" />
     </div>
+    <div id="planner-demand-preview"></div>
     <div id="key-assumptions-planner"></div>
   </div>
 
   <script>
     const reportData = {json.dumps({'funded_rows': funded_rows, 'annual_rows': annual_rows})};
+    const demandBaseRows = {json.dumps(demand_rows)};
     const plannerSections = {json.dumps(planner_sections)};
+    const baseAssumptions = {json.dumps(assumptions_data)};
     const infraNames = {json.dumps(infra_names)};
     const fundingNames = {json.dumps(funding_names)};
     const baseInfra = {json.dumps(base_infra)};
@@ -1261,6 +1267,79 @@ def write_static_html_report(
       document.getElementById('planner-override-count').textContent = `Overrides: ${{Object.keys(plannerOverrides).length}}`;
     }}
 
+    function yearValue(mapping, year) {{
+      if (!mapping || typeof mapping !== 'object') return 0;
+      const value = mapping[year] ?? mapping[String(year)];
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }}
+
+    function getOverridden(path, base) {{
+      if (!Object.prototype.hasOwnProperty.call(plannerOverrides, path)) return base;
+      return plannerOverrides[path];
+    }}
+
+    function recomputeDemandPreview() {{
+      const usage = baseAssumptions.usage_assumptions || {{}};
+      const tokenModel = baseAssumptions.token_load_model || {{}};
+      const compute = baseAssumptions.compute_model || {{}};
+      const infra = compute.infra || {{}};
+      const throughput = compute.throughput_per_gpu || {{}};
+      const modelMix = compute.model_mix || {{}};
+
+      const wpUsage = usage['Workplace.ai'] || {{}};
+      const wpToken = tokenModel['Workplace.ai'] || {{}};
+      const ccUsage = usage['Contact_Center.ai'] || {{}};
+      const ccToken = tokenModel['Contact_Center.ai'] || {{}};
+      const timeAssumptions = tokenModel.time_assumptions || {{}};
+
+      const totalEmployees = Number(wpUsage.total_employees || 0);
+      const interactionsPerDay = Number(ccUsage.interactions_per_day || 0);
+      const ccTokensPerInteraction = Number(ccToken.tokens_per_interaction || 0);
+      const workingDaysPerYear = Number(timeAssumptions.working_days_per_year || 247);
+      const workingHoursPerDay = Number(infra.working_hours_per_day || 12);
+      const peakFactor = Number(getOverridden('compute_model.infra.peak_factor', infra.peak_factor || 1.0));
+
+      const yearly = new Map();
+      demandBaseRows.forEach((row) => {{
+        const year = Number(row.year);
+        const activationRate = yearValue(getOverridden('usage_assumptions.Workplace.ai.activation_rate', wpUsage.activation_rate), year);
+        const tokensPerUserDay = yearValue(wpToken.tokens_per_active_user_per_day, year);
+        const automationRate = yearValue(ccUsage.automation_rate, year);
+        const utilization = yearValue(getOverridden('compute_model.infra.utilization', infra.utilization), year);
+        const mixYear = modelMix[year] || modelMix[String(year)] || {{}};
+        let harmonic = 0;
+        ['frontier', 'large', 'medium', 'small'].forEach((klass) => {{
+          const share = Number(mixYear[klass] || 0);
+          const tput = Number(throughput[klass] || 0);
+          if (share > 0 && tput > 0) harmonic += share / tput;
+        }});
+        const weightedThroughput = harmonic > 0 ? (1 / harmonic) : 0;
+        const activeUsers = totalEmployees * activationRate;
+        const workplaceTokens = activeUsers * tokensPerUserDay * (workingDaysPerYear / 12);
+        const ccTokens = interactionsPerDay * automationRate * ccTokensPerInteraction * (365 / 12);
+        const monthlyTotalTokens = workplaceTokens + ccTokens;
+        const tps = workingHoursPerDay > 0 ? monthlyTotalTokens / (30 * workingHoursPerDay * 3600) : 0;
+        const requiredGpu = (weightedThroughput > 0 && utilization > 0) ? (tps / (weightedThroughput * utilization) * peakFactor) : 0;
+        if (!yearly.has(year)) yearly.set(year, {{tokens: 0, required_gpu_max: 0, weighted_throughput: weightedThroughput}});
+        const agg = yearly.get(year);
+        agg.tokens += monthlyTotalTokens;
+        agg.required_gpu_max = Math.max(agg.required_gpu_max, requiredGpu);
+        agg.weighted_throughput = weightedThroughput;
+      }});
+      return Array.from(yearly.entries()).sort((a, b) => a[0] - b[0]).map(([year, data]) => ({{
+        year,
+        preview_total_tokens: Math.round(data.tokens * 100) / 100,
+        preview_weighted_throughput_tokens_per_sec_per_gpu: Math.round(data.weighted_throughput * 1e6) / 1e6,
+        preview_required_gpu_peak: Math.round(data.required_gpu_max * 1e6) / 1e6,
+      }}));
+    }}
+
+    function renderDemandPreview() {{
+      const rows = recomputeDemandPreview();
+      document.getElementById('planner-demand-preview').innerHTML = tableHtml('Demand/GPU preview from current overrides (browser-side only)', rows);
+    }}
+
     function renderPlanner() {{
       const host = document.getElementById('key-assumptions-planner');
       const html = Object.entries(plannerSections).map(([sectionName, rows]) => {{
@@ -1289,6 +1368,7 @@ def write_static_html_report(
           else plannerOverrides[path] = normalized;
           updateOverrideCount();
           renderPlanner();
+          renderDemandPreview();
         }});
       }});
     }}
@@ -1298,7 +1378,7 @@ def write_static_html_report(
       document.getElementById('planner-mode-toggle').textContent = plannerEditMode ? 'Switch to View mode' : 'Switch to Edit mode';
       renderPlanner();
     }});
-    document.getElementById('planner-reset').addEventListener('click', () => {{ plannerOverrides = {{}}; updateOverrideCount(); renderPlanner(); }});
+    document.getElementById('planner-reset').addEventListener('click', () => {{ plannerOverrides = {{}}; updateOverrideCount(); renderPlanner(); renderDemandPreview(); }});
     document.getElementById('planner-export').addEventListener('click', () => {{
       const payload = {{ schema_version: 'v2-14-assumption-overrides', exported_at_utc: new Date().toISOString(), overrides: plannerOverrides }};
       const blob = new Blob([JSON.stringify(payload, null, 2)], {{ type: 'application/json' }});
@@ -1314,10 +1394,12 @@ def write_static_html_report(
       plannerOverrides = (payload && typeof payload === 'object' && payload.overrides && typeof payload.overrides === 'object') ? payload.overrides : {{}};
       updateOverrideCount();
       renderPlanner();
+      renderDemandPreview();
     }});
 
     updateOverrideCount();
     renderPlanner();
+    renderDemandPreview();
   </script>
 </body>
 </html>
