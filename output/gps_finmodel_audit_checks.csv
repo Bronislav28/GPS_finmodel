@@ -1,0 +1,28 @@
+infrastructure_scenario,funding_scenario,check_name,status,value,threshold,message
+build_own_dc,equity_only,balance_sheet_closure,WARN,103.09,0.01,Max |assets-liabilities-equity| across months.
+build_own_dc,equity_only,minimum_cash_buffer,PASS,0.0,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+build_own_dc,equity_only,revolver_non_negative,PASS,0.0,0.0,Max closing revolver balance should be non-negative.
+build_own_dc,mix,balance_sheet_closure,WARN,15981353.71,0.01,Max |assets-liabilities-equity| across months.
+build_own_dc,mix,minimum_cash_buffer,WARN,-1336679.74,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+build_own_dc,mix,revolver_non_negative,PASS,179755181.55,0.0,Max closing revolver balance should be non-negative.
+build_own_dc,revolver_only,balance_sheet_closure,WARN,53249243.15,0.01,Max |assets-liabilities-equity| across months.
+build_own_dc,revolver_only,minimum_cash_buffer,WARN,-2689441.13,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+build_own_dc,revolver_only,revolver_non_negative,PASS,404085979.32,0.0,Max closing revolver balance should be non-negative.
+hybrid,equity_only,balance_sheet_closure,WARN,103.09,0.01,Max |assets-liabilities-equity| across months.
+hybrid,equity_only,minimum_cash_buffer,PASS,0.0,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+hybrid,equity_only,revolver_non_negative,PASS,0.0,0.0,Max closing revolver balance should be non-negative.
+hybrid,mix,balance_sheet_closure,WARN,15981353.71,0.01,Max |assets-liabilities-equity| across months.
+hybrid,mix,minimum_cash_buffer,WARN,-1336679.74,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+hybrid,mix,revolver_non_negative,PASS,179755181.55,0.0,Max closing revolver balance should be non-negative.
+hybrid,revolver_only,balance_sheet_closure,WARN,53249243.15,0.01,Max |assets-liabilities-equity| across months.
+hybrid,revolver_only,minimum_cash_buffer,WARN,-2689441.13,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+hybrid,revolver_only,revolver_non_negative,PASS,404085979.32,0.0,Max closing revolver balance should be non-negative.
+rent_gpu_only,equity_only,balance_sheet_closure,WARN,0.09,0.01,Max |assets-liabilities-equity| across months.
+rent_gpu_only,equity_only,minimum_cash_buffer,PASS,0.0,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+rent_gpu_only,equity_only,revolver_non_negative,PASS,0.0,0.0,Max closing revolver balance should be non-negative.
+rent_gpu_only,mix,balance_sheet_closure,WARN,15984517.87,0.01,Max |assets-liabilities-equity| across months.
+rent_gpu_only,mix,minimum_cash_buffer,WARN,-1336679.74,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+rent_gpu_only,mix,revolver_non_negative,PASS,179755181.55,0.0,Max closing revolver balance should be non-negative.
+rent_gpu_only,revolver_only,balance_sheet_closure,WARN,53366992.34,0.01,Max |assets-liabilities-equity| across months.
+rent_gpu_only,revolver_only,minimum_cash_buffer,WARN,-2689441.13,0.0,Min(closing_cash_after_funding - minimum_cash_balance).
+rent_gpu_only,revolver_only,revolver_non_negative,PASS,404085978.31,0.0,Max closing revolver balance should be non-negative.

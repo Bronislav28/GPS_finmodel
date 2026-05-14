@@ -28,6 +28,8 @@ OUT_MONTHLY_FUNDED_CSV = OUT_DIR / "gps_finmodel_monthly_funded.csv"
 OUT_INVESTMENT_METRICS_CSV = OUT_DIR / "gps_finmodel_investment_metrics.csv"
 OUT_ANNUAL_REPORT_CSV = OUT_DIR / "gps_finmodel_annual_report.csv"
 OUT_SCENARIO_SUMMARY_CSV = OUT_DIR / "gps_finmodel_scenario_summary.csv"
+OUT_AUDIT_CHECKS_CSV = OUT_DIR / "gps_finmodel_audit_checks.csv"
+OUT_RECONCILIATION_CSV = OUT_DIR / "gps_finmodel_reconciliation.csv"
 OUT_HTML = OUT_DIR / "gps_finmodel.html"
 
 
@@ -950,6 +952,73 @@ def build_scenario_summary(annual_rows: list[dict[str, Any]], metrics_rows: list
     return summary
 
 
+
+
+def build_audit_and_reconciliation_rows(funded_rows: list[dict[str, Any]], metrics_rows: list[dict[str, Any]], items: list[ValidationItem]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    audit_rows: list[dict[str, Any]] = []
+    recon_rows: list[dict[str, Any]] = []
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in funded_rows:
+        key = (str(row.get("infrastructure_scenario", "")), str(row.get("funding_scenario", "")))
+        grouped.setdefault(key, []).append(row)
+
+    for (infra, fund), rows in sorted(grouped.items()):
+        s_rows = sorted(rows, key=lambda r: int(r.get("month_seq", 0)))
+        max_abs_balance = max(abs(float(r.get("balance_check", 0.0))) for r in s_rows) if s_rows else 0.0
+        min_cash = min(float(r.get("closing_cash_after_funding", 0.0)) for r in s_rows) if s_rows else 0.0
+        min_cash_floor = min(float(r.get("minimum_cash_balance", 0.0)) for r in s_rows) if s_rows else 0.0
+        min_cash_gap = min_cash - min_cash_floor
+        max_rev = max(float(r.get("closing_revolver_balance", 0.0)) for r in s_rows) if s_rows else 0.0
+
+        audit_rows.append({
+            "infrastructure_scenario": infra,
+            "funding_scenario": fund,
+            "check_name": "balance_sheet_closure",
+            "status": "PASS" if max_abs_balance <= 0.01 else "WARN",
+            "value": round(max_abs_balance, 2),
+            "threshold": 0.01,
+            "message": "Max |assets-liabilities-equity| across months.",
+        })
+        audit_rows.append({
+            "infrastructure_scenario": infra,
+            "funding_scenario": fund,
+            "check_name": "minimum_cash_buffer",
+            "status": "PASS" if min_cash_gap >= -0.01 else "WARN",
+            "value": round(min_cash_gap, 2),
+            "threshold": 0.0,
+            "message": "Min(closing_cash_after_funding - minimum_cash_balance).",
+        })
+        audit_rows.append({
+            "infrastructure_scenario": infra,
+            "funding_scenario": fund,
+            "check_name": "revolver_non_negative",
+            "status": "PASS" if max_rev >= -0.01 else "WARN",
+            "value": round(max_rev, 2),
+            "threshold": 0.0,
+            "message": "Max closing revolver balance should be non-negative.",
+        })
+
+        for r in s_rows:
+            assets = float(r.get("total_assets", 0.0))
+            liab = float(r.get("total_liabilities", 0.0))
+            eq = float(r.get("total_equity", 0.0))
+            recon_rows.append({
+                "infrastructure_scenario": infra,
+                "funding_scenario": fund,
+                "month_seq": r.get("month_seq"),
+                "month_id": r.get("month_id"),
+                "assets": round(assets, 2),
+                "liabilities": round(liab, 2),
+                "equity": round(eq, 2),
+                "assets_minus_liabilities_minus_equity": round(assets - liab - eq, 2),
+            })
+
+    if not grouped:
+        items.append(ValidationItem("WARNING", "audit", "No funded rows available for audit and reconciliation outputs."))
+
+    return audit_rows, recon_rows
+
 def _format_value(value: Any) -> str:
     if value is None:
         return ""
@@ -1022,6 +1091,8 @@ def write_static_html_report(
     metrics_rows: list[dict[str, Any]],
     items: list[ValidationItem],
     assumptions_data: dict[str, Any],
+    audit_rows: list[dict[str, Any]],
+    reconciliation_rows: list[dict[str, Any]],
 ) -> None:
     import json
 
@@ -1111,6 +1182,11 @@ def write_static_html_report(
 
   <h2>Monthly Detail</h2>
   <div id="monthly-detail"></div>
+
+  <h2>Audit &amp; Reconciliation</h2>
+  <div id="audit-summary-cards" class="summary-cards"></div>
+  <div id="audit-checks-table"></div>
+  <div id="reconciliation-table"></div>
 
   <h2>Visual Analytics</h2>
   <div class="note">Charts are rendered browser-side from already precomputed scenario outputs.</div>
@@ -1693,6 +1769,22 @@ def write_static_html_report(
       renderDemandPreview();
       renderOperatingPreview();
     }});
+
+    const auditRows = audit_rows_json;
+    const reconciliationRows = recon_rows_json;
+    function renderAuditSection(infra, funding) {{
+      const filtAudit = auditRows.filter((r)=>r.infrastructure_scenario===infra && r.funding_scenario===funding);
+      const filtRecon = reconciliationRows.filter((r)=>r.infrastructure_scenario===infra && r.funding_scenario===funding);
+      const pass = filtAudit.filter((r)=>r.status==='PASS').length;
+      const warn = filtAudit.filter((r)=>r.status!=='PASS').length;
+      document.getElementById('audit-summary-cards').innerHTML = `
+        <div class="summary-card"><div class="k">Checks</div><div class="v">${{filtAudit.length}}</div></div>
+        <div class="summary-card"><div class="k">Pass</div><div class="v">${{pass}}</div></div>
+        <div class="summary-card"><div class="k">Warnings</div><div class="v">${{warn}}</div></div>`;
+      document.getElementById('audit-checks-table').innerHTML = tableHtml('Audit checks', filtAudit);
+      document.getElementById('reconciliation-table').innerHTML = tableHtml('Reconciliation', filtRecon);
+    }}
+
     function knownOverridePaths() {{
       return new Set(Object.values(plannerSections).flat().map((row) => row.path || row.label).filter(Boolean));
     }}
@@ -1832,6 +1924,7 @@ def main() -> int:
     metrics_rows = calculate_investment_metrics(assumptions, funded_rows, items)
     annual_rows = build_annual_report(funded_rows)
     summary_rows = build_scenario_summary(annual_rows, metrics_rows)
+    audit_rows, reconciliation_rows = build_audit_and_reconciliation_rows(funded_rows, metrics_rows, items)
 
     with OUT_MONTHLY_FUNDED_CSV.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(funded_rows[0].keys()) if funded_rows else [])
@@ -1848,7 +1941,17 @@ def main() -> int:
         writer = csv.DictWriter(fh, fieldnames=list(summary_rows[0].keys()) if summary_rows else [])
         if summary_rows:
             writer.writeheader(); writer.writerows(summary_rows)
-    write_static_html_report(funded_rows, annual_rows, summary_rows, metrics_rows, items, assumptions)
+    with OUT_AUDIT_CHECKS_CSV.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(audit_rows[0].keys()) if audit_rows else ["infrastructure_scenario","funding_scenario","check_name","status","value","threshold","message"])
+        writer.writeheader();
+        if audit_rows:
+            writer.writerows(audit_rows)
+    with OUT_RECONCILIATION_CSV.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(reconciliation_rows[0].keys()) if reconciliation_rows else ["infrastructure_scenario","funding_scenario","month_seq","month_id","assets","liabilities","equity","assets_minus_liabilities_minus_equity"])
+        writer.writeheader();
+        if reconciliation_rows:
+            writer.writerows(reconciliation_rows)
+    write_static_html_report(funded_rows, annual_rows, summary_rows, metrics_rows, items, assumptions, audit_rows, reconciliation_rows)
 
     write_reports(items)
     errors = [x for x in items if x.level == "ERROR"]
@@ -1866,6 +1969,8 @@ def main() -> int:
     print(f"Investment metrics CSV: {OUT_INVESTMENT_METRICS_CSV}")
     print(f"Annual report CSV: {OUT_ANNUAL_REPORT_CSV}")
     print(f"Scenario summary CSV: {OUT_SCENARIO_SUMMARY_CSV}")
+    print(f"Audit checks CSV: {OUT_AUDIT_CHECKS_CSV}")
+    print(f"Reconciliation CSV: {OUT_RECONCILIATION_CSV}")
     print(f"Static HTML report: {OUT_HTML}")
     return 1 if errors else 0
 
