@@ -61,6 +61,8 @@
     <div class="note">Edit mode stores browser-only assumption overrides JSON (no YAML export, no Workbench, no server calls).</div>
     <div class="controls">
       <button id="planner-mode-toggle" type="button">Switch to Edit mode</button>
+      <button id="planner-apply" type="button">Apply Scenario</button>
+      <button id="planner-reset-base" type="button">Reset to Base</button>
       <button id="planner-reset" type="button">Reset overrides</button>
       <button id="planner-export" type="button">Export overrides JSON</button>
       <button id="planner-import" type="button">Import overrides JSON</button>
@@ -81,6 +83,7 @@
     const fundingNames = ["equity_only", "mix", "revolver_only"];
     const baseInfra = "build_own_dc";
     const baseFunding = "equity_only";
+    const baseMetricsRows = [{"infrastructure_scenario": "build_own_dc", "funding_scenario": "equity_only", "npv": 96477775.63, "irr_annualized": 0.482217, "simple_payback_month_key": "2029-06", "discounted_payback_month_key": "2030-03", "required_investments": 539.95, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 825156372.43, "ending_balance_check": 9.09}, {"infrastructure_scenario": "build_own_dc", "funding_scenario": "revolver_only", "npv": -30152779.38, "irr_annualized": null, "simple_payback_month_key": "2030-02", "discounted_payback_month_key": "Not reached", "required_investments": 539.95, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 229966924.37, "ending_balance_check": -53249243.14}, {"infrastructure_scenario": "build_own_dc", "funding_scenario": "mix", "npv": 53762578.92, "irr_annualized": null, "simple_payback_month_key": "2029-09", "discounted_payback_month_key": "2030-07", "required_investments": 539.95, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 585272915.96, "ending_balance_check": -15981313.69}, {"infrastructure_scenario": "rent_gpu_only", "funding_scenario": "equity_only", "npv": 94797504.21, "irr_annualized": 0.4794, "simple_payback_month_key": "2029-06", "discounted_payback_month_key": "2030-03", "required_investments": 0, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 821243510.76, "ending_balance_check": -0.09}, {"infrastructure_scenario": "rent_gpu_only", "funding_scenario": "revolver_only", "npv": -31976913.29, "irr_annualized": null, "simple_payback_month_key": "2030-03", "discounted_payback_month_key": "Not reached", "required_investments": 0, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 225583102.66, "ending_balance_check": -53366992.34}, {"infrastructure_scenario": "rent_gpu_only", "funding_scenario": "mix", "npv": 52077722.39, "irr_annualized": 0.39201, "simple_payback_month_key": "2029-09", "discounted_payback_month_key": "2030-07", "required_investments": 0, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 581347273.8, "ending_balance_check": -15984517.87}, {"infrastructure_scenario": "hybrid", "funding_scenario": "equity_only", "npv": 96477775.63, "irr_annualized": 0.482217, "simple_payback_month_key": "2029-06", "discounted_payback_month_key": "2030-03", "required_investments": 539.95, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 825156372.43, "ending_balance_check": 9.09}, {"infrastructure_scenario": "hybrid", "funding_scenario": "revolver_only", "npv": -30152779.38, "irr_annualized": null, "simple_payback_month_key": "2030-02", "discounted_payback_month_key": "Not reached", "required_investments": 539.95, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 229966924.37, "ending_balance_check": -53249243.14}, {"infrastructure_scenario": "hybrid", "funding_scenario": "mix", "npv": 53762578.92, "irr_annualized": null, "simple_payback_month_key": "2029-09", "discounted_payback_month_key": "2030-07", "required_investments": 539.95, "peak_required_gpu": 533.950803, "ending_revolver_balance": 0.0, "ending_cash": 585272915.96, "ending_balance_check": -15981313.69}];
 
     function formatValue(value) {
       if (value === null || value === undefined) return '';
@@ -117,6 +120,49 @@
       document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
       document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', annual);
       document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', monthly);
+    }
+
+    function formatPayback(monthId) {
+      if (!monthId) return 'Not reached';
+      const text = String(monthId);
+      return /^\d{4}-\d{2}$/.test(text) ? text : 'Not reached';
+    }
+
+    function calcMetrics(monthlyRows, annualRows, infra, funding) {
+      const discountRateAnnual = Number((((baseAssumptions.financing || {}).hurdle_rate || {}).annual_discount_rate) || 0);
+      const monthlyRate = Math.pow(1 + discountRateAnnual, 1 / 12) - 1;
+      let npv = 0;
+      let cum = 0;
+      let cumDisc = 0;
+      let simplePayback = null;
+      let discPayback = null;
+      let requiredInv = 0;
+      let peakGpu = 0;
+      monthlyRows.forEach((r, idx) => {
+        const fcf = Number(r.free_cash_flow_after_financing_costs || 0);
+        const invest = Number(r.investing_cash_flow || 0);
+        npv += fcf / Math.pow(1 + monthlyRate, idx + 1);
+        cum += fcf;
+        cumDisc += fcf / Math.pow(1 + monthlyRate, idx + 1);
+        if (!simplePayback && cum >= 0) simplePayback = r.month_id;
+        if (!discPayback && cumDisc >= 0) discPayback = r.month_id;
+        if (invest < 0) requiredInv += Math.abs(invest);
+        peakGpu = Math.max(peakGpu, Number(r.required_gpu || 0));
+      });
+      const last = monthlyRows.length ? monthlyRows[monthlyRows.length - 1] : {};
+      return [{
+        infrastructure_scenario: infra,
+        funding_scenario: funding,
+        npv: Math.round(npv * 100) / 100,
+        irr_annualized: null,
+        simple_payback_month_key: formatPayback(simplePayback),
+        discounted_payback_month_key: formatPayback(discPayback),
+        required_investments: Math.round(requiredInv * 100) / 100,
+        peak_required_gpu: Math.round(peakGpu * 1e6) / 1e6,
+        ending_revolver_balance: Number(last.closing_revolver_balance || 0),
+        ending_cash: Number(last.closing_cash_after_funding || 0),
+        ending_balance_check: Number(last.balance_check || 0),
+      }];
     }
 
     function initSelect(id, options, selected) {
@@ -168,8 +214,10 @@
     const equityShareInput = document.getElementById('equity-share-input');
     const equityShareLabel = document.getElementById('equity-share-label');
     const equityShareValue = document.getElementById('equity-share-value');
+    let appliedScenario = null;
 
     function onChange() {
+      if (appliedScenario && appliedScenario.active) return;
       const mode = fundingModeSelect.value;
       if (mode === 'custom_mix') {
         equityShareLabel.style.display = 'inline-block';
@@ -372,6 +420,53 @@
       document.getElementById('planner-operating-preview').innerHTML = tableHtml('Operating model preview from current overrides (browser-side only)', rows);
     }
 
+    const baseView = {
+      active: false,
+      label: 'Base Python-generated scenario',
+      annual: [],
+      monthly: [],
+      metrics: [],
+    };
+
+    function getCurrentBaseRows() {
+      const mode = fundingModeSelect.value;
+      if (mode === 'custom_mix') {
+        const eq = Number(equityShareInput.value) / 100;
+        const custom = buildCustomView(infraSelect.value, eq);
+        return { infra: infraSelect.value, funding: 'custom_mix', annual: custom.annual, monthly: custom.monthly };
+      }
+      return {
+        infra: infraSelect.value,
+        funding: fundingSelect.value,
+        annual: filterRows(reportData.annual_rows, infraSelect.value, fundingSelect.value).sort((a,b)=>a.year-b.year),
+        monthly: filterRows(reportData.funded_rows, infraSelect.value, fundingSelect.value).sort((a,b)=>a.month_seq-b.month_seq),
+      };
+    }
+
+    function renderAppliedBanner() {
+      const el = document.getElementById('planner-operating-preview');
+      const tag = appliedScenario ? `Applied scenario: ${appliedScenario.label}` : 'Applied scenario: none';
+      el.insertAdjacentHTML('afterbegin', `<div class="note"><strong>${tag}</strong></div>`);
+    }
+
+    function renderFromRows(infra, funding, annual, monthly, label) {
+      const latest = annual.length ? annual[annual.length - 1] : {};
+      const executive = [{
+        infrastructure_scenario: infra,
+        funding_scenario: funding,
+        scenario_label: label,
+        latest_year: latest.year,
+        months_in_latest_year: latest.months_in_year,
+        total_revenue: latest.total_revenue,
+        net_income_after_interest: latest.net_income_after_interest,
+        closing_cash_after_funding: latest.closing_cash_after_funding,
+        closing_revolver_balance: latest.closing_revolver_balance,
+      }];
+      document.getElementById('executive-summary').innerHTML = tableHtml('Selected scenario snapshot', executive);
+      document.getElementById('annual-report').innerHTML = tableHtml('Annual aggregation by scenario', annual);
+      document.getElementById('monthly-detail').innerHTML = tableHtml('Monthly funded detail', monthly);
+    }
+
     function renderPlanner() {
       const host = document.getElementById('key-assumptions-planner');
       const html = Object.entries(plannerSections).map(([sectionName, rows]) => {
@@ -412,6 +507,56 @@
       renderPlanner();
     });
     document.getElementById('planner-reset').addEventListener('click', () => { plannerOverrides = {}; updateOverrideCount(); renderPlanner(); renderDemandPreview(); renderOperatingPreview(); });
+    document.getElementById('planner-apply').addEventListener('click', () => {
+      const base = getCurrentBaseRows();
+      const opPreview = recomputeOperatingPreview();
+      const opByYear = new Map(opPreview.map((r) => [Number(r.year), r]));
+      const monthly = base.monthly.map((r) => {
+        const yr = Number(r.year);
+        const y = opByYear.get(yr) || {};
+        const yearRows = base.monthly.filter((x) => Number(x.year) === yr).length || 1;
+        const ratioRev = Number(r.total_revenue || 0) !== 0 ? (Number(y.preview_total_revenue || 0) / yearRows) / Number(r.total_revenue || 1) : 1;
+        const ratioSga = Number(r.sga || 0) !== 0 ? (Number(y.preview_sga || 0) / yearRows) / Number(r.sga || 1) : 1;
+        const ratioCogs = Number(r.cogs || 0) !== 0 ? (Number(y.preview_cogs || 0) / yearRows) / Number(r.cogs || 1) : 1;
+        const out = {...r};
+        out.total_revenue = Math.round(Number(r.total_revenue || 0) * ratioRev * 100) / 100;
+        out.cogs = Math.round(Number(r.cogs || 0) * ratioCogs * 100) / 100;
+        out.sga = Math.round(Number(r.sga || 0) * ratioSga * 100) / 100;
+        out.ebit = Math.round((out.total_revenue - out.cogs - out.sga - Number(r.depreciation_and_amortization || 0)) * 100) / 100;
+        out.ebt_after_interest = Math.round((out.ebit - Number(r.interest_expense || 0)) * 100) / 100;
+        out.profit_tax_after_interest = Math.round(Math.max(0, out.ebt_after_interest) * 0.25 * 100) / 100;
+        out.net_income_after_interest = Math.round((out.ebt_after_interest - out.profit_tax_after_interest) * 100) / 100;
+        out.operating_cash_flow_after_interest = Math.round((out.net_income_after_interest + Number(r.depreciation_and_amortization || 0)) * 100) / 100;
+        out.free_cash_flow_after_financing_costs = Math.round((out.operating_cash_flow_after_interest + Number(r.investing_cash_flow || 0) + Number(r.equity_injection || 0) + Number(r.revolver_drawdown || 0) - Number(r.revolver_repayment || 0) - Number(r.interest_expense || 0)) * 100) / 100;
+        out.closing_cash_after_funding = Math.round((Number(r.opening_cash_before_funding || 0) + out.free_cash_flow_after_financing_costs) * 100) / 100;
+        out.cash = out.closing_cash_after_funding;
+        out.balance_check = Math.round((Number(r.total_assets || 0) - Number(r.total_liabilities || 0) - Number(r.total_equity || 0)) * 100) / 100;
+        return out;
+      });
+      const annualMap = new Map();
+      monthly.forEach((r) => {
+        const k = Number(r.year);
+        if (!annualMap.has(k)) annualMap.set(k, {infrastructure_scenario: base.infra, funding_scenario: base.funding, year: k, months_in_year: 0, total_revenue: 0, net_income_after_interest: 0, closing_cash_after_funding: 0, closing_revolver_balance: 0});
+        const a = annualMap.get(k);
+        a.months_in_year += 1;
+        a.total_revenue += Number(r.total_revenue || 0);
+        a.net_income_after_interest += Number(r.net_income_after_interest || 0);
+        a.closing_cash_after_funding = Number(r.closing_cash_after_funding || 0);
+        a.closing_revolver_balance = Number(r.closing_revolver_balance || 0);
+      });
+      const annual = Array.from(annualMap.values()).sort((a,b)=>a.year-b.year).map((r)=>({...r,total_revenue:Math.round(r.total_revenue*100)/100,net_income_after_interest:Math.round(r.net_income_after_interest*100)/100}));
+      const metrics = calcMetrics(monthly, annual, base.infra, base.funding);
+      appliedScenario = {active: true, label: `override @ ${new Date().toISOString()}`, annual, monthly, metrics};
+      renderFromRows(base.infra, base.funding, annual, monthly, appliedScenario.label);
+      document.getElementById('planner-operating-preview').innerHTML = tableHtml('Applied scenario investment metrics', metrics) + document.getElementById('planner-operating-preview').innerHTML;
+      renderAppliedBanner();
+    });
+    document.getElementById('planner-reset-base').addEventListener('click', () => {
+      appliedScenario = null;
+      onChange();
+      renderDemandPreview();
+      renderOperatingPreview();
+    });
     document.getElementById('planner-export').addEventListener('click', () => {
       const payload = { schema_version: 'v2-14-assumption-overrides', exported_at_utc: new Date().toISOString(), overrides: plannerOverrides };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
