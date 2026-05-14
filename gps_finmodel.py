@@ -980,101 +980,38 @@ def build_key_assumptions_planner(data: dict[str, Any]) -> dict[str, list[dict[s
     compute = data.get("compute_model", {}) if isinstance(data.get("compute_model"), dict) else {}
     infra = compute.get("infra", {}) if isinstance(compute.get("infra"), dict) else {}
     revenue = data.get("revenue", {}) if isinstance(data.get("revenue"), dict) else {}
-    opex = data.get("opex", {}) if isinstance(data.get("opex"), dict) else {}
-    core_team = opex.get("team", {}) if isinstance(opex.get("team"), dict) else {}
-    sga = data.get("sga", {}) if isinstance(data.get("sga"), dict) else {}
 
-    planner["Model Timeline"] = [{
-        "assumption": "forecast_start",
-        "value": f"{model.get('forecast_start', {}).get('year', '')}-{int(model.get('forecast_start', {}).get('month', 0) or 0):02d}" if isinstance(model.get("forecast_start"), dict) else "",
-    }, {
-        "assumption": "forecast_end",
-        "value": f"{model.get('forecast_end', {}).get('year', '')}-{int(model.get('forecast_end', {}).get('month', 0) or 0):02d}" if isinstance(model.get("forecast_end"), dict) else "",
-    }]
+    def add_row(section: str, row: dict[str, Any]) -> None:
+        planner.setdefault(section, []).append(row)
 
-    planner["Finance"] = [{
-        "assumption": "discount_rate",
-        "value": finance.get("valuation", {}).get("discount_rate", "") if isinstance(finance.get("valuation"), dict) else "",
-    }, {
-        "assumption": "profit_tax_rate",
-        "value": finance.get("taxes", {}).get("profit_tax_rate", "") if isinstance(finance.get("taxes"), dict) else "",
-    }, {
-        "assumption": "social_contribution_sfr_percent_of_gross",
-        "value": finance.get("taxes", {}).get("social_contribution_sfr_percent_of_gross", "") if isinstance(finance.get("taxes"), dict) else "",
-    }, {
-        "assumption": "revolver_interest_rate",
-        "value": finance.get("funding", {}).get("revolver_interest_rate", "") if isinstance(finance.get("funding"), dict) else "",
-    }]
+    add_row("Model Timeline", {"label": "forecast_start.year", "path": "model.forecast_start.year", "value": model.get("forecast_start", {}).get("year", ""), "editable": True})
+    add_row("Model Timeline", {"label": "forecast_start.month", "path": "model.forecast_start.month", "value": model.get("forecast_start", {}).get("month", ""), "editable": True})
+    add_row("Model Timeline", {"label": "forecast_end.year", "path": "model.forecast_end.year", "value": model.get("forecast_end", {}).get("year", ""), "editable": True})
+    add_row("Model Timeline", {"label": "forecast_end.month", "path": "model.forecast_end.month", "value": model.get("forecast_end", {}).get("month", ""), "editable": True})
 
-    usage_rows: list[dict[str, Any]] = []
+    add_row("Finance", {"label": "discount_rate", "path": "finance.valuation.discount_rate", "value": finance.get("valuation", {}).get("discount_rate", "") if isinstance(finance.get("valuation"), dict) else "", "editable": True})
+    add_row("Finance", {"label": "profit_tax_rate", "path": "finance.taxes.profit_tax_rate", "value": finance.get("taxes", {}).get("profit_tax_rate", "") if isinstance(finance.get("taxes"), dict) else "", "editable": True})
+    add_row("Finance", {"label": "social_contribution_sfr_percent_of_gross", "path": "finance.taxes.social_contribution_sfr_percent_of_gross", "value": finance.get("taxes", {}).get("social_contribution_sfr_percent_of_gross", "") if isinstance(finance.get("taxes"), dict) else "", "editable": True})
+    add_row("Finance", {"label": "revolver_interest_rate", "path": "finance.funding.revolver_interest_rate", "value": finance.get("funding", {}).get("revolver_interest_rate", "") if isinstance(finance.get("funding"), dict) else "", "editable": True})
+
     for product_name, product_data in usage.items():
         if isinstance(product_data, dict):
-            usage_rows.append({
-                "product": product_name,
-                "usage_metric": product_data.get("usage_metric", ""),
-                "key_driver": product_data.get("activation_rate", product_data.get("automation_rate", "")),
-            })
-    planner["Usage"] = usage_rows
+            add_row("Usage", {"label": f"{product_name}.usage_metric", "path": f"usage_assumptions.{product_name}.usage_metric", "value": product_data.get("usage_metric", ""), "editable": True})
+            if "activation_rate" in product_data:
+                add_row("Usage", {"label": f"{product_name}.activation_rate", "path": f"usage_assumptions.{product_name}.activation_rate", "value": product_data.get("activation_rate", ""), "editable": True})
+            if "automation_rate" in product_data:
+                add_row("Usage", {"label": f"{product_name}.automation_rate", "path": f"usage_assumptions.{product_name}.automation_rate", "value": product_data.get("automation_rate", ""), "editable": True})
 
-    planner["Compute"] = [{
-        "assumption": "throughput_per_gpu",
-        "value": compute.get("throughput_per_gpu", ""),
-    }, {
-        "assumption": "utilization",
-        "value": infra.get("utilization", ""),
-    }, {
-        "assumption": "peak_factor",
-        "value": infra.get("peak_factor", ""),
-    }]
+    add_row("Compute", {"label": "throughput_per_gpu", "path": "compute_model.throughput_per_gpu", "value": compute.get("throughput_per_gpu", ""), "editable": False})
+    add_row("Compute", {"label": "utilization", "path": "compute_model.infra.utilization", "value": infra.get("utilization", ""), "editable": True})
+    add_row("Compute", {"label": "peak_factor", "path": "compute_model.infra.peak_factor", "value": infra.get("peak_factor", ""), "editable": True})
 
-    planner["Infrastructure"] = [{
-        "assumption": "owned_gpu_available_policy",
-        "value": infra.get("owned_gpu_available_policy", ""),
-    }, {
-        "assumption": "gpu_power_kw",
-        "value": infra.get("opex_own_datacenter", {}).get("gpu_power_kw", {}).get("value", "") if isinstance(infra.get("opex_own_datacenter"), dict) else "",
-    }, {
-        "assumption": "pue",
-        "value": infra.get("opex_own_datacenter", {}).get("pue", {}).get("value", "") if isinstance(infra.get("opex_own_datacenter"), dict) else "",
-    }]
+    add_row("Infrastructure", {"label": "owned_gpu_available_policy", "path": "compute_model.infra.owned_gpu_available_policy", "value": infra.get("owned_gpu_available_policy", ""), "editable": True})
+    add_row("Infrastructure", {"label": "gpu_power_kw", "path": "compute_model.infra.opex_own_datacenter.gpu_power_kw.value", "value": infra.get("opex_own_datacenter", {}).get("gpu_power_kw", {}).get("value", "") if isinstance(infra.get("opex_own_datacenter"), dict) else "", "editable": True})
+    add_row("Infrastructure", {"label": "pue", "path": "compute_model.infra.opex_own_datacenter.pue.value", "value": infra.get("opex_own_datacenter", {}).get("pue", {}).get("value", "") if isinstance(infra.get("opex_own_datacenter"), dict) else "", "editable": True})
 
-    planner["Revenue"] = [{
-        "assumption": "active_scenario",
-        "value": revenue.get("active_scenario", ""),
-    }, {
-        "assumption": "pricing_base_year",
-        "value": revenue.get("base_year", ""),
-    }]
-
-    def _collect_role_rows(section_name: str, roles_map: dict[str, Any]) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        for group_name, group_roles in roles_map.items():
-            if not isinstance(group_roles, dict):
-                continue
-            for role_name, role_data in group_roles.items():
-                if not isinstance(role_data, dict):
-                    continue
-                salary = role_data.get("salary_gross_monthly_rub_2026", "")
-                fte_plan = role_data.get("fte_plan", [])
-                if not isinstance(fte_plan, list):
-                    fte_plan = []
-                if not fte_plan:
-                    rows.append({"section": section_name, "group": group_name, "role": role_name, "salary_gross_monthly_rub_2026": salary, "fte_plan_event": ""})
-                for event in fte_plan:
-                    if isinstance(event, dict):
-                        rows.append({
-                            "section": section_name,
-                            "group": group_name,
-                            "role": role_name,
-                            "salary_gross_monthly_rub_2026": salary,
-                            "fte_plan_event": f"{event.get('start_year', '')}-{int(event.get('start_month', 0) or 0):02d}: {event.get('fte', '')}",
-                        })
-        return rows
-
-    core_roles = core_team.get("roles", {}) if isinstance(core_team.get("roles"), dict) else {}
-    planner["Core Team"] = _collect_role_rows("core_team", core_roles)
-    sga_roles = sga.get("roles", {}) if isinstance(sga.get("roles"), dict) else {}
-    planner["SG&A"] = _collect_role_rows("sga", sga_roles)
+    add_row("Revenue", {"label": "active_scenario", "path": "revenue.active_scenario", "value": revenue.get("active_scenario", ""), "editable": True})
+    add_row("Revenue", {"label": "pricing_base_year", "path": "revenue.base_year", "value": revenue.get("base_year", ""), "editable": True})
     return planner
 
 
@@ -1127,6 +1064,8 @@ def write_static_html_report(
     select {{ margin-left: 8px; padding: 4px; }}
     .card {{ border: 1px solid #ddd; padding: 10px; margin: 12px 0; border-radius: 6px; }}
     .note {{ font-size: 12px; color: #555; margin-bottom: 8px; }}
+    .override-changed td {{ background: #fff6bf; }}
+    button {{ padding: 4px 8px; }}
   </style>
 </head>
 <body>
@@ -1167,7 +1106,15 @@ def write_static_html_report(
 
   <h2>Key Assumptions Planner</h2>
   <div class="card">
-    <div class="note">Display-only assumptions loaded from assumptions.yaml. No in-browser editing, Workbench, YAML export, or model recalculation.</div>
+    <div class="note">Edit mode stores browser-only assumption overrides JSON (no YAML export, no Workbench, no model recalculation).</div>
+    <div class="controls">
+      <button id="planner-mode-toggle" type="button">Switch to Edit mode</button>
+      <button id="planner-reset" type="button">Reset overrides</button>
+      <button id="planner-export" type="button">Export overrides JSON</button>
+      <button id="planner-import" type="button">Import overrides JSON</button>
+      <span id="planner-override-count">Overrides: 0</span>
+      <input id="planner-import-file" type="file" accept="application/json" style="display:none;" />
+    </div>
     <div id="key-assumptions-planner"></div>
   </div>
 
@@ -1301,10 +1248,76 @@ def write_static_html_report(
     fundingSelect.addEventListener('change', onChange);
     equityShareInput.addEventListener('input', onChange);
     onChange();
-    const plannerHtml = Object.entries(plannerSections)
-      .map(([sectionName, rows]) => tableHtml(sectionName, rows))
-      .join('');
-    document.getElementById('key-assumptions-planner').innerHTML = plannerHtml;
+
+    let plannerEditMode = false;
+    let plannerOverrides = {{}};
+
+    function normalizeOverrideValue(value) {{
+      if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) return Number(value);
+      return value;
+    }}
+
+    function updateOverrideCount() {{
+      document.getElementById('planner-override-count').textContent = `Overrides: ${{Object.keys(plannerOverrides).length}}`;
+    }}
+
+    function renderPlanner() {{
+      const host = document.getElementById('key-assumptions-planner');
+      const html = Object.entries(plannerSections).map(([sectionName, rows]) => {{
+        const sectionRows = rows.map((row) => {{
+          const path = row.path || row.label;
+          const base = row.value;
+          const current = Object.prototype.hasOwnProperty.call(plannerOverrides, path) ? plannerOverrides[path] : base;
+          const changed = Object.prototype.hasOwnProperty.call(plannerOverrides, path);
+          const editable = plannerEditMode && row.editable !== false;
+          const valueCell = editable
+            ? `<input data-path="${{path}}" value="${{String(current ?? '').replaceAll('"', '&quot;')}}" />`
+            : `${{formatValue(current)}}`;
+          return `<tr class="${{changed ? 'override-changed' : ''}}"><td>${{row.label || ''}}</td><td>${{path}}</td><td>${{valueCell}}</td><td>${{row.editable === false ? 'No' : 'Yes'}}</td></tr>`;
+        }}).join('');
+        return `<h3>${{sectionName}}</h3><table><thead><tr><th>assumption</th><th>path</th><th>value</th><th>editable</th></tr></thead><tbody>${{sectionRows}}</tbody></table>`;
+      }}).join('');
+      host.innerHTML = html;
+      host.querySelectorAll('input[data-path]').forEach((input) => {{
+        input.addEventListener('input', (event) => {{
+          const path = event.target.getAttribute('data-path');
+          const raw = event.target.value;
+          const row = Object.values(plannerSections).flat().find((r) => (r.path || r.label) === path);
+          const base = row ? row.value : '';
+          const normalized = normalizeOverrideValue(raw);
+          if (String(normalized) === String(base)) delete plannerOverrides[path];
+          else plannerOverrides[path] = normalized;
+          updateOverrideCount();
+          renderPlanner();
+        }});
+      }});
+    }}
+
+    document.getElementById('planner-mode-toggle').addEventListener('click', () => {{
+      plannerEditMode = !plannerEditMode;
+      document.getElementById('planner-mode-toggle').textContent = plannerEditMode ? 'Switch to View mode' : 'Switch to Edit mode';
+      renderPlanner();
+    }});
+    document.getElementById('planner-reset').addEventListener('click', () => {{ plannerOverrides = {{}}; updateOverrideCount(); renderPlanner(); }});
+    document.getElementById('planner-export').addEventListener('click', () => {{
+      const payload = {{ schema_version: 'v2-14-assumption-overrides', exported_at_utc: new Date().toISOString(), overrides: plannerOverrides }};
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {{ type: 'application/json' }});
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'gps_finmodel_assumption_overrides.json'; a.click(); URL.revokeObjectURL(url);
+    }});
+    const importFile = document.getElementById('planner-import-file');
+    document.getElementById('planner-import').addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', async (event) => {{
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      plannerOverrides = (payload && typeof payload === 'object' && payload.overrides && typeof payload.overrides === 'object') ? payload.overrides : {{}};
+      updateOverrideCount();
+      renderPlanner();
+    }});
+
+    updateOverrideCount();
+    renderPlanner();
   </script>
 </body>
 </html>
