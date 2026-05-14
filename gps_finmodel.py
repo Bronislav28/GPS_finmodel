@@ -1109,7 +1109,7 @@ def write_static_html_report(
 
   <h2>Key Assumptions Planner</h2>
   <div class="card">
-    <div class="note">Edit mode stores browser-only assumption overrides JSON (no YAML export, no Workbench, no model recalculation).</div>
+    <div class="note">Edit mode stores browser-only assumption overrides JSON (no YAML export, no Workbench, no server calls).</div>
     <div class="controls">
       <button id="planner-mode-toggle" type="button">Switch to Edit mode</button>
       <button id="planner-reset" type="button">Reset overrides</button>
@@ -1119,6 +1119,7 @@ def write_static_html_report(
       <input id="planner-import-file" type="file" accept="application/json" style="display:none;" />
     </div>
     <div id="planner-demand-preview"></div>
+    <div id="planner-operating-preview"></div>
     <div id="key-assumptions-planner"></div>
   </div>
 
@@ -1340,6 +1341,88 @@ def write_static_html_report(
       document.getElementById('planner-demand-preview').innerHTML = tableHtml('Demand/GPU preview from current overrides (browser-side only)', rows);
     }}
 
+    function monthlyAnnualizedValue(base, year, path) {{
+      const mapping = getOverridden(path, base);
+      return yearValue(mapping, year);
+    }}
+
+    function recomputeOperatingPreview() {{
+      const rows = filterRows(reportData.funded_rows, infraSelect.value, fundingSelect.value).sort((a,b)=>a.month_seq-b.month_seq);
+      if (!rows.length) return [];
+      const usage = baseAssumptions.usage_assumptions || {{}};
+      const revenue = baseAssumptions.revenue || {{}};
+      const baseMargin = Number((revenue.target_margins || {{}}).contribution_margin_pct || 0);
+      const targetMargin = Number(getOverridden('revenue.target_margins.contribution_margin_pct', baseMargin));
+      const marginRatio = baseMargin > 0 ? targetMargin / baseMargin : 1.0;
+      const baseGpuUnitCost = Number((((baseAssumptions.compute_model || {{}}).infra || {{}}).capex_own_datacenter || {{}}).gpu_unit_cost || 0);
+      const targetGpuUnitCost = Number(getOverridden('compute_model.infra.capex_own_datacenter.gpu_unit_cost', baseGpuUnitCost));
+      const gpuUnitCostRatio = baseGpuUnitCost > 0 ? targetGpuUnitCost / baseGpuUnitCost : 1.0;
+      const baseConstructionMonth = Number((((baseAssumptions.compute_model || {{}}).infra || {{}}).construction || {{}}).start_month_seq || 1);
+      const targetConstructionMonth = Number(getOverridden('compute_model.infra.construction.start_month_seq', baseConstructionMonth));
+      const constructionShift = targetConstructionMonth - baseConstructionMonth;
+      const baseActivationMap = (usage['Workplace.ai'] || {{}}).activation_rate || {{}};
+      const targetActivationMap = getOverridden('usage_assumptions.Workplace.ai.activation_rate', baseActivationMap);
+      const salaryRows = Object.values(plannerSections).flat().filter((r) => String(r.path || '').includes('team_plan'));
+      const salaryFactorByYear = new Map();
+      rows.forEach((r) => {{
+        const year = Number(r.year);
+        let num = 0, den = 0;
+        salaryRows.forEach((sr) => {{
+          const baseVal = yearValue(sr.value, year);
+          const tgtVal = yearValue(getOverridden(sr.path, sr.value), year);
+          if (baseVal > 0) {{ num += tgtVal; den += baseVal; }}
+        }});
+        salaryFactorByYear.set(year, den > 0 ? num / den : 1.0);
+      }});
+
+      const monthly = rows.map((r) => {{
+        const year = Number(r.year);
+        const baseActivation = yearValue(baseActivationMap, year);
+        const targetActivation = yearValue(targetActivationMap, year);
+        const activationRatio = baseActivation > 0 ? targetActivation / baseActivation : 1.0;
+        const salaryFactor = salaryFactorByYear.get(year) || 1.0;
+        const shiftedSeq = Number(r.month_seq) - constructionShift;
+        const infraProxy = shiftedSeq >= 1 ? 1.0 : 0.0;
+        const totalRevenue = Number(r.total_revenue || 0) * activationRatio;
+        const cogs = Number(r.cogs || 0) * activationRatio / (marginRatio || 1.0);
+        const sga = Number(r.sga || 0) * salaryFactor;
+        const capex = Math.abs(Number(r.investing_cash_flow || 0)) * gpuUnitCostRatio * infraProxy;
+        const ebit = totalRevenue - cogs - sga - Number(r.depreciation_and_amortization || 0);
+        return {{
+          month_id: r.month_id,
+          year,
+          preview_total_revenue: Math.round(totalRevenue * 100) / 100,
+          preview_cogs: Math.round(cogs * 100) / 100,
+          preview_sga: Math.round(sga * 100) / 100,
+          preview_capex: Math.round(capex * 100) / 100,
+          preview_ebit: Math.round(ebit * 100) / 100,
+        }};
+      }});
+      const byYear = new Map();
+      monthly.forEach((r) => {{
+        if (!byYear.has(r.year)) byYear.set(r.year, {{year: r.year, preview_total_revenue:0, preview_cogs:0, preview_sga:0, preview_capex:0, preview_ebit:0}});
+        const agg = byYear.get(r.year);
+        agg.preview_total_revenue += r.preview_total_revenue;
+        agg.preview_cogs += r.preview_cogs;
+        agg.preview_sga += r.preview_sga;
+        agg.preview_capex += r.preview_capex;
+        agg.preview_ebit += r.preview_ebit;
+      }});
+      return Array.from(byYear.values()).sort((a,b)=>a.year-b.year).map((r)=>({{
+        ...r,
+        preview_total_revenue: Math.round(r.preview_total_revenue * 100) / 100,
+        preview_cogs: Math.round(r.preview_cogs * 100) / 100,
+        preview_sga: Math.round(r.preview_sga * 100) / 100,
+        preview_capex: Math.round(r.preview_capex * 100) / 100,
+        preview_ebit: Math.round(r.preview_ebit * 100) / 100,
+      }}));
+    }}
+
+    function renderOperatingPreview() {{
+      const rows = recomputeOperatingPreview();
+      document.getElementById('planner-operating-preview').innerHTML = tableHtml('Operating model preview from current overrides (browser-side only)', rows);
+    }}
+
     function renderPlanner() {{
       const host = document.getElementById('key-assumptions-planner');
       const html = Object.entries(plannerSections).map(([sectionName, rows]) => {{
@@ -1369,6 +1452,7 @@ def write_static_html_report(
           updateOverrideCount();
           renderPlanner();
           renderDemandPreview();
+          renderOperatingPreview();
         }});
       }});
     }}
@@ -1378,7 +1462,7 @@ def write_static_html_report(
       document.getElementById('planner-mode-toggle').textContent = plannerEditMode ? 'Switch to View mode' : 'Switch to Edit mode';
       renderPlanner();
     }});
-    document.getElementById('planner-reset').addEventListener('click', () => {{ plannerOverrides = {{}}; updateOverrideCount(); renderPlanner(); renderDemandPreview(); }});
+    document.getElementById('planner-reset').addEventListener('click', () => {{ plannerOverrides = {{}}; updateOverrideCount(); renderPlanner(); renderDemandPreview(); renderOperatingPreview(); }});
     document.getElementById('planner-export').addEventListener('click', () => {{
       const payload = {{ schema_version: 'v2-14-assumption-overrides', exported_at_utc: new Date().toISOString(), overrides: plannerOverrides }};
       const blob = new Blob([JSON.stringify(payload, null, 2)], {{ type: 'application/json' }});
@@ -1395,11 +1479,13 @@ def write_static_html_report(
       updateOverrideCount();
       renderPlanner();
       renderDemandPreview();
+      renderOperatingPreview();
     }});
 
     updateOverrideCount();
     renderPlanner();
     renderDemandPreview();
+    renderOperatingPreview();
   </script>
 </body>
 </html>
