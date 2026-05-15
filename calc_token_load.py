@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Расчет token load -> GPU -> CAPEX -> OPEX по assumptions.yaml."""
+"""DEPRECATED (V2-23): Legacy model entrypoint retained for backward compatibility.
+
+Use `gps_finmodel.py` as the current v2 entrypoint.
+Inputs are sourced from `assumptions.yaml` (source of truth),
+and the current v2 HTML report is `output/gps_finmodel.html`.
+"""
 
 from __future__ import annotations
 

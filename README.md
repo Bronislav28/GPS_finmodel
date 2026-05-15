@@ -24,8 +24,10 @@
   Единый источник входных параметров модели (**source of truth**).
 - `business_model_description.md`  
   Бизнес-логика, требования к расчетам и методология.
+- `gps_finmodel.py`  
+  Текущая точка входа v2 для запуска модели и валидации отчетов.
 - `calc_token_load.py`  
-  Основной Python-скрипт расчета модели.
+  Legacy-скрипт (deprecated), сохранен для обратной совместимости и не является основной точкой входа v2.
 - `output/gps_finmodel.html`  
   Интерактивный HTML-отчет для бизнес-пользователей и инвесткомитета.
 - `output/gps_finmodel_results.csv`  
@@ -34,22 +36,22 @@
 ---
 
 ## Как запустить модель
-Базовая команда запуска:
+Базовая команда запуска (v2):
 ```bash
-python calc_token_load.py
+python gps_finmodel.py
 ```
 Рекомендуемо (если окружение еще не подготовлено):
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python calc_token_load.py
+python gps_finmodel.py
 ```
 
 ---
 
 ## Что модель генерирует
-После выполнения `python calc_token_load.py` формируются:
+После выполнения `python gps_finmodel.py` формируются:
 - **HTML report**: `output/gps_finmodel.html`
 - **CSV results**: `output/gps_finmodel_results.csv`
 HTML-отчет предназначен для интерактивного просмотра сценариев и ключевых метрик, CSV — для последующего анализа в Excel/BI.
@@ -88,7 +90,7 @@ HTML-отчет предназначен для интерактивного п�
 - **Редактировать только `assumptions.yaml`** как единый источник входных данных.
 - После любых изменений допущений **обязательно запускать**:
 ```bash
-python calc_token_load.py
+python gps_finmodel.py
 ```
 
 ---
