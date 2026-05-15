@@ -208,3 +208,11 @@ Major generated outputs:
 - `output/gps_finmodel_audit_checks.csv`
 - `output/gps_finmodel_reconciliation.csv`
 - `output/gps_finmodel.html`
+
+
+## 24. Final regression and release validation workflow
+Final non-regression validation before release is tracked with:
+- `QA_CHECKLIST.md` for execution-level regression QA.
+- `RELEASE_CHECKLIST.md` for release gate and sign-off.
+
+This workflow is documentation-only and does not alter model assumptions or financial calculation logic.
