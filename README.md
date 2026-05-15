@@ -95,6 +95,16 @@ python gps_finmodel.py
 
 ---
 
+
+## Release and regression checklists
+For final pre-release validation and regression QA, use:
+- `RELEASE_CHECKLIST.md`
+- `QA_CHECKLIST.md`
+
+These checklists formalize the final non-regression and sign-off workflow for v2 releases.
+
+---
+
 ## Структура репозитория
 ```text
 GPS_finmodel/
